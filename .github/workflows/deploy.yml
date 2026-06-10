@@ -1,0 +1,38 @@
+name: Deploy to Cloudflare Pages
+
+# Авто-деплой на Cloudflare Pages.
+# Срабатывает при пуше/мёрже в main, либо вручную кнопкой "Run workflow"
+# (вкладка Actions на GitHub) — так задеплоить можно с любого устройства,
+# даже с телефона, без локального wrangler и личных кредов Cloudflare.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Не запускаем два деплоя параллельно — последний отменяет предыдущий
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Собрать статику в dist/
+        run: |
+          mkdir -p dist
+          cp index.html styles.css data.js app.js dist/
+
+      - name: Деплой на Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=kes-crm --branch=main
