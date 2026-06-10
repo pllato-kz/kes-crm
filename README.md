@@ -4,7 +4,7 @@
 
 ## 🌍 Демо
 
-**https://kes-crm.pages.dev** — заходи и кликай.
+**https://kes-crm-2vx.pages.dev** — заходи и кликай.
 
 Логин-экран показывает 4 демо-роли (Директор / Менеджер / Кладовщик / Бухгалтер) — клик по плитке → внутрь. Каждая роль видит свой набор разделов.
 
@@ -42,9 +42,9 @@ python3 -m http.server 8805
 
 ## Деплой
 
-CF Pages подключён к этому репо — `git push` в `main` автоматически деплоит на `kes-crm.pages.dev`.
+CF Pages подключён к этому репо — `git push` в `main` автоматически деплоит на `kes-crm-2vx.pages.dev`.
 
 Ручной деплой через wrangler (если нужно):
 ```bash
-wrangler pages deploy . --project-name=kes-crm
+wrangler pages deploy . --project-name=kes-crm-2vx
 ```
