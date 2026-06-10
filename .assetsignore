@@ -1,0 +1,10 @@
+# Файлы, которые НЕ должны попадать в публичную статику Cloudflare Pages.
+# (functions/ Pages обрабатывает отдельно как Functions — его трогать не нужно.)
+wrangler.toml
+.assetsignore
+.gitignore
+schema.sql
+seed.sql
+*.md
+.github/
+.wrangler/
