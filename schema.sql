@@ -223,6 +223,16 @@ CREATE TABLE deal_items (
   price_used INTEGER NOT NULL DEFAULT 0      -- цена, по которой продали в этой сделке
 );
 
+-- История смены этапов сделки (кто и когда двигал)
+CREATE TABLE deal_stage_history (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  deal_id    TEXT NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+  from_stage TEXT,                            -- NULL при создании сделки
+  to_stage   TEXT NOT NULL,
+  user_id    TEXT,                            -- кто сменил (из JWT)
+  changed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- ----------------------------------------------------------------------------
 -- ЗАЯВКИ (lead) — ещё не сделки
 -- ----------------------------------------------------------------------------
@@ -327,6 +337,7 @@ CREATE INDEX idx_deals_manager    ON deals(manager_id);
 CREATE INDEX idx_deals_stage      ON deals(stage_id);
 CREATE INDEX idx_deal_items_deal  ON deal_items(deal_id);
 CREATE INDEX idx_deal_items_prod  ON deal_items(product_id);
+CREATE INDEX idx_dsh_deal         ON deal_stage_history(deal_id);
 
 -- Остатки
 CREATE INDEX idx_stock_warehouse ON product_stock(warehouse_id);
