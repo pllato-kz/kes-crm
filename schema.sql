@@ -169,6 +169,7 @@ CREATE TABLE products (
   price_cost      INTEGER NOT NULL DEFAULT 0,-- закуп
   price_wholesale INTEGER NOT NULL DEFAULT 0,-- опт
   price_retail    INTEGER NOT NULL DEFAULT 0,-- розница
+  image           TEXT,                      -- фото товара: путь /api/files/<key> в R2
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

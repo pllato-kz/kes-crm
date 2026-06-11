@@ -55,7 +55,7 @@
     product: (p) => ({
       id: p.id, sku: p.sku, name: p.name, cat: p.category_id, brand: p.brand, unit: p.unit,
       priceCost: p.price_cost, priceWholesale: p.price_wholesale, priceRetail: p.price_retail,
-      stock: p.stock ?? 0, reserved: p.reserved ?? 0,
+      stock: p.stock ?? 0, reserved: p.reserved ?? 0, image: p.image || '',
     }),
     client: (c) => ({
       id: c.id, name: c.name, bin: c.bin, type: c.type_key, contact: c.contact, phone: c.phone,
@@ -100,6 +100,7 @@
     product: (p) => clean({
       id: p.id, sku: p.sku, name: p.name, category_id: p.cat, brand: p.brand, unit: p.unit,
       price_cost: p.priceCost, price_wholesale: p.priceWholesale, price_retail: p.priceRetail,
+      image: p.image,
     }),
     client: (c) => clean({
       id: c.id, name: c.name, bin: c.bin, type_key: c.type, contact: c.contact, phone: c.phone,
@@ -208,8 +209,25 @@
   // Подгрузка позиций конкретной сделки (для карточки сделки)
   async function loadDeal(id) { return M.deal(await apiFetch('deals/' + encodeURIComponent(id))); }
 
+  // Загрузка файла в R2 (multipart). Возвращает { key, url, size, type }.
+  async function uploadFile(file) {
+    const fd = new FormData();
+    fd.append('file', file);
+    const headers = {};
+    const tok = getToken();
+    if (tok) headers['authorization'] = 'Bearer ' + tok;
+    const res = await fetch('/api/files', { method: 'POST', headers, body: fd });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const e = new Error((data && data.error) || ('HTTP ' + res.status));
+      e.status = res.status;
+      throw e;
+    }
+    return data;
+  }
+
   window.__API__ = {
     apiFetch, login, logout, isAuthed, getToken, clearToken,
-    loadAllData, loadDeal, map: M, toApi,
+    loadAllData, loadDeal, uploadFile, map: M, toApi,
   };
 })();
