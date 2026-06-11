@@ -172,6 +172,205 @@ function fTextarea(label, value = '') {
 }
 
 // ---------- New Client ----------
+// ============================================================
+// ИМПОРТ из XLSX/CSV (прайс EKF, клиенты)
+// ============================================================
+function aoaToRows(aoa) {
+  if (!aoa || !aoa.length) return { headers: [], rows: [] };
+  const headers = aoa[0].map(h => String(h == null ? '' : h).trim());
+  const rows = aoa.slice(1).map(arr => { const o = {}; headers.forEach((h, i) => { o[h] = arr[i]; }); return o; });
+  return { headers, rows };
+}
+function parseCSV(text) {
+  text = String(text).replace(/^﻿/, '');
+  const firstLine = text.split(/\r?\n/)[0] || '';
+  const delim = firstLine.split(';').length > firstLine.split(',').length ? ';' : ',';
+  const lines = []; let cur = [], field = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQ) { if (ch === '"') { if (text[i+1] === '"') { field += '"'; i++; } else inQ = false; } else field += ch; }
+    else if (ch === '"') inQ = true;
+    else if (ch === delim) { cur.push(field); field = ''; }
+    else if (ch === '\n') { cur.push(field); lines.push(cur); cur = []; field = ''; }
+    else if (ch === '\r') { /* skip */ }
+    else field += ch;
+  }
+  if (field.length || cur.length) { cur.push(field); lines.push(cur); }
+  return aoaToRows(lines.filter(r => r.some(c => String(c).trim() !== '')));
+}
+function parseSpreadsheet(file) {
+  return new Promise((resolve, reject) => {
+    const name = (file.name || '').toLowerCase();
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+    if (name.endsWith('.csv') || file.type === 'text/csv') {
+      reader.onload = () => { try { resolve(parseCSV(reader.result)); } catch (e) { reject(e); } };
+      reader.readAsText(file, 'utf-8');
+    } else {
+      reader.onload = () => {
+        try {
+          if (!window.XLSX) { reject(new Error('Библиотека XLSX не загрузилась')); return; }
+          const wb = window.XLSX.read(new Uint8Array(reader.result), { type: 'array' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const aoa = window.XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false });
+          resolve(aoaToRows(aoa));
+        } catch (e) { reject(e); }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+  });
+}
+async function runPool(items, worker, concurrency = 6) {
+  let i = 0;
+  const next = async () => { while (i < items.length) { const idx = i++; await worker(items[idx], idx); } };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) || 1 }, next));
+}
+
+const IMPORT_CONFIGS = {
+  products: {
+    title: 'Импорт прайса EKF',
+    note: 'XLSX или CSV. Первая строка — заголовки. Существующие товары обновляются по артикулу (SKU), новые — добавляются.',
+    fields: [
+      { key: 'sku',            label: 'Артикул (SKU)', match: /артикул|sku|код/i, required: true },
+      { key: 'name',           label: 'Наименование',  match: /наимен|назван|товар|name/i, required: true },
+      { key: 'brand',          label: 'Бренд',         match: /бренд|brand|производ/i },
+      { key: 'priceCost',      label: 'Закуп',         match: /закуп|себест|cost/i, num: true },
+      { key: 'priceWholesale', label: 'Опт',           match: /опт|wholesale/i, num: true },
+      { key: 'priceRetail',    label: 'Розница',       match: /розн|retail|цена/i, num: true },
+      { key: 'stock',          label: 'Остаток',       match: /остаток|stock|qty|кол-?во/i, num: true },
+    ],
+    run: importProducts,
+  },
+  clients: {
+    title: 'Импорт клиентов',
+    note: 'XLSX или CSV. Первая строка — заголовки. Дубли по БИН пропускаются.',
+    fields: [
+      { key: 'name',    label: 'Наименование', match: /наимен|назван|клиент|компан|name/i, required: true },
+      { key: 'bin',     label: 'БИН/ИИН',      match: /бин|иин|bin/i },
+      { key: 'type',    label: 'Тип',          match: /тип|type/i },
+      { key: 'contact', label: 'Контакт',      match: /контакт|contact|лицо/i },
+      { key: 'phone',   label: 'Телефон',      match: /телефон|phone|тел/i },
+      { key: 'email',   label: 'Email',        match: /e-?mail|почта/i },
+      { key: 'city',    label: 'Город',        match: /город|city/i },
+      { key: 'address', label: 'Адрес',        match: /адрес|address/i },
+    ],
+    run: importClients,
+  },
+};
+
+function openImport(kind) {
+  const cfg = IMPORT_CONFIGS[kind];
+  const fileInput = el('input', { type: 'file', accept: '.xlsx,.xls,.csv' });
+  const host = el('div', { style: 'margin-top:12px' });
+  let parsed = null;
+
+  fileInput.onchange = async () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    host.innerHTML = ''; host.append(el('div', { class: 'muted' }, 'Читаю файл…'));
+    try {
+      const { headers, rows } = await parseSpreadsheet(f);
+      if (!rows.length) { host.innerHTML = ''; host.append(el('div', { class: 'pill pill-danger' }, 'В файле нет строк данных')); parsed = null; return; }
+      const mapping = {};
+      cfg.fields.forEach(fld => { const h = headers.find(hh => fld.match.test(hh)); if (h) mapping[fld.key] = h; });
+      parsed = { headers, rows, mapping };
+      renderMapping();
+    } catch (e) { host.innerHTML = ''; host.append(el('div', { class: 'pill pill-danger' }, 'Ошибка чтения: ' + (e.message || e))); parsed = null; }
+  };
+
+  function renderMapping() {
+    host.innerHTML = '';
+    const { headers, rows, mapping } = parsed;
+    host.append(el('div', { style: 'font-weight:600;margin-bottom:8px' }, `Строк в файле: ${rows.length}. Сопоставьте колонки:`));
+    const grid = el('div', { class: 'grid grid-2', style: 'gap:8px 14px' });
+    cfg.fields.forEach(fld => {
+      const sel = el('select', { onchange: e => { mapping[fld.key] = e.target.value || null; } },
+        [el('option', { value: '' }, '— нет —')].concat(headers.map(h => {
+          const o = el('option', { value: h }, h); if (mapping[fld.key] === h) o.selected = true; return o;
+        })));
+      grid.append(el('div', {}, [el('label', { style: 'font-size:11px;color:#6B7280;display:block' }, fld.label + (fld.required ? ' *' : '')), sel]));
+    });
+    host.append(grid);
+  }
+
+  openModal({
+    title: cfg.title,
+    body: el('div', {}, [
+      el('p', { class: 'muted', style: 'margin-top:0' }, cfg.note),
+      fileInput,
+      host,
+    ]),
+    foot: [
+      el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
+      el('button', { class: 'btn btn-primary', onclick: async () => {
+        if (!parsed) { toast('Выберите файл', 'warn'); return; }
+        const missing = cfg.fields.filter(f => f.required && !parsed.mapping[f.key]);
+        if (missing.length) { toast('Сопоставьте: ' + missing.map(f => f.label).join(', '), 'warn'); return; }
+        const entities = parsed.rows.map(r => {
+          const o = {};
+          cfg.fields.forEach(fld => {
+            const h = parsed.mapping[fld.key]; if (!h) return;
+            let v = r[h]; if (v == null) return;
+            v = String(v).trim(); if (v === '') return;
+            if (fld.num) v = Number(String(v).replace(/[^\d.,-]/g, '').replace(',', '.')) || 0;
+            o[fld.key] = v;
+          });
+          return o;
+        }).filter(o => cfg.fields.every(f => !f.required || (o[f.key] != null && o[f.key] !== '')));
+        if (!entities.length) { toast('Нет валидных строк (проверьте обязательные колонки)', 'warn'); return; }
+        closeModal();
+        await cfg.run(entities);
+      } }, 'Импортировать'),
+    ],
+  });
+}
+
+async function importProducts(rows) {
+  const bySku = {}; state.products.forEach(p => { bySku[p.sku] = p; });
+  let created = 0, updated = 0, failed = 0;
+  toast(`Импорт ${rows.length} позиций…`, 'info');
+  await runPool(rows, async (r) => {
+    try {
+      const existing = bySku[r.sku];
+      const body = window.__API__.toApi.product({ sku: r.sku, name: r.name, brand: r.brand, priceCost: r.priceCost, priceWholesale: r.priceWholesale, priceRetail: r.priceRetail });
+      if (existing) {
+        delete body.id;
+        await window.__API__.apiFetch('products/' + existing.id, { method: 'PUT', body });
+        Object.assign(existing, { name: r.name != null ? r.name : existing.name, brand: r.brand != null ? r.brand : existing.brand, priceCost: r.priceCost != null ? r.priceCost : existing.priceCost, priceWholesale: r.priceWholesale != null ? r.priceWholesale : existing.priceWholesale, priceRetail: r.priceRetail != null ? r.priceRetail : existing.priceRetail });
+        if (r.stock != null) { await window.__API__.apiFetch('products/' + existing.id + '/stock', { method: 'PUT', body: { stock: r.stock, reserved: existing.reserved || 0 } }); existing.stock = r.stock; }
+        updated++;
+      } else {
+        const saved = await window.__API__.apiFetch('products', { method: 'POST', body });
+        const mp = window.__API__.map.product(saved);
+        if (r.stock != null) { await window.__API__.apiFetch('products/' + saved.id + '/stock', { method: 'PUT', body: { stock: r.stock, reserved: 0 } }); mp.stock = r.stock; }
+        state.products.unshift(mp); bySku[mp.sku] = mp;
+        created++;
+      }
+    } catch (e) { failed++; }
+  });
+  toast(`Прайс импортирован: +${created} новых, ${updated} обновлено${failed ? ', ' + failed + ' ошибок' : ''}`, failed ? 'warn' : 'success');
+  navigate('catalog');
+}
+
+async function importClients(rows) {
+  const byBin = {}; state.clients.forEach(c => { if (c.bin) byBin[c.bin] = c; });
+  let created = 0, skipped = 0, failed = 0;
+  toast(`Импорт ${rows.length} клиентов…`, 'info');
+  for (const r of rows) {
+    try {
+      if (r.bin && byBin[r.bin]) { skipped++; continue; }
+      const tv = (r.type || '').toString().toLowerCase();
+      const type = /розн|rozn/.test(tv) ? 'rozn' : /дилер|dilr|dealer/.test(tv) ? 'dilr' : 'opt';
+      const c = { name: r.name, bin: r.bin || '', type, contact: r.contact || '', phone: r.phone || '', email: r.email || '—', city: r.city || '', address: r.address || '', balance: 0, ltv: 0, lastDeal: new Date().toISOString().slice(0, 10), tags: ['импорт'] };
+      const saved = await window.__API__.apiFetch('clients', { method: 'POST', body: window.__API__.toApi.client(c) });
+      const mc = window.__API__.map.client(saved); state.clients.unshift(mc); if (mc.bin) byBin[mc.bin] = mc;
+      created++;
+    } catch (e) { failed++; }
+  }
+  toast(`Клиенты импортированы: +${created} новых, ${skipped} пропущено (дубль БИН)${failed ? ', ' + failed + ' ошибок' : ''}`, failed ? 'warn' : 'success');
+  navigate('clients');
+}
+
 function openNewClient() {
   const name    = fInput('Наименование (ТОО / ИП)', '', { placeholder: 'ТОО «Название»' });
   const bin     = fInput('БИН/ИИН (12 цифр)', '', { placeholder: '000000000000' });
@@ -1413,7 +1612,7 @@ VIEWS.clients = () => {
       el('div', { class: 'sub' }, `${state.clients.length} клиентов · LTV ${fmtMoneyK(state.clients.reduce((s,c)=>s+c.ltv,0))}`),
     ]),
     el('div', { class: 'actions' }, [
-      el('button', { class: 'btn', onclick: () => stub('Импорт клиентов', 'Поддержка XLSX/CSV. Сопоставление колонок (БИН, наименование, контакт, телефон) и дедупликация по БИН.', ['Шаблон под выгрузку из 1С','Превью с подсветкой ошибок','Опция «обновить существующих по БИН»']) }, '📥 Импорт'),
+      el('button', { class: 'btn', onclick: () => openImport('clients') }, '📥 Импорт'),
       el('button', { class: 'btn btn-primary', onclick: openNewClient }, '+ Клиент'),
     ]),
   ]));
@@ -1540,7 +1739,7 @@ VIEWS.catalog = () => {
       el('div', { class: 'sub' }, `${state.categories.length} категорий · ${state.products.length} SKU в демо (~1100 в проде)`),
     ]),
     el('div', { class: 'actions' }, [
-      el('button', { class: 'btn', onclick: () => stub('Импорт прайса EKF', 'Загрузка официального XLSX EKF — автоматически обновит закупочные цены и подтянет новые SKU.', ['Сверка по артикулу EKF','Подсветка изменившихся цен (+ и −)','Опция пересчёта розничной по марже']) }, '📥 Импорт прайса EKF'),
+      el('button', { class: 'btn', onclick: () => openImport('products') }, '📥 Импорт прайса EKF'),
       el('button', { class: 'btn btn-primary', onclick: openNewProduct }, '+ Товар'),
     ]),
   ]));
