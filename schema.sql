@@ -207,6 +207,7 @@ CREATE TABLE deals (
   manager_id TEXT REFERENCES users(id),
   stage_id   TEXT NOT NULL REFERENCES deal_stages(id),
   amount     INTEGER NOT NULL DEFAULT 0,     -- сумма (пересчитывается по позициям)
+  items      INTEGER NOT NULL DEFAULT 0,     -- кол-во позиций (денормализовано, как amount)
   created    TEXT,                           -- дата создания (из мокапа)
   target     TEXT,                           -- плановая дата закрытия
   created_at TEXT NOT NULL DEFAULT (datetime('now'))

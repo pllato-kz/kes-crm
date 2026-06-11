@@ -1,10 +1,14 @@
 # Файлы, которые НЕ должны попадать в публичную статику Cloudflare Pages.
 # (functions/ Pages обрабатывает отдельно как Functions — его трогать не нужно.)
+# ВНИМАНИЕ: для Pages этот файл ненадёжен — деплоить только из чистого dist/.
 wrangler.toml
 .assetsignore
 .gitignore
 schema.sql
 seed.sql
+cf-token.txt
 *.md
 .github/
 .wrangler/
+node_modules/
+dist/
