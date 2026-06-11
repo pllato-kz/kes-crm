@@ -258,8 +258,9 @@ async function dataRoute({ request, env }, seg, url, auth) {
   // --- точечная обработка ---
   if (resource === 'products' && id && seg[2] === 'stock') return productStock(env, request, id);
   if (resource === 'products' && method === 'GET' && !id) return listProducts(env, url);
+  if (resource === 'deals' && id && seg[2] === 'history' && method === 'GET') return dealHistory(env, id);
   if (resource === 'deals' && method === 'GET' && id) return getDeal(env, id);
-  if (resource === 'deals' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeDeal(env, request, method, id);
+  if (resource === 'deals' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeDeal(env, request, method, id, auth);
   if (resource === 'clients' && method === 'GET') return id ? getClient(env, id) : listClients(env, url);
   if (resource === 'clients' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeClient(env, request, method, id);
   if (resource === 'leads' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeLead(env, request, method, id);
@@ -407,10 +408,17 @@ async function getDeal(env, id) {
   return json(deal);
 }
 
-async function writeDeal(env, request, method, id) {
+async function writeDeal(env, request, method, id, auth) {
   const body = await request.json().catch(() => ({}));
   const dealId = id || body.id || genId();
   const lineItems = Array.isArray(body.lineItems) ? body.lineItems : null;
+
+  // текущий этап до изменения (для истории)
+  let prevStage = null;
+  if (method !== 'POST') {
+    const cur = await env.DB.prepare(`SELECT stage_id FROM deals WHERE id=?`).bind(dealId).first();
+    prevStage = cur ? cur.stage_id : null;
+  }
 
   const cols = (await columns(env, 'deals')).map((c) => c.name);
   const data = { ...body, id: dealId };
@@ -447,7 +455,28 @@ async function writeDeal(env, request, method, id) {
     }
   }
   if (stmts.length) await env.DB.batch(stmts);
+
+  // запись истории смены этапа
+  const newStage = data.stage_id;
+  const uid = auth && auth.sub;
+  if (newStage) {
+    if (method === 'POST') {
+      await env.DB.prepare(`INSERT INTO deal_stage_history (deal_id, from_stage, to_stage, user_id) VALUES (?,?,?,?)`).bind(dealId, null, newStage, uid).run();
+    } else if (prevStage && newStage !== prevStage) {
+      await env.DB.prepare(`INSERT INTO deal_stage_history (deal_id, from_stage, to_stage, user_id) VALUES (?,?,?,?)`).bind(dealId, prevStage, newStage, uid).run();
+    }
+  }
   return getDeal(env, dealId);
+}
+
+// История смены этапов сделки
+async function dealHistory(env, dealId) {
+  const r = await env.DB.prepare(
+    `SELECT h.from_stage, h.to_stage, h.user_id, h.changed_at, u.name AS user_name
+       FROM deal_stage_history h LEFT JOIN users u ON u.id = h.user_id
+      WHERE h.deal_id = ? ORDER BY h.id DESC`
+  ).bind(dealId).all();
+  return json(r.results);
 }
 
 // --------------------------------------------------------------------------

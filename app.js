@@ -1426,6 +1426,8 @@ async function openDealDetail(id) {
     if (full.amount != null) d.amount = full.amount;
     if (full.items != null) d.items = full.items;
   } catch (e) { if (!d.lineItems) d.lineItems = []; }
+  let history = [];
+  try { history = await window.__API__.apiFetch('deals/' + id + '/history'); } catch (e) {}
   const cl = clientById(d.client);
   const m = userById(d.manager);
   const s = stageById(d.stage);
@@ -1537,6 +1539,17 @@ async function openDealDetail(id) {
     el('div', { style:'font-weight:600;font-size:13px;margin-bottom:6px' }, 'Позиции'),
     itemsHost,
     pickerHost,
+    history.length ? el('div', { style:'margin-top:16px' }, [
+      el('div', { style:'font-weight:600;font-size:13px;margin-bottom:8px' }, 'История этапов'),
+      el('div', {}, history.map(h => {
+        const to = stageById(h.to_stage);
+        const from = h.from_stage ? stageById(h.from_stage) : null;
+        return el('div', { style:'display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #F3F4F6;font-size:12px' }, [
+          el('span', { class:'pill', style:`background:${to.color}22;color:${to.color};font-size:11px` }, to.label),
+          el('span', { class:'muted' }, (from ? from.label + ' → ' : 'создана') + ' · ' + (h.user_name || '—') + ' · ' + String(h.changed_at || '').slice(0, 16)),
+        ]);
+      })),
+    ]) : null,
   ]);
 
   const stageSelect = el('select', { style:'padding:6px 10px;border:1px solid #E5E7EB;border-radius:6px' });
