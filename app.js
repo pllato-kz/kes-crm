@@ -533,7 +533,7 @@ function openShipmentDetail(id) {
       ]),
     ]),
     foot: [
-      el('button', { class:'btn', onclick: () => stub('Печать ТТН', 'PDF товарно-транспортной накладной с печатью KazEnergoSnab.') }, '🖨 Печать ТТН'),
+      el('button', { class:'btn', onclick: () => printShipment(s) }, '🖨 Печать ТТН'),
       el('button', { class:'btn btn-primary', onclick: async () => { s.status = 'delivered'; try { await window.__API__.apiFetch('shipments/' + s.id, { method: 'PUT', body: { status_id: 'delivered' } }); closeModal(); toast('Отгрузка отмечена доставленной', 'success'); navigate('shipments'); } catch (err) { toast('Не удалось сохранить', 'error'); } } }, '✓ Доставлено'),
     ],
   });
@@ -741,6 +741,112 @@ function printInvoice(deal) {
   w.document.close();
 }
 
+// ---------- Печать ТТН и экспорт отчётов (PDF через window.print) ----------
+const PRINT_LOGO = `<svg width="50" height="56" viewBox="0 0 100 110"><polygon points="50,5 90,28 90,82 50,105 10,82 10,28" fill="none" stroke="#00A6E2" stroke-width="6"/><text x="50" y="62" text-anchor="middle" font-family="Arial" font-weight="900" font-size="32" fill="#111">KES</text></svg>`;
+
+function buildPrintDoc(title, inner) {
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>${title}</title>
+    <link rel="stylesheet" href="${location.origin}/styles.css">
+  </head><body style="background:#F4F5F7;padding:20px">
+    <div class="print-controls">
+      <button onclick="window.print()" class="btn btn-primary">🖨 Печать / PDF</button>
+      <button onclick="window.close()" class="btn">Закрыть</button>
+    </div>
+    <div class="print-area">${inner}</div>
+  </body></html>`;
+}
+
+// Печать товарно-транспортной накладной (ТТН). Окно открываем сразу (анти-попап-блок),
+// позиции по сделке подгружаем асинхронно и дописываем.
+function printShipment(sh) {
+  const w = window.open('', '_blank', 'width=900,height=1100');
+  if (!w) { toast('Браузер заблокировал окно печати — разрешите popup', 'error'); return; }
+  w.document.write('<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px;color:#666">Готовлю ТТН…</body>');
+  (async () => {
+    const cl = clientById(sh.client);
+    const deal = byId(state.deals, sh.deal);
+    let items = [];
+    if (sh.deal) {
+      try {
+        const d = await window.__API__.loadDeal(sh.deal);
+        items = (d.lineItems || []).map(it => { const p = byId(state.products, it.product); return p ? { sku: p.sku, name: p.name, unit: p.unit, qty: it.qty } : null; }).filter(Boolean);
+      } catch (e) {}
+    }
+    const dateStr = fmtDate(sh.date);
+    const totalQty = items.reduce((s, it) => s + it.qty, 0);
+    const rows = items.length
+      ? items.map((it, i) => `<tr><td>${i+1}</td><td>${it.name}</td><td style="font-family:monospace;font-size:11px">${it.sku}</td><td class="num">${it.unit}</td><td class="num">${it.qty}</td></tr>`).join('')
+      : `<tr><td colspan="5" style="text-align:center;color:#999;padding:14px">Позиции по сделке не указаны</td></tr>`;
+    const inner = `
+      <div class="pr-head">
+        <div class="pr-logo">${PRINT_LOGO}<div><h2>ТОВАРНО-ТРАНСПОРТНАЯ НАКЛАДНАЯ ${sh.no}</h2><div style="color:#666;font-size:12px;margin-top:4px">от ${dateStr}</div></div></div>
+        <div class="pr-meta">${deal ? `<div>По сделке № <b>${deal.no}</b></div>` : ''}<div style="margin-top:6px;color:#888">Образец — не имеет юридической силы</div></div>
+      </div>
+      <div class="pr-parties">
+        <div><div class="party-title">Грузоотправитель</div><div class="party-name">ТОО «KazEnergoSnab»</div><div class="party-line">г. Караганда, ул. Бытовая, 13/1</div><div class="party-line">Тел: +7 (7212) 98-04-41</div></div>
+        <div><div class="party-title">Грузополучатель</div><div class="party-name">${cl.name}</div><div class="party-line">БИН: ${cl.bin || '—'}</div><div class="party-line">${cl.city || ''}${cl.address ? ', ' + cl.address : ''}</div><div class="party-line">Контакт: ${cl.contact || '—'} · ${cl.phone || ''}</div></div>
+      </div>
+      <div class="pr-parties">
+        <div><div class="party-title">Транспорт</div><div class="party-line">${sh.transport || '—'}</div><div class="party-line">Водитель: ${sh.driver || '—'}</div></div>
+        <div><div class="party-title">Адрес доставки</div><div class="party-line">${sh.destination || '—'}</div></div>
+      </div>
+      <table class="pr-table"><thead><tr><th style="width:32px">#</th><th>Наименование</th><th style="width:90px">Артикул</th><th class="num" style="width:60px">Ед.</th><th class="num" style="width:70px">Кол-во</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="pr-totals">
+        <div class="total-line"><span>Мест:</span> <span>${sh.items || 0}</span></div>
+        <div class="total-line"><span>Вес, кг:</span> <span>${sh.weight || 0}</span></div>
+        <div class="total-line grand"><span>Всего единиц:</span> <span>${totalQty}</span></div>
+      </div>
+      <div class="pr-foot">
+        <div><div>Отпустил: ____________________</div><div style="margin-top:12px">Принял (водитель): ____________________</div><div style="margin-top:12px">Получил: ____________________</div><div style="margin-top:4px;color:#aaa">М.П.</div></div>
+        <div class="pr-stamp">место<br>печати</div>
+      </div>`;
+    w.document.open(); w.document.write(buildPrintDoc('ТТН ' + sh.no, inner)); w.document.close();
+  })();
+}
+
+// Экспорт сводного отчёта в PDF (по данным state)
+function exportReportPDF() {
+  const deals = state.deals;
+  const open = deals.filter(d => !['closed','lost'].includes(d.stage));
+  const pipeline = open.reduce((a, d) => a + d.amount, 0);
+  const won = deals.filter(d => ['paid','shipped','closed'].includes(d.stage)).reduce((a, d) => a + d.amount, 0);
+  const overdue = state.invoices.filter(i => i.status === 'overdue');
+  const overdueSum = overdue.reduce((a, i) => a + i.amount, 0);
+  const byStage = STAGES.map(s => { const ds = deals.filter(d => d.stage === s.id); return { label: s.label, count: ds.length, sum: ds.reduce((a, d) => a + d.amount, 0) }; }).filter(x => x.count);
+  const debtors = state.clients.filter(c => c.balance < 0).sort((a, b) => a.balance - b.balance);
+  const top = state.clients.slice().sort((a, b) => b.ltv - a.ltv).slice(0, 10);
+  const dateStr = new Date().toLocaleDateString('ru-RU', { day:'2-digit', month:'long', year:'numeric' });
+  const h3 = (t) => `<h3 style="margin:18px 0 8px;font-size:14px">${t}</h3>`;
+  const inner = `
+    <div class="pr-head">
+      <div class="pr-logo">${PRINT_LOGO}<div><h2>СВОДНЫЙ ОТЧЁТ</h2><div style="color:#666;font-size:12px;margin-top:4px">на ${dateStr}</div></div></div>
+      <div class="pr-meta"><div>ТОО «KazEnergoSnab»</div><div style="margin-top:6px;color:#888">Образец</div></div>
+    </div>
+    ${h3('Ключевые показатели')}
+    <table class="pr-table"><tbody>
+      <tr><td>Сделок всего</td><td class="num"><b>${deals.length}</b></td></tr>
+      <tr><td>Пайплайн (открытые сделки)</td><td class="num"><b>${fmtMoney(pipeline)}</b></td></tr>
+      <tr><td>Выручка (оплачено / отгружено / закрыто)</td><td class="num"><b>${fmtMoney(won)}</b></td></tr>
+      <tr><td>Дебиторка (просроченных счетов: ${overdue.length})</td><td class="num"><b>${fmtMoney(overdueSum)}</b></td></tr>
+    </tbody></table>
+    ${h3('Сделки по этапам')}
+    <table class="pr-table"><thead><tr><th>Этап</th><th class="num">Кол-во</th><th class="num">Сумма</th></tr></thead><tbody>
+      ${byStage.map(s => `<tr><td>${s.label}</td><td class="num">${s.count}</td><td class="num">${fmtMoney(s.sum)}</td></tr>`).join('')}
+    </tbody></table>
+    ${h3('Дебиторская задолженность')}
+    <table class="pr-table"><thead><tr><th>Клиент</th><th class="num">Долг</th></tr></thead><tbody>
+      ${debtors.length ? debtors.map(c => `<tr><td>${c.name}</td><td class="num"><b>${fmtMoney(Math.abs(c.balance))}</b></td></tr>`).join('') : '<tr><td colspan="2" style="text-align:center;color:#999">Нет задолженности</td></tr>'}
+    </tbody></table>
+    ${h3('Топ-10 клиентов по обороту')}
+    <table class="pr-table"><thead><tr><th>Клиент</th><th class="num">Оборот (LTV)</th></tr></thead><tbody>
+      ${top.map(c => `<tr><td>${c.name}</td><td class="num">${fmtMoney(c.ltv)}</td></tr>`).join('')}
+    </tbody></table>`;
+  const w = window.open('', '_blank', 'width=900,height=1100');
+  if (!w) { toast('Браузер заблокировал окно печати — разрешите popup', 'error'); return; }
+  w.document.write(buildPrintDoc('Отчёт KES', inner));
+  w.document.close();
+}
+
 // Простой конвертер числа в слова (для счёта-фактуры)
 function numberToRussianWords(n) {
   n = Math.round(n);
@@ -900,7 +1006,7 @@ VIEWS.dashboard = () => {
       el('div', { class: 'sub' }, `Сводка по KazEnergoSnab · ${role().seeAllData ? 'все данные компании' : 'ваши клиенты и сделки'}`),
     ]),
     el('div', { class: 'actions' }, [
-      el('button', { class: 'btn', onclick: () => stub('Экспорт сводки', 'Сформирует PDF-сводку по продажам, пайплайну и дебиторке за выбранный период для отправки руководству.') }, '📥 Экспорт'),
+      el('button', { class: 'btn', onclick: () => exportReportPDF() }, '📥 Экспорт'),
       el('button', { class: 'btn btn-primary', onclick: () => openNewDeal() }, '+ Новая сделка'),
     ]),
   ]));
@@ -1823,7 +1929,7 @@ VIEWS.reports = () => {
   const wrap = el('div');
   wrap.append(el('div', { class:'page-head' }, [
     el('div', {}, [el('h1', {}, 'Отчёты'), el('div', { class:'sub' }, 'Май 2026 · ABC-анализ клиентов, продажи по менеджерам и категориям')]),
-    el('div', { class:'actions' }, [el('button', { class:'btn', onclick: () => stub('Экспорт PDF отчёта', 'Сформирует красивый PDF: продажи по неделям, ABC-сегментация клиентов, план/факт по менеджерам, разрез по категориям и поставщикам.') }, '📥 Экспорт PDF')]),
+    el('div', { class:'actions' }, [el('button', { class:'btn', onclick: () => exportReportPDF() }, '📥 Экспорт PDF')]),
   ]));
 
   // Продажи по неделям — line chart
