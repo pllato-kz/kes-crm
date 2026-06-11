@@ -1,7 +1,9 @@
 // KES CRM — рендер, навигация, авторизация. SPA на чистом JS.
 
-const { STAGES, ROLES, CLIENT_TYPES, loadState, saveState, resetState, getSession, setSession, clearSession } = window.__KES__;
-let state = loadState();
+// Слой 4: данные приходят из боевого API (api.js), а не из localStorage.
+let { STAGES, ROLES, CLIENT_TYPES } = window.__KES__; // переопределяются из БД в loadData()
+const { saveState, resetState } = window.__KES__;
+let state = { meta: {}, users: [], categories: [], products: [], clients: [], deals: [], leads: [], suppliers: [], tasks: [], invoices: [], shipments: [], receipts: [], notifications: [] };
 let currentUser = null; // заполняется после логина
 
 // ---------- Утилиты ----------
@@ -2091,18 +2093,18 @@ function renderLogin(errMsg = null) {
   };
 }
 
-function doLogin(email, password) {
-  const u = state.users.find(x => x.email.toLowerCase() === email.toLowerCase());
-  if (!u || u.password !== password || u.active === false) {
-    renderLogin('Неверный email или пароль (демо-пароль: demo)');
-    return;
+async function doLogin(email, password) {
+  try {
+    await window.__API__.login(email, password);
+    await loadData();
+    renderShell();
+  } catch (e) {
+    renderLogin(e && e.status === 401 ? 'Неверный email или пароль' : ('Ошибка входа: ' + ((e && e.message) || e)));
   }
-  setSession(u.id);
-  bootApp();
 }
 
 function logout() {
-  clearSession();
+  window.__API__.logout();
   location.reload();
 }
 
@@ -2130,15 +2132,38 @@ function visibleTasks()    { return role().seeAllData ? state.tasks    : state.t
 // ============================================================
 // BOOT — после успешного логина
 // ============================================================
-function bootApp() {
-  const session = getSession();
-  currentUser = session ? state.users.find(u => u.id === session.userId) : null;
-  if (!currentUser || currentUser.active === false) {
-    clearSession();
-    renderLogin();
-    return;
+// Загрузка данных из боевого API в state + справочники из БД
+async function loadData() {
+  const { state: s, dict } = await window.__API__.loadAllData();
+  state = s;
+  STAGES = dict.STAGES;
+  ROLES = dict.ROLES;
+  CLIENT_TYPES = dict.CLIENT_TYPES;
+  currentUser = state.users.find(u => u.id === jwtSub(window.__API__.getToken())) || null;
+}
+
+// Достаём sub (id пользователя) из JWT без проверки подписи — только для UI
+function jwtSub(token) {
+  try {
+    const b = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(decodeURIComponent(escape(atob(b)))).sub;
+  } catch (e) { return null; }
+}
+
+async function bootApp() {
+  if (!window.__API__ || !window.__API__.isAuthed()) { renderLogin(); return; }
+  try {
+    await loadData();
+    if (!currentUser || currentUser.active === false) {
+      window.__API__.logout();
+      renderLogin('Сессия истекла — войдите снова');
+      return;
+    }
+    renderShell();
+  } catch (e) {
+    window.__API__.logout();
+    renderLogin('Не удалось загрузить данные. Войдите снова.');
   }
-  renderShell();
 }
 
 function renderShell() {
