@@ -195,15 +195,19 @@ function openNewClient() {
     body: form,
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
-      el('button', { class: 'btn btn-primary', onclick: () => {
+      el('button', { class: 'btn btn-primary', onclick: async () => {
         if (!name.get().trim()) { toast('Введите наименование', 'warn'); return; }
-        state.clients.unshift({
-          id: 'cl' + Date.now(), name: name.get().trim(), bin: bin.get(), type: type.get(),
+        const c = {
+          name: name.get().trim(), bin: bin.get(), type: type.get(),
           contact: contact.get(), phone: phone.get(), email: email.get() || '—',
           city: city.get(), address: address.get(), manager: manager.get(),
           balance: 0, ltv: 0, lastDeal: new Date().toISOString().slice(0,10), tags: ['новый'],
-        });
-        saveState(state); closeModal(); toast('Клиент добавлен', 'success'); navigate('clients');
+        };
+        try {
+          const saved = await window.__API__.apiFetch('clients', { method: 'POST', body: window.__API__.toApi.client(c) });
+          state.clients.unshift(window.__API__.map.client(saved));
+          closeModal(); toast('Клиент добавлен', 'success'); navigate('clients');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Создать клиента'),
     ],
   });
@@ -467,7 +471,7 @@ function openShipmentDetail(id) {
     ]),
     foot: [
       el('button', { class:'btn', onclick: () => stub('Печать ТТН', 'PDF товарно-транспортной накладной с печатью KazEnergoSnab.') }, '🖨 Печать ТТН'),
-      el('button', { class:'btn btn-primary', onclick: () => { s.status = 'delivered'; saveState(state); closeModal(); toast('Отгрузка отмечена доставленной', 'success'); navigate('shipments'); } }, '✓ Доставлено'),
+      el('button', { class:'btn btn-primary', onclick: async () => { s.status = 'delivered'; try { await window.__API__.apiFetch('shipments/' + s.id, { method: 'PUT', body: { status_id: 'delivered' } }); closeModal(); toast('Отгрузка отмечена доставленной', 'success'); navigate('shipments'); } catch (err) { toast('Не удалось сохранить', 'error'); } } }, '✓ Доставлено'),
     ],
   });
 }
@@ -492,7 +496,7 @@ function openInvoiceDetail(id) {
     foot: [
       el('button', { class:'btn', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl); else toast('Сделка не найдена', 'warn'); } }, '🖨 PDF'),
       iv.status !== 'paid'
-        ? el('button', { class:'btn btn-primary', onclick: () => { iv.status = 'paid'; saveState(state); closeModal(); toast('Оплата зарегистрирована', 'success'); navigate('invoices'); } }, '✓ Оплачено')
+        ? el('button', { class:'btn btn-primary', onclick: async () => { iv.status = 'paid'; try { await window.__API__.apiFetch('invoices/' + iv.id, { method: 'PUT', body: { status_id: 'paid' } }); closeModal(); toast('Оплата зарегистрирована', 'success'); navigate('invoices'); } catch (err) { toast('Не удалось сохранить', 'error'); } } }, '✓ Оплачено')
         : el('button', { class:'btn', disabled: 'disabled' }, '✓ Уже оплачен'),
     ],
   });
@@ -1021,7 +1025,7 @@ VIEWS.deals = () => {
 
     col.addEventListener('dragover', (e) => { if (!dragged) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('drag-over'); });
     col.addEventListener('dragleave', (e) => { if (e.target === col) col.classList.remove('drag-over'); });
-    col.addEventListener('drop', (e) => {
+    col.addEventListener('drop', async (e) => {
       e.preventDefault();
       col.classList.remove('drag-over');
       if (!dragged) return;
@@ -1030,9 +1034,11 @@ VIEWS.deals = () => {
       if (deal.stage === s.id) return;
       const fromLabel = stageById(deal.stage).label;
       deal.stage = s.id;
-      saveState(state);
-      toast(`${deal.title.slice(0,30)}: ${fromLabel} → ${s.label}`, 'success');
       navigate('deals');
+      try {
+        await window.__API__.apiFetch('deals/' + deal.id, { method: 'PUT', body: { stage_id: s.id } });
+        toast(`${deal.title.slice(0,30)}: ${fromLabel} → ${s.label}`, 'success');
+      } catch (err) { toast('Не удалось сохранить этап', 'error'); }
     });
 
     kanban.append(col);
@@ -1724,7 +1730,7 @@ VIEWS.tasks = () => {
     const u = userById(t.owner);
     list.append(el('div', { class:'activity-item', style:'padding:10px 0;border-bottom:1px solid #F3F4F6' }, [
       el('input', { type:'checkbox', checked: t.done ? 'checked' : null, style:'margin-top:8px;width:18px;height:18px',
-        onchange: (e) => { t.done = e.target.checked; saveState(state); toast(t.done ? 'Задача выполнена' : 'Задача возвращена в работу', 'success'); navigate('tasks'); }
+        onchange: async (e) => { t.done = e.target.checked; try { await window.__API__.apiFetch('tasks/' + t.id, { method: 'PUT', body: { done: t.done ? 1 : 0 } }); toast(t.done ? 'Задача выполнена' : 'Задача возвращена в работу', 'success'); } catch (err) { toast('Не удалось сохранить', 'error'); } navigate('tasks'); }
       }),
       el('div', { class:'flex-1' }, [
         el('div', { style: t.done ? 'text-decoration:line-through;color:#9CA3AF' : '' }, t.title),
