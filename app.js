@@ -290,13 +290,14 @@ function openNewTask() {
     body: el('div', {}, [title.row, owner.row, due.row, prio.row]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
-      el('button', { class: 'btn btn-primary', onclick: () => {
+      el('button', { class: 'btn btn-primary', onclick: async () => {
         if (!title.get().trim()) { toast('Введите задачу', 'warn'); return; }
-        state.tasks.unshift({
-          id: 't' + Date.now(), title: title.get().trim(),
-          due: due.get(), owner: owner.get(), deal: null, done: false, priority: prio.get(),
-        });
-        saveState(state); closeModal(); toast('Задача добавлена', 'success'); navigate('tasks');
+        const t = { title: title.get().trim(), due: due.get(), owner: owner.get(), deal: null, done: false, priority: prio.get() };
+        try {
+          const saved = await window.__API__.apiFetch('tasks', { method: 'POST', body: window.__API__.toApi.task(t) });
+          state.tasks.unshift(window.__API__.map.task(saved));
+          closeModal(); toast('Задача добавлена', 'success'); navigate('tasks');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Создать'),
     ],
   });
@@ -318,14 +319,14 @@ function openNewProduct() {
     body: el('div', {}, [sku.row, name.row, cat.row, brand.row, unit.row, pc.row, pw.row, pr.row, st.row]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
-      el('button', { class: 'btn btn-primary', onclick: () => {
+      el('button', { class: 'btn btn-primary', onclick: async () => {
         if (!sku.get() || !name.get()) { toast('Заполните артикул и название', 'warn'); return; }
-        state.products.unshift({
-          id: 'p' + Date.now(), sku: sku.get(), name: name.get(), cat: cat.get(), brand: brand.get(),
-          unit: unit.get(), priceCost: +pc.get()||0, priceWholesale: +pw.get()||0, priceRetail: +pr.get()||0,
-          stock: +st.get()||0, reserved: 0,
-        });
-        saveState(state); closeModal(); toast('Товар добавлен в каталог', 'success'); navigate('catalog');
+        const p = { sku: sku.get(), name: name.get(), cat: cat.get(), brand: brand.get(), unit: unit.get(), priceCost: +pc.get()||0, priceWholesale: +pw.get()||0, priceRetail: +pr.get()||0 };
+        try {
+          const saved = await window.__API__.apiFetch('products', { method: 'POST', body: window.__API__.toApi.product(p) });
+          state.products.unshift({ ...window.__API__.map.product(saved), stock: +st.get()||0, reserved: 0 });
+          closeModal(); toast('Товар добавлен (остаток задаётся на складе)', 'success'); navigate('catalog');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Добавить товар'),
     ],
   });
@@ -343,14 +344,14 @@ function openNewSupplier() {
     body: el('div', {}, [name.row, contact.row, phone.row, email.row, note.row]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
-      el('button', { class: 'btn btn-primary', onclick: () => {
+      el('button', { class: 'btn btn-primary', onclick: async () => {
         if (!name.get().trim()) { toast('Введите название', 'warn'); return; }
-        state.suppliers.push({
-          id: 'sp' + Date.now(), name: name.get().trim(), contact: contact.get(),
-          phone: phone.get(), email: email.get(), share: 0,
-          lastDelivery: new Date().toISOString().slice(0,10), note: note.get(),
-        });
-        saveState(state); closeModal(); toast('Поставщик добавлен', 'success'); navigate('suppliers');
+        const sp = { name: name.get().trim(), contact: contact.get(), phone: phone.get(), email: email.get(), share: 0, lastDelivery: new Date().toISOString().slice(0,10), note: note.get() };
+        try {
+          const saved = await window.__API__.apiFetch('suppliers', { method: 'POST', body: window.__API__.toApi.supplier(sp) });
+          state.suppliers.push(window.__API__.map.supplier(saved));
+          closeModal(); toast('Поставщик добавлен', 'success'); navigate('suppliers');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Создать'),
     ],
   });
@@ -372,16 +373,19 @@ function openNewShipment() {
     body: el('div', {}, [deal.row, date.row, transport.row, driver.row, dest.row]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
-      el('button', { class: 'btn btn-primary', onclick: () => {
+      el('button', { class: 'btn btn-primary', onclick: async () => {
         const d = byId(state.deals, deal.get());
-        state.shipments.unshift({
-          id: 'sh' + Date.now(), no: 'ТТН-0' + (515 + state.shipments.length),
-          deal: deal.get(), client: d?.client || state.clients[0].id,
-          date: date.get(), items: d?.items || 1, weight: 0,
-          transport: transport.get(), driver: driver.get(),
-          status: 'planned', destination: dest.get(),
-        });
-        saveState(state); closeModal(); toast('Отгрузка запланирована', 'success'); navigate('shipments');
+        const sh = {
+          no: 'ТТН-0' + (515 + state.shipments.length),
+          deal: deal.get(), client: (d && d.client) || (state.clients[0] && state.clients[0].id),
+          date: date.get(), items: (d && d.items) || 1, weight: 0,
+          transport: transport.get(), driver: driver.get(), status: 'planned', destination: dest.get(),
+        };
+        try {
+          const saved = await window.__API__.apiFetch('shipments', { method: 'POST', body: window.__API__.toApi.shipment(sh) });
+          state.shipments.unshift(window.__API__.map.shipment(saved));
+          closeModal(); toast('Отгрузка запланирована', 'success'); navigate('shipments');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Создать'),
     ],
   });
@@ -399,14 +403,18 @@ function openNewInvoice() {
     body: el('div', {}, [deal.row, amount.row, due.row]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
-      el('button', { class: 'btn btn-primary', onclick: () => {
+      el('button', { class: 'btn btn-primary', onclick: async () => {
         const d = byId(state.deals, deal.get());
-        state.invoices.unshift({
-          id: 'iv' + Date.now(), no: 'СФ-2026-0' + (240 + state.invoices.length),
-          deal: deal.get(), client: d?.client, date: new Date().toISOString().slice(0,10),
+        const iv = {
+          no: 'СФ-2026-0' + (240 + state.invoices.length),
+          deal: deal.get(), client: d && d.client, date: new Date().toISOString().slice(0,10),
           amount: +amount.get() || 0, status: 'pending', due: due.get(),
-        });
-        saveState(state); closeModal(); toast('Счёт выставлен', 'success'); navigate('invoices');
+        };
+        try {
+          const saved = await window.__API__.apiFetch('invoices', { method: 'POST', body: window.__API__.toApi.invoice(iv) });
+          state.invoices.unshift(window.__API__.map.invoice(saved));
+          closeModal(); toast('Счёт выставлен', 'success'); navigate('invoices');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Выставить'),
     ],
   });
@@ -1952,9 +1960,9 @@ VIEWS.settings = () => {
       el('td', {}, u.active === false ? el('span', { class:'pill pill-danger' }, '🚫 Заблокирован') : el('span', { class:'pill pill-success' }, '✓ Активен')),
       el('td', { class:'num' }, canEditUsers ? el('div', { class:'row', style:'justify-content:flex-end;gap:4px' }, [
         el('button', { class:'btn btn-sm', onclick: () => openEditUser(u.id) }, '✏️'),
-        !isMe && u.active !== false ? el('button', { class:'btn btn-sm', title:'Заблокировать', onclick: () => { u.active = false; saveState(state); toast(u.name + ' заблокирован', 'warn'); navigate('settings'); } }, '🚫') : null,
-        !isMe && u.active === false ? el('button', { class:'btn btn-sm', title:'Активировать', onclick: () => { u.active = true; saveState(state); toast(u.name + ' активирован', 'success'); navigate('settings'); } }, '✓') : null,
-        !isMe ? el('button', { class:'btn btn-sm', title:'Удалить', onclick: () => { if (confirm('Удалить ' + u.name + '?')) { state.users = state.users.filter(x => x.id !== u.id); saveState(state); toast('Пользователь удалён', 'success'); navigate('settings'); } } }, '🗑') : null,
+        !isMe && u.active !== false ? el('button', { class:'btn btn-sm', title:'Заблокировать', onclick: async () => { u.active = false; try { await window.__API__.apiFetch('users/' + u.id, { method: 'PUT', body: { active: 0 } }); toast(u.name + ' заблокирован', 'warn'); } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); } navigate('settings'); } }, '🚫') : null,
+        !isMe && u.active === false ? el('button', { class:'btn btn-sm', title:'Активировать', onclick: async () => { u.active = true; try { await window.__API__.apiFetch('users/' + u.id, { method: 'PUT', body: { active: 1 } }); toast(u.name + ' активирован', 'success'); } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); } navigate('settings'); } }, '✓') : null,
+        !isMe ? el('button', { class:'btn btn-sm', title:'Удалить', onclick: async () => { if (confirm('Удалить ' + u.name + '?')) { try { await window.__API__.apiFetch('users/' + u.id, { method: 'DELETE' }); state.users = state.users.filter(x => x.id !== u.id); toast('Пользователь удалён', 'success'); } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); } navigate('settings'); } } }, '🗑') : null,
       ]) : el('span', { class:'muted' }, '—')),
     ]);
   })));
