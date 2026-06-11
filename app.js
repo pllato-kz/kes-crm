@@ -323,10 +323,12 @@ function openNewProduct() {
       el('button', { class: 'btn btn-primary', onclick: async () => {
         if (!sku.get() || !name.get()) { toast('Заполните артикул и название', 'warn'); return; }
         const p = { sku: sku.get(), name: name.get(), cat: cat.get(), brand: brand.get(), unit: unit.get(), priceCost: +pc.get()||0, priceWholesale: +pw.get()||0, priceRetail: +pr.get()||0 };
+        const stockVal = +st.get()||0;
         try {
           const saved = await window.__API__.apiFetch('products', { method: 'POST', body: window.__API__.toApi.product(p) });
-          state.products.unshift({ ...window.__API__.map.product(saved), stock: +st.get()||0, reserved: 0 });
-          closeModal(); toast('Товар добавлен (остаток задаётся на складе)', 'success'); navigate('catalog');
+          if (stockVal) await window.__API__.apiFetch('products/' + saved.id + '/stock', { method: 'PUT', body: { stock: stockVal, reserved: 0 } });
+          state.products.unshift({ ...window.__API__.map.product(saved), stock: stockVal, reserved: 0 });
+          closeModal(); toast('Товар добавлен', 'success'); navigate('catalog');
         } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Добавить товар'),
     ],
@@ -452,8 +454,30 @@ function openProductDetail(id) {
       ]),
     ]),
     foot: [
-      el('button', { class:'btn', onclick: () => stub('Редактирование товара', 'Здесь будет форма редактирования цен, остатков и описания.', ['Загрузка фото','Привязка к нескольким поставщикам','История изменений цен']) }, '✏️ Изменить'),
+      can('edit-stock') ? el('button', { class:'btn', onclick: () => { closeModal(); openEditStock(p); } }, '✏️ Изменить остаток') : null,
       el('button', { class:'btn btn-primary', onclick: () => { closeModal(); toast(`+1 шт «${p.sku}» в новую сделку`, 'success'); } }, '+ В сделку'),
+    ],
+  });
+}
+
+// Правка остатка товара (право edit-stock: директор / кладовщик)
+function openEditStock(p) {
+  const stock = fInput('Остаток', String(p.stock), { type: 'number' });
+  const reserved = fInput('Зарезервировано', String(p.reserved), { type: 'number' });
+  openModal({
+    title: 'Остаток: ' + p.sku,
+    body: el('div', {}, [stock.row, reserved.row]),
+    foot: [
+      el('button', { class:'btn', onclick: closeModal }, 'Отмена'),
+      el('button', { class:'btn btn-primary', onclick: async () => {
+        const s = +stock.get() || 0, r = +reserved.get() || 0;
+        try {
+          await window.__API__.apiFetch('products/' + p.id + '/stock', { method: 'PUT', body: { stock: s, reserved: r } });
+          p.stock = s; p.reserved = r;
+          const cur = document.querySelector('#nav button.active')?.dataset.view || 'warehouse';
+          closeModal(); toast('Остаток обновлён', 'success'); navigate(cur);
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+      } }, 'Сохранить'),
     ],
   });
 }

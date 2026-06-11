@@ -256,6 +256,7 @@ async function dataRoute({ request, env }, seg, url, auth) {
   const method = request.method;
 
   // --- точечная обработка ---
+  if (resource === 'products' && id && seg[2] === 'stock') return productStock(env, request, id);
   if (resource === 'products' && method === 'GET' && !id) return listProducts(env, url);
   if (resource === 'deals' && method === 'GET' && id) return getDeal(env, id);
   if (resource === 'deals' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeDeal(env, request, method, id);
@@ -332,6 +333,32 @@ async function updateGeneric(env, table, meta, id, request) {
 async function deleteGeneric(env, table, meta, id) {
   const res = await env.DB.prepare(`DELETE FROM ${table} WHERE ${meta.pk}=?`).bind(id).run();
   return json({ deleted: (res.meta && res.meta.changes) || 0 });
+}
+
+// --------------------------------------------------------------------------
+// Остатки товара по складам (product_stock, составной ключ)
+// GET /api/products/:id/stock           — остатки по складам
+// PUT /api/products/:id/stock {stock,reserved,warehouse_id?}  — upsert
+// --------------------------------------------------------------------------
+async function productStock(env, request, productId) {
+  if (request.method === 'GET') {
+    const r = await env.DB.prepare(
+      `SELECT product_id, warehouse_id, stock, reserved FROM product_stock WHERE product_id=?`
+    ).bind(productId).all();
+    return json(r.results);
+  }
+  if (['PUT', 'POST', 'PATCH'].includes(request.method)) {
+    const b = await request.json().catch(() => ({}));
+    const warehouseId = b.warehouse_id || 'w1'; // мокап — один склад
+    const stock = num(b.stock);
+    const reserved = num(b.reserved);
+    await env.DB.prepare(
+      `INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?,?,?,?)
+       ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock, reserved=excluded.reserved`
+    ).bind(productId, warehouseId, stock, reserved).run();
+    return json({ product_id: productId, warehouse_id: warehouseId, stock, reserved });
+  }
+  return err(405, 'Метод не поддерживается');
 }
 
 // --------------------------------------------------------------------------
