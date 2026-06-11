@@ -224,15 +224,16 @@ function openNewLead() {
     body: el('div', {}, [src.row, name.row, phone.row, sub.row]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
-      el('button', { class: 'btn btn-primary', onclick: () => {
+      el('button', { class: 'btn btn-primary', onclick: async () => {
         if (!name.get().trim()) { toast('Введите имя', 'warn'); return; }
         const now = new Date();
         const ts = now.toISOString().slice(0,10) + ' ' + now.toTimeString().slice(0,5);
-        state.leads.unshift({
-          id: 'l' + Date.now(), source: src.get(), name: name.get().trim(),
-          phone: phone.get(), subject: sub.get(), created: ts, status: 'new',
-        });
-        saveState(state); closeModal(); toast('Заявка зарегистрирована', 'success'); navigate('leads');
+        const ld = { source: src.get(), name: name.get().trim(), phone: phone.get(), subject: sub.get(), created: ts, status: 'new' };
+        try {
+          const saved = await window.__API__.apiFetch('leads', { method: 'POST', body: window.__API__.toApi.lead(ld) });
+          state.leads.unshift({ id: saved.id, source: ld.source, name: ld.name, phone: ld.phone, subject: ld.subject, created: saved.created || ts, status: saved.status_id || 'new' });
+          closeModal(); toast('Заявка зарегистрирована', 'success'); navigate('leads');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Создать'),
     ],
   });
@@ -259,17 +260,17 @@ function convertLead(id) {
     ]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
-      el('button', { class: 'btn btn-primary', onclick: () => {
+      el('button', { class: 'btn btn-primary', onclick: async () => {
         const today = new Date().toISOString().slice(0,10);
         const num = state.deals.length + 160;
-        state.deals.unshift({
-          id: 'd' + Date.now(), no: '2026-0' + num,
-          client: client.get() || state.clients[0].id, manager: mgr.get(),
-          stage: 'new', amount: Number(amount.get()) || 0, items: 0,
-          created: today, target: today, title: name.get().trim() || l.subject,
-        });
-        l.status = 'converted';
-        saveState(state); closeModal(); toast('Заявка → Сделка создана', 'success'); navigate('deals');
+        const nd = { no: '2026-0' + num, client: client.get() || state.clients[0].id, manager: mgr.get(), stage: 'new', amount: Number(amount.get()) || 0, items: 0, created: today, target: today, title: name.get().trim() || l.subject };
+        try {
+          const saved = await window.__API__.apiFetch('deals', { method: 'POST', body: window.__API__.toApi.deal(nd) });
+          state.deals.unshift(window.__API__.map.deal(saved));
+          await window.__API__.apiFetch('leads/' + l.id, { method: 'PUT', body: { status_id: 'converted' } });
+          l.status = 'converted';
+          closeModal(); toast('Заявка → Сделка создана', 'success'); navigate('deals');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Создать сделку'),
     ],
   });
@@ -1055,10 +1056,16 @@ VIEWS.deals = () => {
   return wrap;
 };
 
-function openDealDetail(id) {
+async function openDealDetail(id) {
   const d = byId(state.deals, id);
   if (!d) return;
-  if (!d.lineItems) d.lineItems = [];
+  // ленивая подгрузка позиций сделки из БД
+  try {
+    const full = await window.__API__.loadDeal(id);
+    d.lineItems = full.lineItems || [];
+    if (full.amount != null) d.amount = full.amount;
+    if (full.items != null) d.items = full.items;
+  } catch (e) { if (!d.lineItems) d.lineItems = []; }
   const cl = clientById(d.client);
   const m = userById(d.manager);
   const s = stageById(d.stage);
@@ -1186,9 +1193,13 @@ function openDealDetail(id) {
     foot: [
       el('div', { style:'margin-right:auto;font-size:12px;color:#6B7280;display:flex;align-items:center;gap:8px' }, ['Этап:', stageSelect]),
       el('button', { class: 'btn', onclick: () => printInvoice(d) }, '🖨 Печать СФ'),
-      canEdit ? el('button', { class: 'btn btn-primary', onclick: () => {
+      canEdit ? el('button', { class: 'btn btn-primary', onclick: async () => {
         d.stage = stageSelect.value;
-        saveState(state); closeModal(); toast('Сделка сохранена', 'success'); navigate('deals');
+        try {
+          const saved = await window.__API__.apiFetch('deals/' + d.id, { method: 'PUT', body: { ...window.__API__.toApi.deal(d), lineItems: window.__API__.toApi.dealItems(d.lineItems) } });
+          Object.assign(d, window.__API__.map.deal(saved));
+          closeModal(); toast('Сделка сохранена', 'success'); navigate('deals');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Сохранить') : null,
     ],
   });
@@ -1215,25 +1226,16 @@ function openNewDeal() {
     body: form,
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
-      el('button', { class: 'btn btn-primary', onclick: () => {
+      el('button', { class: 'btn btn-primary', onclick: async () => {
         if (!titleI.value.trim()) { titleI.focus(); return; }
         const today = new Date().toISOString().slice(0,10);
         const num = state.deals.length + 160;
-        state.deals.unshift({
-          id: 'd' + Date.now(),
-          no: '2026-0' + num,
-          client: clientSel.value,
-          manager: mgrSel.value,
-          stage: 'new',
-          amount: Number(amountI.value) || 0,
-          items: 0,
-          created: today,
-          target: today,
-          title: titleI.value.trim(),
-        });
-        saveState(state);
-        closeModal();
-        navigate('deals');
+        const nd = { no: '2026-0' + num, client: clientSel.value, manager: mgrSel.value, stage: 'new', amount: Number(amountI.value) || 0, items: 0, created: today, target: today, title: titleI.value.trim() };
+        try {
+          const saved = await window.__API__.apiFetch('deals', { method: 'POST', body: window.__API__.toApi.deal(nd) });
+          state.deals.unshift(window.__API__.map.deal(saved));
+          closeModal(); toast('Сделка создана', 'success'); navigate('deals');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Создать сделку'),
     ],
   });

@@ -261,6 +261,7 @@ async function dataRoute({ request, env }, seg, url, auth) {
   if (resource === 'deals' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeDeal(env, request, method, id);
   if (resource === 'clients' && method === 'GET') return id ? getClient(env, id) : listClients(env, url);
   if (resource === 'clients' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeClient(env, request, method, id);
+  if (resource === 'leads' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeLead(env, request, method, id);
 
   // --- обобщённый CRUD ---
   switch (method) {
@@ -490,6 +491,38 @@ async function setClientTags(env, clientId, names) {
     if (tag) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO client_tags (client_id, tag_id) VALUES (?,?)`).bind(clientId, tag.id));
   }
   await env.DB.batch(stmts);
+}
+
+// --------------------------------------------------------------------------
+// Заявки: источник приходит именем (source) — резолвим/создаём lead_source
+// --------------------------------------------------------------------------
+async function writeLead(env, request, method, id) {
+  const body = await request.json().catch(() => ({}));
+  const leadId = id || body.id || genId();
+
+  if (body.source && !body.source_id) {
+    await env.DB.prepare(`INSERT OR IGNORE INTO lead_sources (name) VALUES (?)`).bind(body.source).run();
+    const src = await env.DB.prepare(`SELECT id FROM lead_sources WHERE name=?`).bind(body.source).first();
+    if (src) body.source_id = src.id;
+  }
+  delete body.source;
+
+  const cols = (await columns(env, 'leads')).map((c) => c.name);
+  const data = { ...body, id: leadId };
+  const keys = Object.keys(data).filter((k) => cols.includes(k));
+
+  if (method === 'POST') {
+    await env.DB.prepare(`INSERT INTO leads (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`)
+      .bind(...keys.map((k) => data[k])).run();
+  } else {
+    const up = keys.filter((k) => k !== 'id');
+    if (up.length) {
+      await env.DB.prepare(`UPDATE leads SET ${up.map((k) => `${k}=?`).join(',')} WHERE id=?`)
+        .bind(...up.map((k) => data[k]), leadId).run();
+    }
+  }
+  const row = await env.DB.prepare(`SELECT * FROM leads WHERE id=?`).bind(leadId).first();
+  return json(row, method === 'POST' ? 201 : 200);
 }
 
 // --------------------------------------------------------------------------
