@@ -93,11 +93,12 @@ function navigate(view, params = {}) {
 
 document.addEventListener('click', (e) => {
   const navBtn = e.target.closest('#nav button[data-view]');
-  if (navBtn) { navigate(navBtn.dataset.view); return; }
+  if (navBtn) { navigate(navBtn.dataset.view); document.body.classList.remove('nav-open'); return; }
   const navLink = e.target.closest('[data-nav]');
   if (navLink) {
     e.preventDefault();
     navigate(navLink.dataset.nav, JSON.parse(navLink.dataset.params || '{}'));
+    document.body.classList.remove('nav-open');
   }
 });
 
@@ -2663,6 +2664,7 @@ function renderShell() {
         </div>
       </aside>
       <header class="header">
+        <button class="menu-toggle" id="menuToggle" aria-label="Меню">☰</button>
         <div class="header-title">
           <span class="crumb">CRM /</span>
           <span id="page-title">Дашборд</span>
@@ -2687,6 +2689,7 @@ function renderShell() {
         <div class="empty"><div class="em-icon">⏳</div><div class="em-text">Загрузка…</div></div>
       </main>
     </div>
+    <div class="nav-backdrop" id="navBackdrop"></div>
     <div class="toast-stack" id="toasts"></div>
     <div id="dropdown-root"></div>
     <div class="modal-overlay" id="modal">
@@ -2734,6 +2737,8 @@ function renderShell() {
     if (b.title === 'Помощь' || b.textContent.trim() === '?') b.addEventListener('click', openAbout);
   });
   $('#logoutBtn').addEventListener('click', (e) => { e.stopPropagation(); logout(); });
+  $('#menuToggle') && $('#menuToggle').addEventListener('click', () => document.body.classList.toggle('nav-open'));
+  $('#navBackdrop') && $('#navBackdrop').addEventListener('click', () => document.body.classList.remove('nav-open'));
 
   // Первая страница — первая доступная роли
   const firstView = r.modules[0] || 'dashboard';
