@@ -46,5 +46,5 @@ CF Pages подключён к этому репо — `git push` в `main` ав
 
 Ручной деплой через wrangler (если нужно):
 ```bash
-wrangler pages deploy . --project-name=kes-crm-2vx
+wrangler pages deploy . --project-name=kes-crm
 ```
