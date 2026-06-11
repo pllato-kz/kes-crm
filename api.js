@@ -108,8 +108,13 @@
     }),
     deal: (d) => clean({
       id: d.id, no: d.no, title: d.title, client_id: d.client, manager_id: d.manager,
-      stage_id: d.stage, created: d.created, target: d.target,
-      lineItems: (d.lineItems || []).map((it) => ({ product_id: it.product, qty: it.qty, price_used: it.priceUsed })),
+      stage_id: d.stage, amount: d.amount, created: d.created, target: d.target,
+    }),
+    // позиции сделки шлём отдельно (только когда редактируем состав)
+    dealItems: (arr) => (arr || []).map((it) => ({ product_id: it.product, qty: it.qty, price_used: it.priceUsed })),
+    lead: (l) => clean({
+      id: l.id, source: l.source, name: l.name, phone: l.phone,
+      subject: l.subject, status_id: l.status, created: l.created,
     }),
     supplier: (s) => clean({
       id: s.id, name: s.name, contact: s.contact, phone: s.phone, email: s.email,
