@@ -740,7 +740,7 @@ function openEditUser(id) {
   const roleSel = fSelect('Роль',
     Object.entries(ROLES).map(([key, r]) => ({ value: key, label: r.label })),
     u?.roleKey || 'manager');
-  const password = fInput('Пароль', u?.password || 'demo');
+  const password = fInput('Пароль', isNew ? 'demo' : '', { placeholder: isNew ? '' : 'пусто — пароль без изменений' });
   const colorSel = fSelect('Цвет аватара',
     [['#00A6E2','Голубой'],['#7B61FF','Фиолетовый'],['#FF9F43','Оранжевый'],['#28C76F','Зелёный'],['#EF4444','Красный'],['#111','Чёрный']]
       .map(([v,l]) => ({ value: v, label: l })),
@@ -755,25 +755,26 @@ function openEditUser(id) {
     ]),
     foot: [
       el('button', { class:'btn', onclick: closeModal }, 'Отмена'),
-      el('button', { class:'btn btn-primary', onclick: () => {
+      el('button', { class:'btn btn-primary', onclick: async () => {
         if (!name.get().trim() || !email.get().trim()) { toast('Заполните имя и email', 'warn'); return; }
         const rk = roleSel.get();
         const initials = name.get().trim().split(' ').map(s => s[0]).slice(0,2).join('').toUpperCase();
-        if (isNew) {
-          state.users.push({
-            id: 'u' + Date.now(), name: name.get().trim(), email: email.get().trim(), phone: phone.get(),
-            role: ROLES[rk].label, roleKey: rk, password: password.get() || 'demo',
-            avatar: initials, color: colorSel.get(), active: true,
-          });
-          toast('Пользователь добавлен', 'success');
-        } else {
-          u.name = name.get().trim(); u.email = email.get().trim(); u.phone = phone.get();
-          u.role = ROLES[rk].label; u.roleKey = rk;
-          u.password = password.get() || u.password;
-          u.color = colorSel.get(); u.avatar = initials;
-          toast('Изменения сохранены', 'success');
-        }
-        saveState(state); closeModal(); navigate('settings');
+        const body = { name: name.get().trim(), email: email.get().trim(), phone: phone.get(), role_key: rk, avatar: initials, color: colorSel.get() };
+        try {
+          if (isNew) {
+            body.active = 1;
+            const saved = await window.__API__.apiFetch('users', { method: 'POST', body });
+            await window.__API__.apiFetch('users/' + saved.id + '/password', { method: 'POST', body: { password: password.get().trim() || 'demo' } });
+            state.users.push({ id: saved.id, name: saved.name, email: saved.email, phone: saved.phone, roleKey: saved.role_key, role: (ROLES[rk]||{}).label || rk, avatar: saved.avatar, color: saved.color, active: saved.active !== 0 });
+            toast('Пользователь добавлен', 'success');
+          } else {
+            const saved = await window.__API__.apiFetch('users/' + u.id, { method: 'PUT', body });
+            if (password.get().trim()) await window.__API__.apiFetch('users/' + u.id + '/password', { method: 'POST', body: { password: password.get().trim() } });
+            Object.assign(u, { name: saved.name, email: saved.email, phone: saved.phone, roleKey: saved.role_key, role: (ROLES[rk]||{}).label || rk, avatar: saved.avatar, color: saved.color, active: saved.active !== 0 });
+            toast('Изменения сохранены', 'success');
+          }
+          closeModal(); navigate('settings');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, isNew ? 'Создать' : 'Сохранить'),
     ],
   });
