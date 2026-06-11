@@ -432,9 +432,39 @@ function openProductDetail(id) {
   const cat = categoryById(p.cat);
   const free = p.stock - p.reserved;
   const margin = Math.round((p.priceRetail - p.priceCost) / p.priceCost * 100);
+
+  // Фото товара (R2) + загрузка
+  const imgHost = el('div', { style:'margin-bottom:14px' });
+  const fileInput = el('input', { type:'file', accept:'image/*', style:'display:none' });
+  function renderImg() {
+    imgHost.innerHTML = '';
+    if (p.image) {
+      imgHost.append(el('img', { src: p.image, alt: p.name, style:'width:100%;max-height:220px;object-fit:contain;background:#F4F5F7;border-radius:8px;border:1px solid #E5E7EB' }));
+    } else {
+      imgHost.append(el('div', { style:'height:120px;display:flex;align-items:center;justify-content:center;background:#F4F5F7;border:1px dashed #D1D5DB;border-radius:8px;color:#9CA3AF;font-size:13px' }, 'Фото нет'));
+    }
+    if (can('edit-stock')) {
+      imgHost.append(fileInput, el('button', { class:'btn btn-sm', style:'margin-top:8px', onclick: () => fileInput.click() }, p.image ? '🖼 Заменить фото' : '🖼 Загрузить фото'));
+    }
+  }
+  fileInput.onchange = async () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    toast('Загрузка фото…', 'info');
+    try {
+      const up = await window.__API__.uploadFile(f);
+      await window.__API__.apiFetch('products/' + p.id, { method: 'PUT', body: { image: up.url } });
+      p.image = up.url;
+      renderImg();
+      toast('Фото загружено', 'success');
+    } catch (e) { toast('Ошибка загрузки: ' + ((e && e.message) || e), 'error'); }
+  };
+  renderImg();
+
   openModal({
     title: p.name,
     body: el('div', {}, [
+      imgHost,
       el('div', { class:'row', style:'gap:10px;margin-bottom:14px' }, [
         el('span', { class:'tag' }, p.sku),
         el('span', { class:'tag' }, cat.icon + ' ' + cat.name),
@@ -1468,7 +1498,12 @@ VIEWS.catalog = () => {
       const free = p.stock - p.reserved;
       return el('tr', { onclick: () => openProductDetail(p.id) }, [
         el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, p.sku),
-        el('td', { class:'strong' }, p.name),
+        el('td', { class:'strong' }, p.image
+          ? el('span', { style:'display:inline-flex;align-items:center;gap:8px' }, [
+              el('img', { src: p.image, alt: '', style:'width:28px;height:28px;object-fit:cover;border-radius:4px;border:1px solid #E5E7EB' }),
+              p.name,
+            ])
+          : p.name),
         el('td', {}, el('span', { class:'tag' }, p.brand)),
         el('td', { class:'num muted' }, fmtMoney(p.priceCost)),
         el('td', { class:'num' }, fmtMoney(p.priceWholesale)),
