@@ -371,6 +371,42 @@ async function importClients(rows) {
   navigate('clients');
 }
 
+// Скачивание файла в браузере
+function downloadFile(filename, content, mime = 'text/plain') {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 200);
+}
+
+// Экспорт клиентов в CSV (реальное скачивание)
+function exportClientsCSV() {
+  const list = visibleClients();
+  if (!list.length) { toast('Нет клиентов для экспорта', 'warn'); return; }
+  const cols = [
+    ['Наименование', c => c.name],
+    ['БИН', c => c.bin],
+    ['Тип', c => (CLIENT_TYPES[c.type] || {}).label || c.type],
+    ['Контакт', c => c.contact],
+    ['Телефон', c => c.phone],
+    ['Email', c => c.email],
+    ['Город', c => c.city],
+    ['Адрес', c => c.address],
+    ['Баланс', c => c.balance],
+    ['Оборот (LTV)', c => c.ltv],
+    ['Менеджер', c => userById(c.manager).name],
+    ['Теги', c => (c.tags || []).join(', ')],
+  ];
+  const esc = (v) => { v = v == null ? '' : String(v); return /[";\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const lines = [cols.map(c => c[0]).join(';')];
+  list.forEach(c => lines.push(cols.map(col => esc(col[1](c))).join(';')));
+  const csv = '﻿' + lines.join('\r\n'); // BOM — чтобы Excel понял UTF-8
+  downloadFile('clients-' + new Date().toISOString().slice(0, 10) + '.csv', csv, 'text/csv;charset=utf-8');
+  toast(`Экспортировано клиентов: ${list.length}`, 'success');
+}
+
 function openNewClient() {
   const name    = fInput('Наименование (ТОО / ИП)', '', { placeholder: 'ТОО «Название»' });
   const bin     = fInput('БИН/ИИН (12 цифр)', '', { placeholder: '000000000000' });
@@ -1643,7 +1679,7 @@ VIEWS.clients = () => {
   tw.append(el('div', { class: 'table-toolbar' }, [
     searchI, typeS, cityS,
     el('div', { class: 'spacer' }),
-    el('button', { class: 'btn btn-sm', onclick: () => toast(`Экспортировано ${state.clients.length} клиентов в CSV (мок)`, 'success') }, 'Экспорт CSV'),
+    el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, 'Экспорт CSV'),
   ]));
 
   function refresh() {
