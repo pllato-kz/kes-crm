@@ -822,17 +822,43 @@ function openSupplierDetail(id) {
   });
 }
 
+// ---------- Напоминания по задачам ----------
+// Статус срока задачи: overdue | today | soon | future | none
+function taskDue(t) {
+  if (!t || !t.due) return { kind: 'none' };
+  const due = new Date(String(t.due).replace(' ', 'T'));
+  if (isNaN(due.getTime())) return { kind: 'none' };
+  const now = new Date();
+  if (due.getTime() < now.getTime()) return { kind: 'overdue', due };
+  const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
+  const dueDay = new Date(due); dueDay.setHours(0, 0, 0, 0);
+  if (dueDay.getTime() === startToday.getTime()) return { kind: 'today', due };
+  if (due.getTime() - now.getTime() < 2 * 86400000) return { kind: 'soon', due };
+  return { kind: 'future', due };
+}
+// Открытые задачи текущего пользователя, требующие внимания (просрочено/сегодня)
+function taskReminders() {
+  return visibleTasks()
+    .filter(t => !t.done && ['overdue', 'today'].includes(taskDue(t).kind))
+    .sort((a, b) => String(a.due).localeCompare(String(b.due)));
+}
+
 // ---------- Notification dropdown ----------
 function toggleNotifications() {
   const root = $('#dropdown-root');
   if (root.firstChild) { root.innerHTML = ''; return; }
   const backdrop = el('div', { class: 'backdrop-click', onclick: () => root.innerHTML = '' });
+  const reminders = taskReminders().map(t => {
+    const od = taskDue(t).kind === 'overdue';
+    return { text: (od ? 'Просрочена задача: ' : 'Задача на сегодня: ') + t.title, time: 'срок: ' + t.due, type: od ? 'error' : 'warn' };
+  });
+  const items = reminders.concat(state.notifications || []);
   const panel = el('div', { class: 'dropdown' }, [
     el('div', { class: 'dropdown-head' }, [
-      el('h4', {}, 'Уведомления'),
+      el('h4', {}, 'Уведомления' + (reminders.length ? ` · ${reminders.length}` : '')),
       el('button', { class: 'btn btn-ghost btn-sm', onclick: () => { root.innerHTML = ''; toast('Все уведомления отмечены прочитанными'); } }, 'Прочитать все'),
     ]),
-    el('div', { class: 'dropdown-body' }, state.notifications.map(n => {
+    el('div', { class: 'dropdown-body' }, items.length ? items.map(n => {
       const ic = { error: '⚠️', warn: '🟡', info: 'ℹ️' }[n.type] || 'ℹ️';
       return el('div', { class: 'dropdown-item', onclick: () => { root.innerHTML = ''; toast(n.text); } }, [
         el('span', { class: 'di-icon' }, ic),
@@ -841,7 +867,7 @@ function toggleNotifications() {
           el('div', { class: 'di-time' }, n.time),
         ]),
       ]);
-    })),
+    }) : [el('div', { class: 'dropdown-item muted', style: 'justify-content:center' }, 'Нет уведомлений')]),
   ]);
   root.append(backdrop, panel);
 }
@@ -2145,19 +2171,36 @@ VIEWS.suppliers = () => {
 // ============================================================
 VIEWS.tasks = () => {
   const wrap = el('div');
+  const open = state.tasks.filter(t => !t.done);
+  const overdue = open.filter(t => taskDue(t).kind === 'overdue');
+  const today = open.filter(t => taskDue(t).kind === 'today');
+  const subParts = [`${open.length} открытых · ${state.tasks.filter(t => t.done).length} выполнено`];
+  if (overdue.length) subParts.push(`⚠️ ${overdue.length} просрочено`);
+  if (today.length) subParts.push(`🔔 ${today.length} на сегодня`);
   wrap.append(el('div', { class:'page-head' }, [
-    el('div', {}, [el('h1', {}, 'Задачи'), el('div', { class:'sub' }, `${state.tasks.filter(t=>!t.done).length} открытых · ${state.tasks.filter(t=>t.done).length} выполнено`)]),
+    el('div', {}, [el('h1', {}, 'Задачи'), el('div', { class:'sub' }, subParts.join(' · '))]),
     el('div', { class:'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewTask }, '+ Задача')]),
   ]));
   const list = el('div', { class:'card' });
-  state.tasks.forEach(t => {
+  // сортировка: просроченные → на сегодня → скоро → прочие → выполненные
+  const ord = { overdue: 0, today: 1, soon: 2, future: 3, none: 4 };
+  const sorted = state.tasks.slice().sort((a, b) => {
+    const ka = a.done ? 9 : ord[taskDue(a).kind]; const kb = b.done ? 9 : ord[taskDue(b).kind];
+    if (ka !== kb) return ka - kb;
+    return String(a.due || '').localeCompare(String(b.due || ''));
+  });
+  sorted.forEach(t => {
     const u = userById(t.owner);
+    const st = t.done ? { kind: 'done' } : taskDue(t);
+    const remind = st.kind === 'overdue' ? el('span', { class:'pill pill-danger', style:'font-size:10px;margin-left:6px' }, '⚠️ просрочено')
+      : st.kind === 'today' ? el('span', { class:'pill pill-warn', style:'font-size:10px;margin-left:6px' }, '🔔 сегодня')
+      : st.kind === 'soon' ? el('span', { class:'pill', style:'font-size:10px;margin-left:6px;background:#EEF2FF;color:#4F46E5' }, 'скоро') : null;
     list.append(el('div', { class:'activity-item', style:'padding:10px 0;border-bottom:1px solid #F3F4F6' }, [
       el('input', { type:'checkbox', checked: t.done ? 'checked' : null, style:'margin-top:8px;width:18px;height:18px',
         onchange: async (e) => { t.done = e.target.checked; try { await window.__API__.apiFetch('tasks/' + t.id, { method: 'PUT', body: { done: t.done ? 1 : 0 } }); toast(t.done ? 'Задача выполнена' : 'Задача возвращена в работу', 'success'); } catch (err) { toast('Не удалось сохранить', 'error'); } navigate('tasks'); }
       }),
       el('div', { class:'flex-1' }, [
-        el('div', { style: t.done ? 'text-decoration:line-through;color:#9CA3AF' : '' }, t.title),
+        el('div', { style: t.done ? 'text-decoration:line-through;color:#9CA3AF' : '' }, [t.title, remind]),
         el('div', { class:'av-time' }, [
           `${u.name} · до ${t.due} · `,
           el('span', { class:'pill ' + (t.priority==='high' ? 'pill-danger' : t.priority==='medium' ? 'pill-warn' : 'pill-muted') }, t.priority),
@@ -2695,6 +2738,12 @@ function renderShell() {
   // Первая страница — первая доступная роли
   const firstView = r.modules[0] || 'dashboard';
   navigate(firstView);
+
+  // Напоминания по задачам: индикатор на колокольчике + тост о просроченных
+  const dot = $('#notif-btn .dot');
+  if (dot) dot.style.display = taskReminders().length ? '' : 'none';
+  const overdueCount = visibleTasks().filter(t => !t.done && taskDue(t).kind === 'overdue').length;
+  if (overdueCount) setTimeout(() => toast(`У вас ${overdueCount} ${plural(overdueCount, 'просроченная задача', 'просроченные задачи', 'просроченных задач')}`, 'warn'), 700);
 }
 
 // ============================================================
