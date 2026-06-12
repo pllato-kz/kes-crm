@@ -905,14 +905,18 @@ async function syncPrices(env, mode) {
   return json({ mode: isAvg ? 'avg' : 'last', docs, lines, priced, updated, missing });
 }
 
-// Категории каталога с числом товаров (только непустые) — для плиток каталога
+// Категории каталога с числом товаров (только непустые) — для плиток каталога.
+// Корневую папку «Товары» не показываем как категорию: товары из неё попадают
+// в общий список «Все товары». total — честное число всех товаров (для плитки «Все»).
 async function catalogCategories(env) {
-  const r = await env.DB.prepare(
+  const cats = await env.DB.prepare(
     `SELECT c.id, c.name, c.icon, COUNT(p.id) AS count
        FROM product_categories c JOIN products p ON p.category_id = c.id
+      WHERE c.name <> 'Товары'
       GROUP BY c.id, c.name, c.icon HAVING count > 0 ORDER BY c.name`
   ).all();
-  return json(r.results);
+  const total = await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first();
+  return json({ total: total ? total.n : 0, categories: cats.results });
 }
 
 // --------------------------------------------------------------------------
