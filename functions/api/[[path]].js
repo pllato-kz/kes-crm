@@ -136,6 +136,9 @@ export async function onRequest(context) {
     // категории каталога с подсчётом товаров (для плиток)
     if (seg[0] === 'catalog' && seg[1] === 'categories' && request.method === 'GET') return catalogCategories(env);
 
+    // сводка по складу (для карточек: SKU, единиц, резерв, стоимость)
+    if (seg[0] === 'warehouse' && seg[1] === 'summary' && request.method === 'GET') return warehouseSummary(env);
+
     // управление пользователями (создание/изменение/удаление) — только директор
     const res = ALIASES[seg[0]] || seg[0];
     if (res === 'users' && request.method !== 'GET' && auth.role !== 'director') {
@@ -394,29 +397,54 @@ async function listProducts(env, url) {
   const q = (url.searchParams.get('q') || '').trim();
   const cat = url.searchParams.get('category');
   const brand = url.searchParams.get('brand');
+  const lowRaw = url.searchParams.get('lowstock');
+  const low = (lowRaw != null && lowRaw !== '') ? clampInt(lowRaw, 50, 0, 1e9) : null;
   const limit = clampInt(url.searchParams.get('limit'), 50, 1, 1000);
   const page = clampInt(url.searchParams.get('page'), 1, 1, 1e9);
   const offset = (page - 1) * limit;
+
+  const stockJoin =
+    `LEFT JOIN (SELECT product_id, SUM(stock) AS stock, SUM(reserved) AS reserved
+                  FROM product_stock GROUP BY product_id) s ON s.product_id = p.id`;
 
   const where = [];
   const args = [];
   if (q) { where.push('(p.name LIKE ? OR p.sku LIKE ?)'); args.push(`%${q}%`, `%${q}%`); }
   if (cat) { where.push('p.category_id = ?'); args.push(cat); }
   if (brand) { where.push('p.brand = ?'); args.push(brand); }
+  if (low != null) { where.push('(COALESCE(s.stock,0) - COALESCE(s.reserved,0)) < ?'); args.push(low); }
   const ws = where.length ? 'WHERE ' + where.join(' AND ') : '';
 
-  const total = await env.DB.prepare(`SELECT COUNT(*) AS n FROM products p ${ws}`).bind(...args).first();
+  // join в COUNT нужен только когда фильтруем по остатку
+  const total = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM products p ${low != null ? stockJoin : ''} ${ws}`
+  ).bind(...args).first();
+
+  const order = low != null ? '(COALESCE(s.stock,0) - COALESCE(s.reserved,0)) ASC' : 'p.name';
   const rows = await env.DB.prepare(
     `SELECT p.*, COALESCE(s.stock,0) AS stock, COALESCE(s.reserved,0) AS reserved
        FROM products p
-       LEFT JOIN (SELECT product_id, SUM(stock) AS stock, SUM(reserved) AS reserved
-                    FROM product_stock GROUP BY product_id) s ON s.product_id = p.id
+       ${stockJoin}
        ${ws}
-       ORDER BY p.name
+       ORDER BY ${order}
        LIMIT ? OFFSET ?`
   ).bind(...args, limit, offset).all();
 
   return json({ data: rows.results, total: total ? total.n : 0, page, limit });
+}
+
+// Сводка по складу: всего SKU, единиц на остатке, в резерве, стоимость (по закупу).
+async function warehouseSummary(env) {
+  const r = await env.DB.prepare(
+    `SELECT COUNT(*) AS sku,
+            COALESCE(SUM(s.stock), 0) AS units,
+            COALESCE(SUM(s.reserved), 0) AS reserved,
+            COALESCE(SUM(s.stock * p.price_cost), 0) AS value
+       FROM products p
+       LEFT JOIN (SELECT product_id, SUM(stock) AS stock, SUM(reserved) AS reserved
+                    FROM product_stock GROUP BY product_id) s ON s.product_id = p.id`
+  ).first();
+  return json(r || { sku: 0, units: 0, reserved: 0, value: 0 });
 }
 
 // --------------------------------------------------------------------------
