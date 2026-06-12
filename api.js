@@ -159,6 +159,8 @@
   // Полная загрузка состояния (форма как у SEED) одним заходом
   // ------------------------------------------------------------------
   async function loadAllData() {
+    // отметить просроченные задачи и разослать уведомления (директор + ответственный)
+    try { await apiFetch('notifications/scan-overdue', { method: 'POST' }); } catch (e) {}
     const [
       company, rolesRows, stagesRows, typesRows, cats, leadSources, leadStatuses,
       warehouses, shipStatuses, invStatuses, taskPrios,
