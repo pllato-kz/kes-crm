@@ -579,25 +579,35 @@ function convertLead(id) {
 
 // ---------- New Task ----------
 function openNewTask() {
-  const title = fInput('Что сделать');
+  const today = new Date().toISOString().slice(0,10);
+  const title = fInput('Название');
+  const desc = fTextarea('Описание', '');
   const owner = fSelect('Ответственный',
     state.users.map(u => ({ value: u.id, label: u.name + ' · ' + u.role })),
     state.users[0].id);
-  const due = fDateField('Срок', new Date().toISOString().slice(0,10));
-  const time = fTimeField('Время', '18:00');
+  const start = fDateField('Дата начала', today);
+  const due = fDateField('Дата окончания', today);
+  const time = fTimeField('Время выполнения', '18:00');
   const prio = fSelect('Приоритет',
     [{value:'low',label:'низкий'},{value:'medium',label:'средний'},{value:'high',label:'высокий'}],
     'medium');
+  const status = fSelect('Статус', TASK_STATUS, 'new');
+  const comments = fTextarea('Комментарии', '');
   openModal({
     title: 'Новая задача',
-    body: el('div', {}, [title.row, owner.row, due.row, time.row, prio.row]),
+    body: el('div', {}, [title.row, desc.row, owner.row, start.row, due.row, time.row, prio.row, status.row, comments.row]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
       el('button', { class: 'btn btn-primary', onclick: async () => {
-        if (!title.get().trim()) { toast('Введите задачу', 'warn'); return; }
-        if (!due.getDate()) { toast('Укажите срок в формате ДД.ММ.ГГГГ', 'warn'); return; }
+        if (!title.get().trim()) { toast('Введите название', 'warn'); return; }
+        if (!due.getDate()) { toast('Укажите дату окончания', 'warn'); return; }
         if (time.raw() && !time.get()) { toast('Неверное время (формат ЧЧ:ММ)', 'warn'); return; }
-        const t = { title: title.get().trim(), due: due.getDate() + ' ' + (time.get() || '18:00'), owner: owner.get(), deal: null, done: false, priority: prio.get() };
+        const st = status.get();
+        const t = {
+          title: title.get().trim(), description: desc.get(), owner: owner.get(),
+          startDate: start.getDate(), due: due.getDate() + ' ' + (time.get() || '18:00'),
+          deal: null, priority: prio.get(), status: st, done: st === 'done', comments: comments.get(),
+        };
         try {
           const saved = await window.__API__.apiFetch('tasks', { method: 'POST', body: window.__API__.toApi.task(t) });
           state.tasks.unshift(window.__API__.map.task(saved));
@@ -2669,12 +2679,18 @@ VIEWS.suppliers = () => {
 // ============================================================
 // ---------- Задачи: канбан по срокам ----------
 const TASK_COLS = [
-  { key:'overdue',  label:'Просрочено',  color:'#EF4444', drop:false },
-  { key:'today',    label:'Сегодня',     color:'#F59E0B', drop:true },
-  { key:'tomorrow', label:'Завтра',      color:'#3B82F6', drop:true },
-  { key:'week',     label:'Эта неделя',  color:'#8B5CF6', drop:true },
-  { key:'month',    label:'Этот месяц',  color:'#10B981', drop:true },
+  { key:'overdue',  label:'Просрочено',  color:'#EF4444' },
+  { key:'today',    label:'Сегодня',     color:'#F59E0B' },
+  { key:'tomorrow', label:'Завтра',      color:'#3B82F6' },
+  { key:'week',     label:'Неделя',      color:'#8B5CF6' },
+  { key:'month',    label:'Месяц',       color:'#10B981' },
 ];
+const TASK_STATUS = [
+  { value:'new',         label:'Новая' },
+  { value:'in_progress', label:'В работе' },
+  { value:'done',        label:'Выполнена' },
+];
+const taskStatusLabel = (s) => (TASK_STATUS.find(x => x.value === s) || {}).label || 'Новая';
 let TASKS_OWNER = '';      // фильтр по ответственному (id) или '' = все
 let TASKS_FROM = '';       // фильтр по диапазону срока: с (YYYY-MM-DD)
 let TASKS_TO = '';         // фильтр по диапазону срока: по (YYYY-MM-DD)
@@ -2722,13 +2738,9 @@ VIEWS.tasks = () => {
     if (TASKS_TO && d > TASKS_TO) return false;
     return true;
   };
-  const tasksToShow = base.filter(t => (TASKS_SHOWDONE || !t.done) && (!TASKS_OWNER || t.owner === TASKS_OWNER) && inRange(t))
-    .sort((a, b) => {
-      if (!!a.done !== !!b.done) return a.done ? 1 : -1; // выполненные — в конец
-      return String(a.due || '').localeCompare(String(b.due || '')); // по сроку
-    });
-
-  const openFiltered = base.filter(t => !t.done && (!TASKS_OWNER || t.owner === TASKS_OWNER) && inRange(t));
+  const matchFilters = (t) => (!TASKS_OWNER || t.owner === TASKS_OWNER) && inRange(t);
+  const openFiltered = base.filter(t => !t.done && matchFilters(t));
+  const doneFiltered = base.filter(t => t.done && matchFilters(t));
   const overdueN = openFiltered.filter(t => taskDue(t).kind === 'overdue').length;
   const todayN = openFiltered.filter(t => taskDue(t).kind === 'today').length;
   const subParts = [`${openFiltered.length} открытых · ${doneCount} выполнено`];
@@ -2760,38 +2772,51 @@ VIEWS.tasks = () => {
   toolbarKids.push(el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#374151;margin-left:10px' }, [doneChk, 'Показывать выполненные']));
   wrap.append(el('div', { class:'row', style:'gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px' }, toolbarKids));
 
+  const byDue = (a, b) => String(a.due || '').localeCompare(String(b.due || ''));
+
   function taskCard(t) {
     const u = userById(t.owner);
     const prCls = t.priority === 'high' ? 'pill-danger' : t.priority === 'medium' ? 'pill-warn' : 'pill-muted';
-    const dueStr = t.due ? (fmtDate(String(t.due).split(' ')[0]) + ' ' + (String(t.due).slice(11, 16) || '')) : '—';
+    const timeStr = String(t.due || '').slice(11, 16);
+    const dueStr = t.due ? (fmtDate(String(t.due).split(' ')[0]) + (timeStr ? ' ' + timeStr : '')) : '—';
     const od = !t.done && taskDue(t).kind === 'overdue';
     return el('div', { class:'k-card', style:'cursor:pointer' + (od ? ';border-left:3px solid #EF4444' : ''), onclick: () => openTaskDetail(t.id) }, [
-      el('div', { class:'k-card-title', style: t.done ? 'text-decoration:line-through;color:#9CA3AF' : '' }, [
-        t.title, od ? el('span', { class:'pill pill-danger', style:'font-size:10px;margin-left:6px' }, 'просрочено') : null,
-      ]),
+      el('div', { class:'k-card-title', style: t.done ? 'text-decoration:line-through;color:#9CA3AF' : '' }, t.title),
+      t.description ? el('div', { class:'muted', style:'font-size:11.5px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, t.description) : null,
       el('div', { class:'k-card-foot mt-12' }, [
         el('span', { class:'pill ' + prCls, style:'font-size:10px' }, t.priority),
         el('span', { style:'margin-left:auto;display:flex;align-items:center;gap:6px' }, [
-          el('span', { class:'muted', style:'font-size:11px' }, '📅 ' + dueStr.trim()),
+          el('span', { class:'muted', style:'font-size:11px' }, '📅 ' + dueStr),
           el('span', { class:'avatar', style:`width:22px;height:22px;font-size:9px;background:${u.color}`, title:u.name }, u.avatar),
         ]),
       ]),
       el('button', { class:'btn btn-sm', style:'margin-top:8px;width:100%', onclick: async (e) => {
         e.stopPropagation();
         const next = t.done ? 0 : 1;
-        try { await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body:{ done: next } }); const tt = byId(state.tasks, t.id); if (tt) tt.done = !!next; toast(next ? 'Задача выполнена' : 'Возвращена в работу', 'success'); navigate('tasks'); }
+        try { await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body:{ done: next, status: next ? 'done' : 'in_progress' } }); const tt = byId(state.tasks, t.id); if (tt) { tt.done = !!next; tt.status = next ? 'done' : 'in_progress'; } toast(next ? 'Задача выполнена' : 'Возвращена в работу', 'success'); navigate('tasks'); }
         catch (err) { toast('Не удалось сохранить', 'error'); }
       } }, t.done ? '↩ В работу' : '✓ Выполнить'),
     ]);
   }
 
-  if (!tasksToShow.length) {
-    wrap.append(el('div', { class:'card' }, el('div', { class:'empty' }, [el('div', { class:'em-icon' }, '✅'), el('div', { class:'em-text' }, 'Задач нет')])));
-  } else {
-    const grid = el('div', { style:'display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px' });
-    tasksToShow.forEach(t => grid.append(taskCard(t)));
-    wrap.append(grid);
+  function column(label, color, tasks) {
+    const body = el('div', { class:'k-col-body' });
+    if (tasks.length) tasks.forEach(t => body.append(taskCard(t)));
+    else body.append(el('div', { class:'muted', style:'font-size:12px;text-align:center;padding:18px 6px' }, 'Нет задач'));
+    return el('div', { class:'k-col' }, [
+      el('div', { class:'k-col-head' }, [
+        el('span', { class:'stage-dot', style:`background:${color}` }),
+        el('span', { class:'stage-label' }, label),
+        el('span', { class:'stage-count' }, tasks.length),
+      ]),
+      body,
+    ]);
   }
+
+  const kanban = el('div', { class:'kanban' });
+  TASK_COLS.forEach(col => kanban.append(column(col.label, col.color, openFiltered.filter(t => taskBucket(t) === col.key).sort(byDue))));
+  if (TASKS_SHOWDONE) kanban.append(column('Выполнено', '#9CA3AF', doneFiltered.slice().sort(byDue).reverse()));
+  wrap.append(kanban);
   return wrap;
 };
 
@@ -2801,19 +2826,22 @@ function openTaskDetail(id) {
   if (!t) return;
   const canEdit = role().seeAllData || t.owner === currentUser.id;
 
-  const title = fInput('Что сделать', t.title || '');
+  const title = fInput('Название', t.title || '');
+  const desc = fTextarea('Описание', t.description || '');
   const owner = fSelect('Ответственный', state.users.map(u => ({ value: u.id, label: u.name + ' · ' + u.role })), t.owner);
-  const due = fDateField('Срок', String(t.due || '').slice(0, 10));
-  const time = fTimeField('Время', (String(t.due || '').slice(11, 16) || '18:00'));
+  const start = fDateField('Дата начала', t.startDate || '');
+  const due = fDateField('Дата окончания', String(t.due || '').slice(0, 10));
+  const time = fTimeField('Время выполнения', (String(t.due || '').slice(11, 16) || '18:00'));
   const prio = fSelect('Приоритет', [{value:'low',label:'низкий'},{value:'medium',label:'средний'},{value:'high',label:'высокий'}], t.priority || 'medium');
-  const doneChk = el('input', { type:'checkbox', checked: t.done ? 'checked' : null, style:'width:18px;height:18px' });
-  const doneRow = el('div', { class:'form-row' }, [el('label', {}, 'Выполнена'), doneChk]);
+  const status = fSelect('Статус', TASK_STATUS, t.status || (t.done ? 'done' : 'new'));
+  const comments = fTextarea('Комментарии', t.comments || '');
 
   const linkedDeal = t.deal ? byId(state.deals, t.deal) : null;
   const meta = el('div', { class:'muted', style:'font-size:12px;margin-top:8px' },
     linkedDeal ? `Связана со сделкой: №${linkedDeal.no} — ${linkedDeal.title}` : 'Не связана со сделкой');
 
-  if (!canEdit) { [title, owner, due, time, prio].forEach(f => f.row.querySelectorAll('input,select').forEach(i => i.disabled = true)); doneChk.disabled = true; }
+  const fields = [title, desc, owner, start, due, time, prio, status, comments];
+  if (!canEdit) fields.forEach(f => f.row.querySelectorAll('input,select,textarea').forEach(i => i.disabled = true));
 
   const foot = [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')];
   if (canEdit) {
@@ -2826,10 +2854,15 @@ function openTaskDetail(id) {
       } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
     } }, '🗑 Удалить'));
     foot.push(el('button', { class:'btn btn-primary', onclick: async () => {
-      if (!title.get().trim()) { toast('Введите задачу', 'warn'); return; }
-      if (!due.getDate()) { toast('Укажите срок', 'warn'); return; }
+      if (!title.get().trim()) { toast('Введите название', 'warn'); return; }
+      if (!due.getDate()) { toast('Укажите дату окончания', 'warn'); return; }
       if (time.raw() && !time.get()) { toast('Неверное время (формат ЧЧ:ММ)', 'warn'); return; }
-      const upd = { id: t.id, title: title.get().trim(), owner: owner.get(), due: due.getDate() + ' ' + (time.get() || '18:00'), priority: prio.get(), done: doneChk.checked };
+      const st = status.get();
+      const upd = {
+        id: t.id, title: title.get().trim(), description: desc.get(), owner: owner.get(),
+        startDate: start.getDate(), due: due.getDate() + ' ' + (time.get() || '18:00'),
+        priority: prio.get(), status: st, done: st === 'done', comments: comments.get(),
+      };
       try {
         const saved = await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body: window.__API__.toApi.task(upd) });
         Object.assign(t, window.__API__.map.task(saved));
@@ -2838,7 +2871,7 @@ function openTaskDetail(id) {
     } }, 'Сохранить'));
   }
 
-  openModal({ title: 'Задача', body: el('div', {}, [title.row, owner.row, due.row, time.row, prio.row, doneRow, meta]), foot });
+  openModal({ title: 'Задача', body: el('div', {}, [...fields.map(f => f.row), meta]), foot });
 }
 
 

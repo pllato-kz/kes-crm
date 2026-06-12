@@ -79,6 +79,8 @@
     task: (t) => ({
       id: t.id, title: t.title, due: t.due, owner: t.owner_id, deal: t.deal_id,
       priority: t.priority_id, done: !!t.done,
+      description: t.description || '', startDate: t.start_date || '',
+      status: t.status || (t.done ? 'done' : 'new'), comments: t.comments || '',
     }),
     invoice: (i) => ({
       id: i.id, no: i.no, deal: i.deal_id, client: i.client_id, date: i.date,
@@ -123,7 +125,8 @@
     }),
     task: (t) => clean({
       id: t.id, title: t.title, due: t.due, owner_id: t.owner, deal_id: t.deal,
-      priority_id: t.priority, done: t.done ? 1 : 0,
+      priority_id: t.priority, done: (t.status === 'done' || t.done) ? 1 : 0,
+      description: t.description, start_date: t.startDate, status: t.status, comments: t.comments,
     }),
     invoice: (i) => clean({
       id: i.id, no: i.no, deal_id: i.deal, client_id: i.client, date: i.date,
