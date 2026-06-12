@@ -1908,7 +1908,8 @@ async function openDealDetail(id) {
   // ----- Левая панель: форма -----
   const titleI = el('input', { value: d.title || '', placeholder:'Название сделки' });
   const amountI = el('input', { type:'number', value: Math.round(d.amount || 0), min:'0' });
-  recomputeAmount = (function (orig) { return function () { orig(); amountI.value = Math.round(d.amount || 0); }; })(recomputeAmount);
+  const dealItemsTotal = el('span', {}, fmtMoney(d.amount));
+  recomputeAmount = (function (orig) { return function () { orig(); amountI.value = Math.round(d.amount || 0); dealItemsTotal.textContent = fmtMoney(d.amount); }; })(recomputeAmount);
   const mgrSel = el('select');
   state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.manager) o.selected = true; mgrSel.append(o); });
   const coMgrSel = el('select');
@@ -1971,11 +1972,6 @@ async function openDealDetail(id) {
       fieldRow('Ответственный', mgrSel),
       fieldRow('Отв. менеджер', coMgrSel),
     ]),
-    el('div', { class:'deal-section' }, [
-      el('div', { class:'section-title' }, 'Товары'),
-      itemsHost,
-      pickerHost,
-    ]),
     el('div', { class:'deal-actions' }, [printBtn, delBtn]),
   ]);
 
@@ -1984,6 +1980,17 @@ async function openDealDetail(id) {
   commentsTA.value = d.comments || '';
   if (!canEdit) commentsTA.disabled = true;
   const paneComments = el('div', { class:'chat-pane chat-comments', 'data-pane':'comments' }, [commentsTA]);
+
+  // вкладка «Товары» — рядом с WhatsApp
+  const paneItems = el('div', { class:'chat-pane chat-items', 'data-pane':'items' }, [
+    el('div', { class:'section-title' }, 'Товары сделки'),
+    itemsHost,
+    pickerHost,
+    el('div', { class:'row', style:'justify-content:space-between;margin-top:12px;font-size:14px;font-weight:600' }, [
+      el('span', { class:'muted', style:'font-weight:500' }, 'Сумма по товарам:'),
+      dealItemsTotal,
+    ]),
+  ]);
 
   const chatBody = el('div', { class:'chat-body' });
   const chatInputEl = el('input', { placeholder:'Сообщение…' });
@@ -2011,12 +2018,12 @@ async function openDealDetail(id) {
   const tabs = el('div', { class:'chat-tabs' });
   function switchTab(key) {
     tabs.querySelectorAll('.chat-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === key));
-    [paneComments, paneWhats, paneHist].forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
+    [paneItems, paneWhats, paneComments, paneHist].forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
   }
-  [['comments','Комментарии'],['whatsapp','WhatsApp'],['history','История']].forEach(([k, label]) =>
+  [['items','Товары'],['whatsapp','WhatsApp'],['comments','Комментарии'],['history','История']].forEach(([k, label]) =>
     tabs.append(el('div', { class:'chat-tab' + (k === 'whatsapp' ? ' active' : ''), 'data-tab':k, onclick: () => switchTab(k) }, label)));
 
-  const right = el('div', { class:'deal-right' }, [tabs, paneComments, paneWhats, paneHist]);
+  const right = el('div', { class:'deal-right' }, [tabs, paneItems, paneWhats, paneComments, paneHist]);
 
   // ----- Чат (Green API) -----
   function bubble(mm) {
