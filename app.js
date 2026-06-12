@@ -172,6 +172,48 @@ function fTextarea(label, value = '') {
   return { row: el('div', { class: 'form-row' }, [el('label', {}, label), ta]), get: () => ta.value };
 }
 
+// ---------- Дата: нормализация и поле «Срок» (ручной ввод + календарь) ----------
+function isoToDmy(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : '';
+}
+function dmyToIso(s) {
+  const m = String(s || '').trim().match(/^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})$/);
+  if (!m) return '';
+  const d = +m[1], mo = +m[2], y = +m[3];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return '';
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${y}-${p(mo)}-${p(d)}`;
+}
+// Авто-вставка разделителей при ручном вводе: «15032026» → «15.03.2026»
+function autoFormatDmy(s) {
+  const d = String(s || '').replace(/\D/g, '').slice(0, 8);
+  let out = d.slice(0, 2);
+  if (d.length > 2) out += '.' + d.slice(2, 4);
+  if (d.length > 4) out += '.' + d.slice(4, 8);
+  return out;
+}
+// Поле даты: текстовый ввод с авто-форматом ДД.ММ.ГГГГ + календарь (синхронизированы)
+function fDateField(label, initialISO) {
+  const iso0 = String(initialISO || '').slice(0, 10);
+  const text = el('input', { type: 'text', placeholder: 'ДД.ММ.ГГГГ', value: isoToDmy(iso0), inputmode: 'numeric', maxlength: '10', style: 'flex:1;min-width:120px' });
+  const pick = el('input', { type: 'date', value: iso0, title: 'Выбрать в календаре', style: 'flex:none;width:44px;padding:6px;cursor:pointer' });
+  text.oninput = () => {
+    text.value = autoFormatDmy(text.value);
+    const iso = dmyToIso(text.value);
+    if (iso) pick.value = iso;
+  };
+  pick.onchange = () => { if (pick.value) text.value = isoToDmy(pick.value); };
+  const box = el('div', { class: 'row', style: 'gap:6px;align-items:center' }, [text, pick]);
+  return {
+    row: el('div', { class: 'form-row' }, [el('label', {}, label), box]),
+    // храним как «YYYY-MM-DD 18:00» (сохраняет дефолтный дедлайн-час и логику просрочки)
+    get: () => { const iso = dmyToIso(text.value) || pick.value; return iso ? iso + ' 18:00' : ''; },
+  };
+}
+
 // ---------- New Client ----------
 // ============================================================
 // ИМПОРТ из XLSX/CSV (прайс EKF, клиенты)
@@ -518,7 +560,7 @@ function openNewTask() {
   const owner = fSelect('Ответственный',
     state.users.map(u => ({ value: u.id, label: u.name + ' · ' + u.role })),
     state.users[0].id);
-  const due = fInput('Срок', new Date().toISOString().slice(0,10) + ' 18:00');
+  const due = fDateField('Срок', new Date().toISOString().slice(0,10));
   const prio = fSelect('Приоритет',
     [{value:'low',label:'низкий'},{value:'medium',label:'средний'},{value:'high',label:'высокий'}],
     'medium');
@@ -529,6 +571,7 @@ function openNewTask() {
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
       el('button', { class: 'btn btn-primary', onclick: async () => {
         if (!title.get().trim()) { toast('Введите задачу', 'warn'); return; }
+        if (!due.get()) { toast('Укажите срок в формате ДД.ММ.ГГГГ', 'warn'); return; }
         const t = { title: title.get().trim(), due: due.get(), owner: owner.get(), deal: null, done: false, priority: prio.get() };
         try {
           const saved = await window.__API__.apiFetch('tasks', { method: 'POST', body: window.__API__.toApi.task(t) });
