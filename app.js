@@ -2649,7 +2649,7 @@ const TASK_COLS = [
   { key:'week',     label:'Эта неделя',  color:'#8B5CF6', drop:true },
   { key:'month',    label:'Этот месяц',  color:'#10B981', drop:true },
 ];
-let TASKS_SORT = 'asc';   // 'asc' | 'desc' — по дате
+let TASKS_GROUP = 'due';   // 'due' | 'owner' | 'status' — режим группировки колонок
 let TASKS_OWNER = '';      // фильтр по ответственному (id) или '' = все
 let TASKS_FROM = '';       // фильтр по диапазону срока: с (YYYY-MM-DD)
 let TASKS_TO = '';         // фильтр по диапазону срока: по (YYYY-MM-DD)
@@ -2696,11 +2696,14 @@ VIEWS.tasks = () => {
     if (TASKS_TO && d > TASKS_TO) return false;
     return true;
   };
-  const openTasks = base.filter(t => !t.done && (!TASKS_OWNER || t.owner === TASKS_OWNER) && inRange(t));
-  const overdueN = openTasks.filter(t => taskBucket(t) === 'overdue').length;
-  const todayN = openTasks.filter(t => taskBucket(t) === 'today').length;
+  // в режиме «По статусу» показываем и выполненные (отдельной колонкой)
+  const includeDone = TASKS_GROUP === 'status';
+  const tasksToShow = base.filter(t => (includeDone || !t.done) && (!TASKS_OWNER || t.owner === TASKS_OWNER) && inRange(t));
 
-  const subParts = [`${openTasks.length} открытых · ${doneCount} выполнено`];
+  const openFiltered = tasksToShow.filter(t => !t.done);
+  const overdueN = openFiltered.filter(t => taskBucket(t) === 'overdue').length;
+  const todayN = openFiltered.filter(t => taskBucket(t) === 'today').length;
+  const subParts = [`${openFiltered.length} открытых · ${doneCount} выполнено`];
   if (overdueN) subParts.push(`⚠️ ${overdueN} просрочено`);
   if (todayN) subParts.push(`🔔 ${todayN} на сегодня`);
 
@@ -2709,12 +2712,13 @@ VIEWS.tasks = () => {
     el('div', { class:'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewTask }, '+ Задача')]),
   ]));
 
-  // Тулбар: сортировка + фильтр по сотруднику + диапазон дат
-  const sortSel = el('select', {}, [el('option', { value:'asc' }, 'Дата ↑ (раньше)'), el('option', { value:'desc' }, 'Дата ↓ (позже)')]);
-  sortSel.value = TASKS_SORT;
-  sortSel.onchange = () => { TASKS_SORT = sortSel.value; navigate('tasks'); };
-  const toolbarKids = [el('span', { class:'muted', style:'font-size:12px' }, 'Сортировка:'), sortSel];
-  if (role().seeAllData) {
+  // Переключатель режима группировки (вместо сортировки)
+  const MODES = [['due','📅 По сроку'],['owner','👤 По менеджеру'],['status','✅ По статусу']];
+  const seg = el('div', { class:'row', style:'gap:4px;flex-wrap:wrap' },
+    MODES.map(([k, label]) => el('button', { class:'btn btn-sm' + (TASKS_GROUP === k ? ' btn-primary' : ''), onclick: () => { TASKS_GROUP = k; navigate('tasks'); } }, label)));
+  const toolbarKids = [el('span', { class:'muted', style:'font-size:12px' }, 'Группировка:'), seg];
+  // фильтр по сотруднику (не нужен в режиме «по менеджеру»)
+  if (role().seeAllData && TASKS_GROUP !== 'owner') {
     const ownerSel = el('select', {}, [el('option', { value:'' }, 'Все сотрудники'),
       ...state.users.filter(u => u.active !== false).map(u => el('option', { value:u.id }, u.name))]);
     ownerSel.value = TASKS_OWNER;
@@ -2732,14 +2736,15 @@ VIEWS.tasks = () => {
   }
   wrap.append(el('div', { class:'row', style:'gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px' }, toolbarKids));
 
-  const sortCards = (arr) => arr.sort((a,b) => { const c = String(a.due || '').localeCompare(String(b.due || '')); return TASKS_SORT === 'asc' ? c : -c; });
+  // сортировка карточек внутри колонки — по сроку (раньше → позже)
+  const byDue = (a, b) => String(a.due || '').localeCompare(String(b.due || ''));
 
   function taskCard(t) {
     const u = userById(t.owner);
     const prCls = t.priority === 'high' ? 'pill-danger' : t.priority === 'medium' ? 'pill-warn' : 'pill-muted';
     const dueStr = t.due ? fmtDate(String(t.due).split(' ')[0]) : '—';
     const card = el('div', { class:'k-card', style:'cursor:pointer', onclick: () => openTaskDetail(t.id) }, [
-      el('div', { class:'k-card-title' }, t.title),
+      el('div', { class:'k-card-title', style: t.done ? 'text-decoration:line-through;color:#9CA3AF' : '' }, t.title),
       el('div', { class:'k-card-foot mt-12' }, [
         el('span', { class:'pill ' + prCls, style:'font-size:10px' }, t.priority),
         el('span', { style:'margin-left:auto;display:flex;align-items:center;gap:6px' }, [
@@ -2749,16 +2754,39 @@ VIEWS.tasks = () => {
       ]),
       el('button', { class:'btn btn-sm', style:'margin-top:8px;width:100%', onclick: async (e) => {
         e.stopPropagation();
-        try { await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body:{ done:1 } }); const tt = byId(state.tasks, t.id); if (tt) tt.done = true; toast('Задача выполнена', 'success'); navigate('tasks'); }
+        const next = t.done ? 0 : 1;
+        try { await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body:{ done: next } }); const tt = byId(state.tasks, t.id); if (tt) tt.done = !!next; toast(next ? 'Задача выполнена' : 'Возвращена в работу', 'success'); navigate('tasks'); }
         catch (err) { toast('Не удалось сохранить', 'error'); }
-      } }, '✓ Выполнить'),
+      } }, t.done ? '↩ В работу' : '✓ Выполнить'),
     ]);
     return card;
   }
 
+  // Колонки в зависимости от режима группировки
+  let cols, keyOf;
+  if (TASKS_GROUP === 'owner') {
+    const ids = [...new Set(tasksToShow.map(t => t.owner))];
+    const users = ids.map(id => userById(id)).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    cols = users.map(u => ({ key: u.id, label: u.name, color: u.color }));
+    keyOf = (t) => t.owner;
+  } else if (TASKS_GROUP === 'status') {
+    cols = [
+      { key:'overdue', label:'Просрочено', color:'#EF4444' },
+      { key:'inwork',  label:'В работе',   color:'#3B82F6' },
+      { key:'done',    label:'Выполнено',  color:'#10B981' },
+    ];
+    keyOf = (t) => t.done ? 'done' : (taskBucket(t) === 'overdue' ? 'overdue' : 'inwork');
+  } else {
+    cols = TASK_COLS.map(c => ({ key: c.key, label: c.label, color: c.color }));
+    keyOf = taskBucket;
+  }
+
   const kanban = el('div', { class:'kanban' });
-  TASK_COLS.forEach(col => {
-    const colTasks = sortCards(openTasks.filter(t => taskBucket(t) === col.key));
+  if (!cols.length) {
+    kanban.append(el('div', { class:'muted', style:'padding:24px' }, 'Нет задач для отображения'));
+  }
+  cols.forEach(col => {
+    const colTasks = tasksToShow.filter(t => keyOf(t) === col.key).sort(byDue);
     const body = el('div', { class:'k-col-body' });
     if (colTasks.length) colTasks.forEach(t => body.append(taskCard(t)));
     else body.append(el('div', { class:'muted', style:'font-size:12px;text-align:center;padding:18px 6px' }, 'Нет задач'));
