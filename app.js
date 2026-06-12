@@ -1934,8 +1934,10 @@ async function openDealDetail(id) {
     const c = currentClient;
     clientHost.append(
       el('div', { class:'client-block' }, [
-        el('div', { class:'avatar', style:'background:#6366F1' }, (c.name || '?').slice(0, 1).toUpperCase()),
-        el('div', { class:'who' }, [el('div', { class:'nm' }, c.name || '—'), el('div', { class:'ph' }, c.phone || 'телефон не указан')]),
+        el('div', { class:'client-top' }, [
+          el('div', { class:'avatar', style:'background:#6366F1' }, (c.name || '?').slice(0, 1).toUpperCase()),
+          el('div', { class:'who' }, [el('div', { class:'nm' }, c.name || '—'), el('div', { class:'ph' }, c.phone || 'телефон не указан')]),
+        ]),
         el('div', { class:'cact' }, [
           el('button', { title:'Позвонить', onclick: () => { if (c.phone) location.href = 'tel:' + String(c.phone).replace(/[^\d+]/g, ''); else toast('Телефон не указан', 'warn'); } }, '📞'),
           el('button', { title:'Написать в WhatsApp', onclick: () => switchTab('whatsapp') }, '💬'),
