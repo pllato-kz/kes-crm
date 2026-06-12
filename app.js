@@ -1821,45 +1821,39 @@ async function openDealDetail(id) {
 
   function renderItems() {
     itemsHost.innerHTML = '';
-    const t = el('table');
+    const t = el('table', { class:'data line-items-table' });
     t.append(el('thead', {}, el('tr', {}, [
-      el('th', {}, 'Артикул'),
       el('th', {}, 'Товар'),
-      el('th', { class:'num' }, 'Кол-во'),
-      el('th', { class:'num' }, 'Цена'),
-      el('th', { class:'num' }, 'Сумма'),
-      el('th', {}, ''),
+      el('th', { class:'num', style:'width:60px' }, 'Кол-во'),
+      el('th', { class:'num', style:'width:92px' }, 'Цена'),
+      el('th', { class:'num', style:'width:96px' }, 'Сумма'),
+      el('th', { style:'width:26px' }, ''),
     ])));
     const tb = el('tbody');
     if (!d.lineItems.length) {
-      tb.append(el('tr', { class:'empty-row' }, el('td', { colspan: 6 }, 'Позиций ещё нет. Выберите товар ниже ↓')));
+      tb.append(el('tr', {}, el('td', { colspan: 5, class:'muted', style:'text-align:center;padding:14px' }, 'Товаров пока нет — добавьте через поиск ниже')));
     } else {
       d.lineItems.forEach((it, idx) => {
         const p = byId(state.products, it.product);
         if (!p) return;
-        const sum = it.qty * (it.priceUsed || p.priceWholesale);
+        if (it.priceUsed == null) it.priceUsed = p.priceWholesale || 0;
+        const sumCell = el('td', { class:'num strong' }, fmtMoney(it.qty * it.priceUsed));
+        const recalc = () => { sumCell.textContent = fmtMoney(it.qty * it.priceUsed); recomputeAmount(); };
         tb.append(el('tr', {}, [
-          el('td', { style:'font-family:monospace;font-size:11px;color:#6B7280' }, p.sku),
-          el('td', {}, [p.name, el('div', { class:'muted', style:'font-size:11px' }, p.brand + ' · ' + p.unit)]),
+          el('td', {}, [el('div', { style:'font-weight:500' }, p.name), el('div', { class:'muted', style:'font-size:11px' }, p.sku + (p.brand ? ' · ' + p.brand : ''))]),
           el('td', { class:'num' }, canEdit
-            ? el('input', { class:'qty', type:'number', min:'1', value: it.qty, oninput: (e) => { it.qty = Math.max(1, +e.target.value || 1); recomputeAmount(); const sumCell = e.target.closest('tr').children[4]; sumCell.textContent = fmtMoney(it.qty * (it.priceUsed || p.priceWholesale)); } })
+            ? el('input', { class:'qty', type:'number', min:'1', value: it.qty, oninput: (e) => { it.qty = Math.max(1, +e.target.value || 1); recalc(); } })
             : String(it.qty)),
-          el('td', { class:'num muted' }, fmtMoney(it.priceUsed || p.priceWholesale)),
-          el('td', { class:'num strong' }, fmtMoney(sum)),
+          el('td', { class:'num' }, canEdit
+            ? el('input', { class:'qty', type:'number', min:'0', value: it.priceUsed, oninput: (e) => { it.priceUsed = Math.max(0, +e.target.value || 0); recalc(); } })
+            : fmtMoney(it.priceUsed)),
+          sumCell,
           el('td', {}, canEdit ? el('button', { class:'x-btn', title:'Удалить', onclick: () => { d.lineItems.splice(idx, 1); recomputeAmount(); renderItems(); } }, '×') : null),
         ]));
       });
     }
     t.append(tb);
-    if (d.lineItems.length) {
-      t.append(el('tfoot', {}, el('tr', {}, [
-        el('td', { colspan: 4, class:'num' }, 'ИТОГО:'),
-        el('td', { class:'num' }, fmtMoney(d.amount)),
-        el('td'),
-      ])));
-    }
-    const wrap = el('div', { class:'line-items' }, t);
-    itemsHost.append(wrap);
+    itemsHost.append(t);
   }
 
   function renderPicker() {
@@ -1922,17 +1916,40 @@ async function openDealDetail(id) {
   state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.coManager) o.selected = true; coMgrSel.append(o); });
   if (!canEdit) [titleI, amountI, mgrSel, coMgrSel].forEach(i => i.disabled = true);
 
-  const clientBlock = el('div', { class:'client-block' }, [
-    el('div', { class:'avatar', style:`background:${m.color}` }, (clx.name || '?').slice(0, 1).toUpperCase()),
-    el('div', { class:'who' }, [
-      el('div', { class:'nm' }, clx.name),
-      el('div', { class:'ph' }, clx.phone || 'телефон не указан'),
-    ]),
-    el('div', { class:'cact' }, [
-      el('button', { title:'Позвонить', onclick: () => { if (clx.phone) location.href = 'tel:' + String(clx.phone).replace(/[^\d+]/g, ''); else toast('Телефон не указан', 'warn'); } }, '📞'),
-      el('button', { title:'Написать в WhatsApp', onclick: () => switchTab('whatsapp') }, '💬'),
-    ]),
-  ]);
+  // ----- Клиент: редактируемый, с заменой (поиск/выбор) -----
+  let currentClient = clx;
+  const clientHost = el('div');
+  const clientSearch = el('input', { placeholder:'Поиск клиента по имени / БИН / телефону…', style:'width:100%' });
+  const clientList = el('div', { class:'product-picker' });
+  const clientPicker = el('div', { style:'display:none;margin-top:8px' }, [clientSearch, clientList]);
+  function fillClientList(q) {
+    clientList.innerHTML = '';
+    const ql = String(q || '').toLowerCase().trim();
+    const res = state.clients.filter(c => !ql || (c.name + ' ' + (c.bin || '') + ' ' + (c.phone || '')).toLowerCase().includes(ql)).slice(0, 15);
+    if (!res.length) { clientList.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено')); return; }
+    res.forEach(c => clientList.append(el('div', { class:'pp-item', onclick: () => {
+      currentClient = c; d.client = c.id; clientPicker.style.display = 'none'; renderClient();
+      toast('Клиент изменён: ' + c.name, 'success');
+    } }, [el('div', {}, [el('div', {}, c.name), el('div', { class:'pp-sku' }, (c.bin ? 'БИН ' + c.bin + ' · ' : '') + (c.phone || '—'))])])));
+  }
+  clientSearch.oninput = (e) => fillClientList(e.target.value);
+  function renderClient() {
+    clientHost.innerHTML = '';
+    const c = currentClient;
+    clientHost.append(
+      el('div', { class:'client-block' }, [
+        el('div', { class:'avatar', style:'background:#6366F1' }, (c.name || '?').slice(0, 1).toUpperCase()),
+        el('div', { class:'who' }, [el('div', { class:'nm' }, c.name || '—'), el('div', { class:'ph' }, c.phone || 'телефон не указан')]),
+        el('div', { class:'cact' }, [
+          el('button', { title:'Позвонить', onclick: () => { if (c.phone) location.href = 'tel:' + String(c.phone).replace(/[^\d+]/g, ''); else toast('Телефон не указан', 'warn'); } }, '📞'),
+          el('button', { title:'Написать в WhatsApp', onclick: () => switchTab('whatsapp') }, '💬'),
+          canEdit ? el('button', { title:'Заменить клиента', onclick: () => { const open = clientPicker.style.display === 'none'; clientPicker.style.display = open ? 'block' : 'none'; if (open) { clientSearch.value = ''; fillClientList(''); setTimeout(() => clientSearch.focus(), 0); } } }, '✏') : null,
+        ]),
+      ]),
+      clientPicker,
+    );
+  }
+  renderClient();
 
   const fieldRow = (label, input) => el('div', { class:'form-row' }, [el('label', {}, label), input]);
   const printBtn = el('button', { class:'btn btn-sm', onclick: () => printInvoice(d) }, '🖨 Печать СФ');
@@ -1946,15 +1963,20 @@ async function openDealDetail(id) {
   } }, 'Удалить') : null;
 
   const left = el('div', { class:'deal-left' }, [
-    el('div', { class:'section-title' }, 'О сделке'),
-    fieldRow('Название', titleI),
-    el('div', { class:'form-row' }, [el('label', {}, 'Клиент'), clientBlock]),
-    fieldRow('Сумма, ₸', amountI),
-    fieldRow('Ответственный', mgrSel),
-    fieldRow('Отв. менеджер', coMgrSel),
-    el('div', { class:'section-title', style:'margin-top:18px' }, 'Позиции'),
-    itemsHost, pickerHost,
-    el('div', { class:'row', style:'gap:8px;margin-top:16px' }, [printBtn, delBtn]),
+    el('div', { class:'deal-section' }, [
+      el('div', { class:'section-title' }, 'О сделке'),
+      fieldRow('Название', titleI),
+      el('div', { class:'form-row' }, [el('label', {}, 'Клиент'), clientHost]),
+      fieldRow('Сумма, ₸', amountI),
+      fieldRow('Ответственный', mgrSel),
+      fieldRow('Отв. менеджер', coMgrSel),
+    ]),
+    el('div', { class:'deal-section' }, [
+      el('div', { class:'section-title' }, 'Товары'),
+      itemsHost,
+      pickerHost,
+    ]),
+    el('div', { class:'deal-actions' }, [printBtn, delBtn]),
   ]);
 
   // ----- Правая панель: вкладки (Комментарии / WhatsApp / История) -----
