@@ -105,8 +105,10 @@ export async function onRequest(context) {
       if (seg[1] === 'status' && request.method === 'GET') return syncStatus(env);
       if (seg[1] === '1c' && seg[2] === 'clients' && request.method === 'POST') return syncClients(env);
       if (seg[1] === '1c' && seg[2] === 'products' && request.method === 'POST') {
-        const lim = parseInt(new URL(request.url).searchParams.get('limit'), 10);
-        return syncProducts(env, Number.isFinite(lim) ? lim : 100);
+        const u = new URL(request.url);
+        const lim = parseInt(u.searchParams.get('limit'), 10);
+        const skp = parseInt(u.searchParams.get('skip'), 10);
+        return syncProducts(env, Number.isFinite(lim) ? lim : 1000, Number.isFinite(skp) ? skp : 0);
       }
       return err(404, 'Неизвестная синхронизация: ' + seg.join('/'));
     }
@@ -663,6 +665,7 @@ async function syncClients(env) {
   let skip = 0, fetched = 0, created = 0, updated = 0;
   const base = 'Catalog_Контрагенты?$format=json'
     + '&$filter=DeletionMark eq false and IsFolder eq false'
+    + '&$orderby=Ref_Key'
     + '&$select=Ref_Key,Description,НаименованиеПолное,ИдентификационныйКодЛичности';
 
   while (true) {
@@ -700,52 +703,47 @@ async function syncClients(env) {
   return json({ fetched, created, updated });
 }
 
-// Номенклатура 1С (только товары, Услуга=false) -> товары CRM. limit — ограничение выборки.
-async function syncProducts(env, limit) {
-  const ex = await env.DB.prepare('SELECT id, ext_ref, sku FROM products').all();
-  const byRef = {}, bySku = {};
-  for (const p of ex.results) { if (p.ext_ref) byRef[p.ext_ref] = p.id; if (p.sku) bySku[p.sku] = p.id; }
-
-  const cap = limit && limit > 0 ? limit : 100;
-  let skip = 0, fetched = 0, created = 0, updated = 0;
+// Номенклатура 1С (только товары, Услуга=false) -> товары CRM.
+// Одна страница за вызов (limit ≤ 1000, со смещением skip) — фронт листает до done.
+// Upsert по sku (=Code), без предзагрузки карт — масштабируется на тысячи позиций.
+async function syncProducts(env, limit, skip) {
+  const top = Math.min(Math.max(limit || 1000, 1), 1000);
+  const off = Math.max(skip || 0, 0);
   const base = 'Catalog_Номенклатура?$format=json'
     + '&$filter=DeletionMark eq false and IsFolder eq false and Услуга eq false'
+    + '&$orderby=Ref_Key'
     + '&$select=Ref_Key,Code,Артикул,Description';
 
-  while (fetched < cap) {
-    const pageTop = Math.min(1000, cap - fetched);
-    const data = await odataGet(env, `${base}&$top=${pageTop}&$skip=${skip}`);
-    const rows = data.value || [];
-    if (!rows.length) break;
-    const stmts = [];
-    for (const r of rows) {
-      const ref = r.Ref_Key;
-      const sku = (String(r['Артикул'] || '').trim() || String(r.Code || '').trim() || ref);
-      const name = String(r.Description || '').trim();
-      if (!ref || !name) continue;
-      let id = byRef[ref] || (sku && bySku[sku]) || null;
-      if (id) {
-        stmts.push(env.DB.prepare('UPDATE products SET name=?, sku=?, ext_ref=? WHERE id=?').bind(name, sku, ref, id));
-        updated++;
-      } else {
-        id = genId();
-        stmts.push(env.DB.prepare('INSERT INTO products (id,sku,name,unit,ext_ref) VALUES (?,?,?,?,?)').bind(id, sku, name, 'шт', ref));
-        created++;
-      }
-      byRef[ref] = id; if (sku) bySku[sku] = id;
-    }
-    fetched += rows.length;
-    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
-    if (rows.length < pageTop) break;
-    skip += rows.length;
-  }
+  const data = await odataGet(env, `${base}&$top=${top}&$skip=${off}`);
+  const rows = data.value || [];
 
-  const info = `получено ${fetched}, новых ${created}, обновлено ${updated}`;
+  const before = (await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first()).n;
+  const stmts = [];
+  let processed = 0;
+  for (const r of rows) {
+    const ref = r.Ref_Key;
+    const sku = (String(r['Артикул'] || '').trim() || String(r.Code || '').trim() || ref);
+    const name = String(r.Description || '').trim();
+    if (!ref || !name) continue;
+    processed++;
+    stmts.push(env.DB.prepare(
+      `INSERT INTO products (id, sku, name, unit, ext_ref) VALUES (?,?,?,?,?)
+       ON CONFLICT(sku) DO UPDATE SET name=excluded.name, ext_ref=excluded.ext_ref`
+    ).bind(genId(), sku, name, 'шт', ref));
+  }
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+
+  const after = (await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first()).n;
+  const created = after - before;
+  const updated = processed - created;
+  const done = rows.length < top;
+
   await env.DB.prepare(
     `INSERT INTO sync_state (entity, last_at, info) VALUES ('products_1c', datetime('now'), ?)
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
-  ).bind(info).run();
-  return json({ fetched, created, updated });
+  ).bind(`обработано до ${off + rows.length}` + (done ? ' (готово)' : ' (идёт…)')).run();
+
+  return json({ fetched: rows.length, created, updated, next: off + rows.length, done });
 }
 
 // --------------------------------------------------------------------------
