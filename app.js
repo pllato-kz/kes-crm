@@ -211,6 +211,29 @@ function fDateField(label, initialISO) {
     row: el('div', { class: 'form-row' }, [el('label', {}, label), box]),
     // храним как «YYYY-MM-DD 18:00» (сохраняет дефолтный дедлайн-час и логику просрочки)
     get: () => { const iso = dmyToIso(text.value) || pick.value; return iso ? iso + ' 18:00' : ''; },
+    getDate: () => dmyToIso(text.value) || pick.value || '',
+  };
+}
+
+// Время: авто-вставка двоеточия («1430» → «14:30») + валидация 00:00–23:59
+function autoFormatTime(s) {
+  const d = String(s || '').replace(/\D/g, '').slice(0, 4);
+  return d.length > 2 ? d.slice(0, 2) + ':' + d.slice(2) : d;
+}
+function timeValid(s) { return /^([01]\d|2[0-3]):([0-5]\d)$/.test(String(s || '').trim()); }
+function fTimeField(label, initial) {
+  const inp = el('input', { type: 'text', placeholder: 'ЧЧ:ММ', value: initial || '', inputmode: 'numeric', maxlength: '5', style: 'width:90px' });
+  const hint = el('span', { class: 'muted', style: 'font-size:11px;margin-left:8px' }, '');
+  inp.oninput = () => {
+    inp.value = autoFormatTime(inp.value);
+    const ok = inp.value === '' || timeValid(inp.value);
+    inp.style.borderColor = ok ? '' : '#EF4444';
+    hint.textContent = ok ? '' : 'неверное время';
+  };
+  return {
+    row: el('div', { class: 'form-row' }, [el('label', {}, label), el('div', { class: 'row', style: 'align-items:center' }, [inp, hint])]),
+    get: () => (timeValid(inp.value) ? inp.value : ''),
+    raw: () => inp.value,
   };
 }
 
@@ -561,18 +584,20 @@ function openNewTask() {
     state.users.map(u => ({ value: u.id, label: u.name + ' · ' + u.role })),
     state.users[0].id);
   const due = fDateField('Срок', new Date().toISOString().slice(0,10));
+  const time = fTimeField('Время', '18:00');
   const prio = fSelect('Приоритет',
     [{value:'low',label:'низкий'},{value:'medium',label:'средний'},{value:'high',label:'высокий'}],
     'medium');
   openModal({
     title: 'Новая задача',
-    body: el('div', {}, [title.row, owner.row, due.row, prio.row]),
+    body: el('div', {}, [title.row, owner.row, due.row, time.row, prio.row]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
       el('button', { class: 'btn btn-primary', onclick: async () => {
         if (!title.get().trim()) { toast('Введите задачу', 'warn'); return; }
-        if (!due.get()) { toast('Укажите срок в формате ДД.ММ.ГГГГ', 'warn'); return; }
-        const t = { title: title.get().trim(), due: due.get(), owner: owner.get(), deal: null, done: false, priority: prio.get() };
+        if (!due.getDate()) { toast('Укажите срок в формате ДД.ММ.ГГГГ', 'warn'); return; }
+        if (time.raw() && !time.get()) { toast('Неверное время (формат ЧЧ:ММ)', 'warn'); return; }
+        const t = { title: title.get().trim(), due: due.getDate() + ' ' + (time.get() || '18:00'), owner: owner.get(), deal: null, done: false, priority: prio.get() };
         try {
           const saved = await window.__API__.apiFetch('tasks', { method: 'POST', body: window.__API__.toApi.task(t) });
           state.tasks.unshift(window.__API__.map.task(saved));
@@ -882,10 +907,11 @@ function taskDue(t) {
   if (due.getTime() - now.getTime() < 2 * 86400000) return { kind: 'soon', due };
   return { kind: 'future', due };
 }
-// Открытые задачи текущего пользователя, требующие внимания (просрочено/сегодня)
+// Задачи текущего пользователя на сегодня (живая подсказка).
+// Просроченные приходят отдельными адресными уведомлениями (см. scan-overdue).
 function taskReminders() {
   return visibleTasks()
-    .filter(t => !t.done && ['overdue', 'today'].includes(taskDue(t).kind))
+    .filter(t => !t.done && taskDue(t).kind === 'today')
     .sort((a, b) => String(a.due).localeCompare(String(b.due)));
 }
 
@@ -2649,10 +2675,10 @@ const TASK_COLS = [
   { key:'week',     label:'Эта неделя',  color:'#8B5CF6', drop:true },
   { key:'month',    label:'Этот месяц',  color:'#10B981', drop:true },
 ];
-let TASKS_GROUP = 'due';   // 'due' | 'owner' | 'status' — режим группировки колонок
 let TASKS_OWNER = '';      // фильтр по ответственному (id) или '' = все
 let TASKS_FROM = '';       // фильтр по диапазону срока: с (YYYY-MM-DD)
 let TASKS_TO = '';         // фильтр по диапазону срока: по (YYYY-MM-DD)
+let TASKS_SHOWDONE = false; // показывать выполненные
 
 function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function parseDue(due) { return new Date(String(due || '').replace(' ', 'T')); }
@@ -2696,13 +2722,15 @@ VIEWS.tasks = () => {
     if (TASKS_TO && d > TASKS_TO) return false;
     return true;
   };
-  // в режиме «По статусу» показываем и выполненные (отдельной колонкой)
-  const includeDone = TASKS_GROUP === 'status';
-  const tasksToShow = base.filter(t => (includeDone || !t.done) && (!TASKS_OWNER || t.owner === TASKS_OWNER) && inRange(t));
+  const tasksToShow = base.filter(t => (TASKS_SHOWDONE || !t.done) && (!TASKS_OWNER || t.owner === TASKS_OWNER) && inRange(t))
+    .sort((a, b) => {
+      if (!!a.done !== !!b.done) return a.done ? 1 : -1; // выполненные — в конец
+      return String(a.due || '').localeCompare(String(b.due || '')); // по сроку
+    });
 
-  const openFiltered = tasksToShow.filter(t => !t.done);
-  const overdueN = openFiltered.filter(t => taskBucket(t) === 'overdue').length;
-  const todayN = openFiltered.filter(t => taskBucket(t) === 'today').length;
+  const openFiltered = base.filter(t => !t.done && (!TASKS_OWNER || t.owner === TASKS_OWNER) && inRange(t));
+  const overdueN = openFiltered.filter(t => taskDue(t).kind === 'overdue').length;
+  const todayN = openFiltered.filter(t => taskDue(t).kind === 'today').length;
   const subParts = [`${openFiltered.length} открытых · ${doneCount} выполнено`];
   if (overdueN) subParts.push(`⚠️ ${overdueN} просрочено`);
   if (todayN) subParts.push(`🔔 ${todayN} на сегодня`);
@@ -2712,43 +2740,39 @@ VIEWS.tasks = () => {
     el('div', { class:'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewTask }, '+ Задача')]),
   ]));
 
-  // Переключатель режима группировки (вместо сортировки)
-  const MODES = [['due','📅 По сроку'],['owner','👤 По менеджеру'],['status','✅ По статусу']];
-  const seg = el('div', { class:'row', style:'gap:4px;flex-wrap:wrap' },
-    MODES.map(([k, label]) => el('button', { class:'btn btn-sm' + (TASKS_GROUP === k ? ' btn-primary' : ''), onclick: () => { TASKS_GROUP = k; navigate('tasks'); } }, label)));
-  const toolbarKids = [el('span', { class:'muted', style:'font-size:12px' }, 'Группировка:'), seg];
-  // фильтр по сотруднику (не нужен в режиме «по менеджеру»)
-  if (role().seeAllData && TASKS_GROUP !== 'owner') {
+  // Тулбар: фильтр по сотруднику + диапазон срока + показывать выполненные
+  const toolbarKids = [];
+  if (role().seeAllData) {
     const ownerSel = el('select', {}, [el('option', { value:'' }, 'Все сотрудники'),
       ...state.users.filter(u => u.active !== false).map(u => el('option', { value:u.id }, u.name))]);
     ownerSel.value = TASKS_OWNER;
     ownerSel.onchange = () => { TASKS_OWNER = ownerSel.value; navigate('tasks'); };
-    toolbarKids.push(el('span', { class:'muted', style:'font-size:12px;margin-left:10px' }, 'Сотрудник:'), ownerSel);
+    toolbarKids.push(el('span', { class:'muted', style:'font-size:12px' }, 'Сотрудник:'), ownerSel);
   }
-  // диапазон срока: с … по …
   const fromI = el('input', { type:'date', value: TASKS_FROM, title:'Срок с', style:'padding:6px' });
   const toI = el('input', { type:'date', value: TASKS_TO, title:'Срок по', style:'padding:6px' });
   fromI.onchange = () => { TASKS_FROM = fromI.value; navigate('tasks'); };
   toI.onchange = () => { TASKS_TO = toI.value; navigate('tasks'); };
   toolbarKids.push(el('span', { class:'muted', style:'font-size:12px;margin-left:10px' }, 'Срок c:'), fromI, el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI);
-  if (TASKS_FROM || TASKS_TO) {
-    toolbarKids.push(el('button', { class:'btn btn-sm', onclick: () => { TASKS_FROM = ''; TASKS_TO = ''; navigate('tasks'); } }, 'Сбросить'));
-  }
+  if (TASKS_FROM || TASKS_TO) toolbarKids.push(el('button', { class:'btn btn-sm', onclick: () => { TASKS_FROM = ''; TASKS_TO = ''; navigate('tasks'); } }, 'Сбросить'));
+  const doneChk = el('input', { type:'checkbox', checked: TASKS_SHOWDONE ? 'checked' : null });
+  doneChk.onchange = () => { TASKS_SHOWDONE = doneChk.checked; navigate('tasks'); };
+  toolbarKids.push(el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#374151;margin-left:10px' }, [doneChk, 'Показывать выполненные']));
   wrap.append(el('div', { class:'row', style:'gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px' }, toolbarKids));
-
-  // сортировка карточек внутри колонки — по сроку (раньше → позже)
-  const byDue = (a, b) => String(a.due || '').localeCompare(String(b.due || ''));
 
   function taskCard(t) {
     const u = userById(t.owner);
     const prCls = t.priority === 'high' ? 'pill-danger' : t.priority === 'medium' ? 'pill-warn' : 'pill-muted';
-    const dueStr = t.due ? fmtDate(String(t.due).split(' ')[0]) : '—';
-    const card = el('div', { class:'k-card', style:'cursor:pointer', onclick: () => openTaskDetail(t.id) }, [
-      el('div', { class:'k-card-title', style: t.done ? 'text-decoration:line-through;color:#9CA3AF' : '' }, t.title),
+    const dueStr = t.due ? (fmtDate(String(t.due).split(' ')[0]) + ' ' + (String(t.due).slice(11, 16) || '')) : '—';
+    const od = !t.done && taskDue(t).kind === 'overdue';
+    return el('div', { class:'k-card', style:'cursor:pointer' + (od ? ';border-left:3px solid #EF4444' : ''), onclick: () => openTaskDetail(t.id) }, [
+      el('div', { class:'k-card-title', style: t.done ? 'text-decoration:line-through;color:#9CA3AF' : '' }, [
+        t.title, od ? el('span', { class:'pill pill-danger', style:'font-size:10px;margin-left:6px' }, 'просрочено') : null,
+      ]),
       el('div', { class:'k-card-foot mt-12' }, [
         el('span', { class:'pill ' + prCls, style:'font-size:10px' }, t.priority),
         el('span', { style:'margin-left:auto;display:flex;align-items:center;gap:6px' }, [
-          el('span', { class:'muted', style:'font-size:11px' }, '📅 ' + dueStr),
+          el('span', { class:'muted', style:'font-size:11px' }, '📅 ' + dueStr.trim()),
           el('span', { class:'avatar', style:`width:22px;height:22px;font-size:9px;background:${u.color}`, title:u.name }, u.avatar),
         ]),
       ]),
@@ -2759,48 +2783,15 @@ VIEWS.tasks = () => {
         catch (err) { toast('Не удалось сохранить', 'error'); }
       } }, t.done ? '↩ В работу' : '✓ Выполнить'),
     ]);
-    return card;
   }
 
-  // Колонки в зависимости от режима группировки
-  let cols, keyOf;
-  if (TASKS_GROUP === 'owner') {
-    const ids = [...new Set(tasksToShow.map(t => t.owner))];
-    const users = ids.map(id => userById(id)).sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    cols = users.map(u => ({ key: u.id, label: u.name, color: u.color }));
-    keyOf = (t) => t.owner;
-  } else if (TASKS_GROUP === 'status') {
-    cols = [
-      { key:'overdue', label:'Просрочено', color:'#EF4444' },
-      { key:'inwork',  label:'В работе',   color:'#3B82F6' },
-      { key:'done',    label:'Выполнено',  color:'#10B981' },
-    ];
-    keyOf = (t) => t.done ? 'done' : (taskBucket(t) === 'overdue' ? 'overdue' : 'inwork');
+  if (!tasksToShow.length) {
+    wrap.append(el('div', { class:'card' }, el('div', { class:'empty' }, [el('div', { class:'em-icon' }, '✅'), el('div', { class:'em-text' }, 'Задач нет')])));
   } else {
-    cols = TASK_COLS.map(c => ({ key: c.key, label: c.label, color: c.color }));
-    keyOf = taskBucket;
+    const grid = el('div', { style:'display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px' });
+    tasksToShow.forEach(t => grid.append(taskCard(t)));
+    wrap.append(grid);
   }
-
-  const kanban = el('div', { class:'kanban' });
-  if (!cols.length) {
-    kanban.append(el('div', { class:'muted', style:'padding:24px' }, 'Нет задач для отображения'));
-  }
-  cols.forEach(col => {
-    const colTasks = tasksToShow.filter(t => keyOf(t) === col.key).sort(byDue);
-    const body = el('div', { class:'k-col-body' });
-    if (colTasks.length) colTasks.forEach(t => body.append(taskCard(t)));
-    else body.append(el('div', { class:'muted', style:'font-size:12px;text-align:center;padding:18px 6px' }, 'Нет задач'));
-
-    kanban.append(el('div', { class:'k-col', 'data-bucket': col.key }, [
-      el('div', { class:'k-col-head' }, [
-        el('span', { class:'stage-dot', style:`background:${col.color}` }),
-        el('span', { class:'stage-label' }, col.label),
-        el('span', { class:'stage-count' }, colTasks.length),
-      ]),
-      body,
-    ]));
-  });
-  wrap.append(kanban);
   return wrap;
 };
 
@@ -2813,6 +2804,7 @@ function openTaskDetail(id) {
   const title = fInput('Что сделать', t.title || '');
   const owner = fSelect('Ответственный', state.users.map(u => ({ value: u.id, label: u.name + ' · ' + u.role })), t.owner);
   const due = fDateField('Срок', String(t.due || '').slice(0, 10));
+  const time = fTimeField('Время', (String(t.due || '').slice(11, 16) || '18:00'));
   const prio = fSelect('Приоритет', [{value:'low',label:'низкий'},{value:'medium',label:'средний'},{value:'high',label:'высокий'}], t.priority || 'medium');
   const doneChk = el('input', { type:'checkbox', checked: t.done ? 'checked' : null, style:'width:18px;height:18px' });
   const doneRow = el('div', { class:'form-row' }, [el('label', {}, 'Выполнена'), doneChk]);
@@ -2821,7 +2813,7 @@ function openTaskDetail(id) {
   const meta = el('div', { class:'muted', style:'font-size:12px;margin-top:8px' },
     linkedDeal ? `Связана со сделкой: №${linkedDeal.no} — ${linkedDeal.title}` : 'Не связана со сделкой');
 
-  if (!canEdit) { [title, owner, due, prio].forEach(f => f.row.querySelectorAll('input,select').forEach(i => i.disabled = true)); doneChk.disabled = true; }
+  if (!canEdit) { [title, owner, due, time, prio].forEach(f => f.row.querySelectorAll('input,select').forEach(i => i.disabled = true)); doneChk.disabled = true; }
 
   const foot = [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')];
   if (canEdit) {
@@ -2835,8 +2827,9 @@ function openTaskDetail(id) {
     } }, '🗑 Удалить'));
     foot.push(el('button', { class:'btn btn-primary', onclick: async () => {
       if (!title.get().trim()) { toast('Введите задачу', 'warn'); return; }
-      if (!due.get()) { toast('Укажите срок', 'warn'); return; }
-      const upd = { id: t.id, title: title.get().trim(), owner: owner.get(), due: due.get(), priority: prio.get(), done: doneChk.checked };
+      if (!due.getDate()) { toast('Укажите срок', 'warn'); return; }
+      if (time.raw() && !time.get()) { toast('Неверное время (формат ЧЧ:ММ)', 'warn'); return; }
+      const upd = { id: t.id, title: title.get().trim(), owner: owner.get(), due: due.getDate() + ' ' + (time.get() || '18:00'), priority: prio.get(), done: doneChk.checked };
       try {
         const saved = await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body: window.__API__.toApi.task(upd) });
         Object.assign(t, window.__API__.map.task(saved));
@@ -2845,7 +2838,7 @@ function openTaskDetail(id) {
     } }, 'Сохранить'));
   }
 
-  openModal({ title: 'Задача', body: el('div', {}, [title.row, owner.row, due.row, prio.row, doneRow, meta]), foot });
+  openModal({ title: 'Задача', body: el('div', {}, [title.row, owner.row, due.row, time.row, prio.row, doneRow, meta]), foot });
 }
 
 
@@ -3493,7 +3486,7 @@ function renderShell() {
 
   // Напоминания по задачам: индикатор на колокольчике + тост о просроченных
   const dot = $('#notif-btn .dot');
-  if (dot) dot.style.display = taskReminders().length ? '' : 'none';
+  if (dot) dot.style.display = (taskReminders().length || (state.notifications || []).length) ? '' : 'none';
   const overdueCount = visibleTasks().filter(t => !t.done && taskDue(t).kind === 'overdue').length;
   if (overdueCount) setTimeout(() => toast(`У вас ${overdueCount} ${plural(overdueCount, 'просроченная задача', 'просроченные задачи', 'просроченных задач')}`, 'warn'), 700);
 }

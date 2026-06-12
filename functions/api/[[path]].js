@@ -319,6 +319,8 @@ async function dataRoute({ request, env }, seg, url, auth) {
   if (resource === 'clients' && method === 'GET') return id ? getClient(env, id) : listClients(env, url);
   if (resource === 'clients' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeClient(env, request, method, id);
   if (resource === 'leads' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeLead(env, request, method, id);
+  if (resource === 'notifications' && id === 'scan-overdue' && method === 'POST') return scanOverdueTasks(env);
+  if (resource === 'notifications' && method === 'GET' && !id) return listNotifications(env, auth);
 
   // --- обобщённый CRUD ---
   switch (method) {
@@ -459,6 +461,58 @@ async function listProducts(env, url) {
   ).bind(...args, limit, offset).all();
 
   return json({ data: rows.results, total: total ? total.n : 0, page, limit });
+}
+
+// Уведомления — адресные (user_id) + широковещательные (user_id IS NULL).
+// Колонки user_id/ref добавляются на лету; ref — для идемпотентности (UNIQUE).
+async function ensureNotifSchema(env) {
+  for (const ddl of ['ALTER TABLE notifications ADD COLUMN user_id TEXT', 'ALTER TABLE notifications ADD COLUMN ref TEXT']) {
+    try { await env.DB.prepare(ddl).run(); } catch (e) { /* колонка уже есть */ }
+  }
+  try { await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_notif_ref ON notifications(ref)').run(); } catch (e) {}
+}
+
+async function listNotifications(env, auth) {
+  await ensureNotifSchema(env);
+  const uid = auth ? auth.sub : null;
+  const r = await env.DB.prepare(
+    'SELECT * FROM notifications WHERE user_id IS NULL OR user_id = ? ORDER BY created_at DESC LIMIT 100'
+  ).bind(uid).all();
+  return json(r.results);
+}
+
+// Сканирует просроченные задачи и шлёт уведомление ответственному + всем директорам.
+// Идемпотентно (ref = overdue:<taskId>:<userId>); снимает уведомления по задачам,
+// которые уже не просрочены/выполнены.
+async function scanOverdueTasks(env) {
+  await ensureNotifSchema(env);
+  const dirs = await env.DB.prepare("SELECT id FROM users WHERE role_key='director' AND active=1").all();
+  const directorIds = dirs.results.map((d) => d.id);
+  const tasks = await env.DB.prepare("SELECT id, title, owner_id, due FROM tasks WHERE done=0 AND due IS NOT NULL AND due <> ''").all();
+
+  const now = Date.now();
+  const overdueIds = new Set();
+  const stmts = [];
+  for (const t of tasks.results) {
+    const dt = new Date(String(t.due).replace(' ', 'T'));
+    if (isNaN(dt.getTime()) || dt.getTime() >= now) continue; // не просрочена
+    overdueIds.add(String(t.id));
+    const recipients = new Set(directorIds);
+    if (t.owner_id) recipients.add(t.owner_id);
+    for (const uid of recipients) {
+      stmts.push(env.DB.prepare(
+        "INSERT OR IGNORE INTO notifications (text, type, read, created_at, user_id, ref) VALUES (?, 'error', 0, datetime('now'), ?, ?)"
+      ).bind(`Просрочена задача: ${t.title}`, uid, `overdue:${t.id}:${uid}`));
+    }
+  }
+  // уборка устаревших overdue-уведомлений (задача выполнена/перенесена)
+  const existing = await env.DB.prepare("SELECT id, ref FROM notifications WHERE ref LIKE 'overdue:%'").all();
+  for (const n of existing.results) {
+    const taskId = String(n.ref).split(':')[1];
+    if (!overdueIds.has(taskId)) stmts.push(env.DB.prepare('DELETE FROM notifications WHERE id=?').bind(n.id));
+  }
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+  return json({ overdue: overdueIds.size });
 }
 
 // Агрегаты раздела «Отчёты» — считаются в SQL по данным CRM (сделки/позиции).
