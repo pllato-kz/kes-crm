@@ -1277,10 +1277,10 @@ VIEWS.dashboard = () => {
 
   // 4 KPI карточки
   const stats = el('div', { class: 'grid grid-4' });
-  stats.append(statCard('Выручка месяц', fmtMoneyK(totalRevenue), '+12.4%', 'up',   '💰'));
-  stats.append(statCard('Пайплайн',      fmtMoneyK(pipelineValue), '+8.1%',  'up',   '📈'));
-  stats.append(statCard('Дебиторка',     fmtMoneyK(debtTotal),     overdueCount + ' просрочка', 'down', '⚠️'));
-  stats.append(statCard('Новые заявки',  newLeads,                  'сегодня', 'up',  '📥'));
+  stats.append(statCard('Выручка (закрыто)', fmtMoneyK(totalRevenue), '', '', '💰'));
+  stats.append(statCard('Пайплайн',          fmtMoneyK(pipelineValue), '', '', '📈'));
+  stats.append(statCard('Дебиторка',         fmtMoneyK(debtTotal), overdueCount ? overdueCount + ' просрочка' : '', '', '⚠️'));
+  stats.append(statCard('Новые заявки',      newLeads, '', '', '📥'));
   wrap.append(stats);
 
   // 2 колонки: воронка + активность
@@ -1289,7 +1289,7 @@ VIEWS.dashboard = () => {
   // Воронка по этапам
   const funnelCard = el('div', { class: 'card' });
   funnelCard.append(el('div', { class: 'card-head' }, [
-    el('h3', {}, 'Воронка продаж — май'),
+    el('h3', {}, 'Воронка продаж'),
     el('a', { class: 'more', 'data-nav': 'deals', 'data-params': '{}' }, 'Все сделки →'),
   ]));
   const funnel = el('div', { class: 'funnel' });
@@ -1340,26 +1340,31 @@ VIEWS.dashboard = () => {
   // Низкие остатки
   const stockCard = el('div', { class: 'card' });
   stockCard.append(el('div', { class: 'card-head' }, [el('h3', {}, '⚠️ Низкие остатки'), el('a', { class:'more','data-nav':'warehouse' }, 'Склад →')]));
-  const lowStock = state.products
-    .map(p => ({ ...p, free: p.stock - p.reserved }))
-    .sort((a,b) => a.free - b.free)
-    .slice(0, 5);
-  const t = el('table', { class: 'data' });
-  t.append(el('tbody', {}, lowStock.map(p => el('tr', {}, [
-    el('td', {}, [
-      el('div', { class: 'strong' }, p.name),
-      el('div', { class: 'muted' }, p.sku + ' · ' + p.brand),
-    ]),
-    el('td', { class: 'num' }, stockIndicator(p.free, p.stock)),
-  ]))));
-  stockCard.append(el('div', { style:'overflow:hidden' }, t));
+  const stockBody = el('div', { style:'overflow:hidden' }, el('div', { class:'muted', style:'padding:10px 4px' }, 'Загрузка…'));
+  stockCard.append(stockBody);
   row2.append(stockCard);
+  // глобально из БД: 5 позиций с минимальным свободным остатком
+  window.__API__.apiFetch('products?lowstock=50&limit=5').then(r => {
+    const items = (r.data || []).map(row => window.__API__.map.product(row));
+    const t = el('table', { class: 'data' });
+    t.append(el('tbody', {}, items.length ? items.map(p => {
+      const free = p.stock - p.reserved;
+      return el('tr', { onclick: () => openProductDetail(p) }, [
+        el('td', {}, [
+          el('div', { class: 'strong' }, p.name),
+          el('div', { class: 'muted' }, p.sku + (p.brand ? ' · ' + p.brand : '')),
+        ]),
+        el('td', { class: 'num' }, stockIndicator(free, p.stock)),
+      ]);
+    }) : [el('tr', {}, el('td', { class:'muted', style:'padding:10px 4px' }, 'Низких остатков нет'))]));
+    stockBody.innerHTML = ''; stockBody.append(t);
+  }).catch(() => { stockBody.innerHTML = ''; stockBody.append(el('div', { class:'muted', style:'padding:10px 4px' }, 'Не удалось загрузить остатки')); });
 
   // Последние сделки
   const recentCard = el('div', { class: 'card' });
   recentCard.append(el('div', { class: 'card-head' }, [el('h3', {}, 'Последние сделки'), el('a', { class:'more','data-nav':'deals' }, 'Все →')]));
   const rt = el('table', { class: 'data' });
-  rt.append(el('tbody', {}, myDeals.slice(0, 6).map(d => {
+  rt.append(el('tbody', {}, myDeals.slice().sort((a, b) => String(b.created || '').localeCompare(String(a.created || ''))).slice(0, 6).map(d => {
     const s = stageById(d.stage);
     return el('tr', { onclick: () => openDealDetail(d.id) }, [
       el('td', {}, [
@@ -1383,7 +1388,7 @@ function statCard(label, value, delta, dir, icon) {
     el('div', { class: 'stat-icon' }, icon),
     el('div', { class: 'stat-label' }, label),
     el('div', { class: 'stat-value' }, String(value)),
-    el('div', { class: 'stat-delta ' + dir }, (dir==='up'?'▲ ':'▼ ') + delta),
+    delta ? el('div', { class: 'stat-delta ' + dir }, (dir === 'up' ? '▲ ' : dir === 'down' ? '▼ ' : '') + delta) : null,
   ]);
 }
 
