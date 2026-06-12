@@ -505,11 +505,11 @@ async function warehouseSummary(env) {
 
 // --------------------------------------------------------------------------
 // Удаление сделки: отвязываем счета/отгрузки/задачи, чистим позиции и историю.
-// Доступ: директор или менеджер-владелец сделки.
+// Доступ: только директор.
 async function deleteDeal(env, id, auth) {
   const d = await env.DB.prepare(`SELECT id, manager_id FROM deals WHERE id=?`).bind(id).first();
   if (!d) return err(404, 'Сделка не найдена');
-  if (auth.role !== 'director' && d.manager_id !== auth.sub) return err(403, 'Можно удалять только свои сделки');
+  if (auth.role !== 'director') return err(403, 'Удалять сделки может только директор');
   await env.DB.batch([
     env.DB.prepare(`UPDATE invoices SET deal_id=NULL WHERE deal_id=?`).bind(id),
     env.DB.prepare(`UPDATE shipments SET deal_id=NULL WHERE deal_id=?`).bind(id),

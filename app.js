@@ -1692,7 +1692,7 @@ async function openDealDetail(id) {
     foot: [
       el('div', { style:'margin-right:auto;font-size:12px;color:#6B7280;display:flex;align-items:center;gap:8px' }, ['Этап:', stageSelect]),
       el('button', { class: 'btn', onclick: () => printInvoice(d) }, '🖨 Печать СФ'),
-      canEdit ? el('button', { class: 'btn btn-danger', onclick: async () => {
+      (currentUser && currentUser.roleKey === 'director') ? el('button', { class: 'btn btn-danger', onclick: async () => {
         if (!confirm(`Удалить сделку «${d.title}» (№${d.no})?\nСвязанные счета, отгрузки и задачи будут отвязаны. Действие необратимо.`)) return;
         try {
           await window.__API__.apiFetch('deals/' + d.id, { method: 'DELETE' });
