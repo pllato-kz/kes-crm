@@ -544,11 +544,12 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .funnel-step.done { background: #DBEAFE; color: #1D4ED8; }
 .funnel-step.active { background: var(--brand); color: #fff; }
 
-.deal-split { display: grid; grid-template-columns: 1.05fr 1fr; flex: 1; min-height: 0; }
-.deal-left { padding: 18px 20px; border-right: 1px solid var(--border); overflow-y: auto; }
-.deal-section { margin-bottom: 20px; }
-.deal-section:last-of-type { margin-bottom: 8px; }
-.deal-left .form-row { margin-bottom: 12px; }
+.deal-split { display: grid; grid-template-columns: 300px 1fr; flex: 1; min-height: 0; }
+.deal-left { padding: 14px 16px; border-right: 1px solid var(--border); overflow-y: auto; background: #FAFBFC; }
+.deal-section { margin-bottom: 14px; }
+.deal-section:last-of-type { margin-bottom: 6px; }
+.deal-left .form-row { margin-bottom: 9px; gap: 3px; }
+.deal-left .section-title { margin-bottom: 8px; }
 .deal-left .form-row input, .deal-left .form-row select, .deal-left .form-row textarea { width: 100%; box-sizing: border-box; }
 .deal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .line-items-table { width: 100%; table-layout: fixed; font-size: 12.5px; border-collapse: collapse; }
