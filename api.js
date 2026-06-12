@@ -167,7 +167,7 @@
       apiFetch('company'), apiFetch('roles'), apiFetch('deal_stages'), apiFetch('client_types'),
       apiFetch('product_categories'), apiFetch('lead_sources'), apiFetch('lead_statuses'),
       apiFetch('warehouses'), apiFetch('shipment_statuses'), apiFetch('invoice_statuses'), apiFetch('task_priorities'),
-      apiFetch('users'), apiFetch('suppliers'), apiFetch('products?limit=1000'), apiFetch('clients'),
+      apiFetch('users'), apiFetch('suppliers'), apiFetch('products?limit=1000'), apiFetch('clients?limit=1000'),
       apiFetch('deals'), apiFetch('leads'), apiFetch('tasks'), apiFetch('invoices'), apiFetch('shipments'),
       apiFetch('receipts'), apiFetch('notifications'),
     ]);

@@ -142,6 +142,7 @@ CREATE TABLE clients (
   balance    INTEGER NOT NULL DEFAULT 0,     -- сальдо (минус = долг клиента)
   ltv        INTEGER NOT NULL DEFAULT 0,     -- сумма всех закупок
   last_deal  TEXT,                           -- дата последней сделки
+  ext_ref    TEXT,                           -- GUID контрагента в 1С (синхронизация)
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -316,6 +317,13 @@ CREATE TABLE notifications (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Состояние синхронизаций с внешними системами (1С)
+CREATE TABLE sync_state (
+  entity  TEXT PRIMARY KEY,                  -- clients_1c | products_1c | ...
+  last_at TEXT,
+  info    TEXT
+);
+
 -- ============================================================================
 -- ИНДЕКСЫ — под поиск и внешние ключи
 -- ============================================================================
@@ -330,6 +338,7 @@ CREATE INDEX idx_products_name     ON products(name);
 CREATE INDEX idx_clients_manager ON clients(manager_id);
 CREATE INDEX idx_clients_type    ON clients(type_key);
 CREATE INDEX idx_clients_bin     ON clients(bin);
+CREATE INDEX idx_clients_extref  ON clients(ext_ref);
 
 -- Сделки и позиции
 CREATE INDEX idx_deals_client     ON deals(client_id);
