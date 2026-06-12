@@ -2466,21 +2466,35 @@ VIEWS.settings = () => {
         await loadData(); navigate('settings');
       } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
     } }, '🔄 Остатки → Склад');
+    const pricesBtn = (mode, label) => el('button', { class:'btn btn-primary', onclick: async (e) => {
+      const b = e.currentTarget;
+      const m = mode === 'avg' ? 'средней цены' : 'последней цены';
+      if (!confirm(`Пересчитать закупочную цену по ${m} из приходов 1С? Может занять до минуты.`)) return;
+      b.disabled = true; const old = b.textContent; b.textContent = 'Цены…';
+      try {
+        const r = await window.__API__.apiFetch(`sync/1c/prices?mode=${mode}`, { method: 'POST' });
+        toast(`Цены: обновлено ${r.updated} из ${r.priced}${r.missing ? ', без сопоставления ' + r.missing : ''}`, 'success');
+        await loadData(); navigate('settings');
+      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
+    } }, label);
     syncCard.append(statusHost, el('div', { class:'row', style:'flex-wrap:wrap;gap:8px' }, [
       syncBtn('🔄 Контрагенты → Клиенты', 'sync/1c/clients', 'Загрузить контрагентов из 1С в «Клиенты»? Может занять до минуты.'),
       productsFullBtn,
       stockBtn,
+      pricesBtn('last', '🔄 Цены из приходов → Закуп'),
+      pricesBtn('avg', '🔄 Закуп (средняя)'),
     ]));
     wrap.append(syncCard);
     window.__API__.apiFetch('sync/status').then(rows => {
       rows = rows || [];
       const f = (e) => rows.find(x => x.entity === e);
-      const cl = f('clients_1c'), pr = f('products_1c'), st = f('stock_1c');
+      const cl = f('clients_1c'), pr = f('products_1c'), st = f('stock_1c'), px = f('prices_1c');
       statusHost.innerHTML = '';
       statusHost.append(
         el('div', {}, cl ? `Контрагенты: ${String(cl.last_at).slice(0, 16)} · ${cl.info}` : 'Контрагенты ещё не синхронизировались'),
         el('div', {}, pr ? `Номенклатура: ${String(pr.last_at).slice(0, 16)} · ${pr.info}` : 'Номенклатура ещё не синхронизировалась'),
         el('div', {}, st ? `Остатки: ${String(st.last_at).slice(0, 16)} · ${st.info}` : 'Остатки ещё не синхронизировались'),
+        el('div', {}, px ? `Цены: ${String(px.last_at).slice(0, 16)} · ${px.info}` : 'Цены ещё не пересчитывались'),
       );
     }).catch(() => { statusHost.textContent = ''; });
   }

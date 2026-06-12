@@ -106,6 +106,10 @@ export async function onRequest(context) {
       if (seg[1] === '1c' && seg[2] === 'clients' && request.method === 'POST') return syncClients(env);
       if (seg[1] === '1c' && seg[2] === 'categories' && request.method === 'POST') return syncCategories(env);
       if (seg[1] === '1c' && seg[2] === 'stock' && request.method === 'POST') return syncStock(env);
+      if (seg[1] === '1c' && seg[2] === 'prices' && request.method === 'POST') {
+        const mode = new URL(request.url).searchParams.get('mode');
+        return syncPrices(env, mode === 'avg' ? 'avg' : 'last');
+      }
       if (seg[1] === '1c' && seg[2] === 'products' && request.method === 'POST') {
         const u = new URL(request.url);
         const lim = parseInt(u.searchParams.get('limit'), 10);
@@ -813,6 +817,92 @@ async function syncStock(env) {
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
   ).bind(`позиций с остатком ${updated}, не сопоставлено ${missing}`).run();
   return json({ rows: rows.length, updated, missing });
+}
+
+// Цены из приходов 1С -> закупочная цена товара (products.price_cost).
+//   mode='last' (по умолчанию): цена из ПОСЛЕДНЕГО по дате прихода прихода по номенклатуре;
+//   mode='avg': среднее значение цены по всем приходам номенклатуры.
+// Документ Поступление и его табл. часть Товары идут отдельными OData-сущностями,
+// $expand табличной части 1С не поддерживает (501), поэтому шапки и строки
+// тянем порознь и соединяем по ссылке (Ref_Key) в памяти.
+// Цену нормируем к базовой единице: Цена / Коэффициент (как остатки в регистре).
+async function syncPrices(env, mode) {
+  const isAvg = mode === 'avg';
+  const TOP = 10000;
+
+  // карта товаров: Ref_Key номенклатуры -> id товара
+  const prods = await env.DB.prepare('SELECT id, ext_ref FROM products WHERE ext_ref IS NOT NULL').all();
+  const byRef = {};
+  for (const p of prods.results) byRef[p.ext_ref] = p.id;
+
+  // 1) шапки приходов: Ref_Key -> дата (ISO-строка, сравнима лексикографически)
+  const dateByDoc = {};
+  let skip = 0, docs = 0;
+  const hbase = 'Document_ПоступлениеТоваровУслуг?$format=json'
+    + '&$orderby=Ref_Key&$select=Ref_Key,Date';
+  while (true) {
+    const data = await odataGet(env, `${hbase}&$top=${TOP}&$skip=${skip}`);
+    const rows = data.value || [];
+    if (!rows.length) break;
+    for (const r of rows) dateByDoc[r.Ref_Key] = String(r.Date || '');
+    docs += rows.length;
+    if (rows.length < TOP) break;
+    skip += TOP;
+  }
+
+  // 2) строки приходов: агрегируем цену по номенклатуре
+  //    last: { date, price };  avg: { sum, count }
+  const agg = {};
+  let lines = 0;
+  skip = 0;
+  const lbase = 'Document_ПоступлениеТоваровУслуг_Товары?$format=json'
+    + '&$orderby=Ref_Key,LineNumber'
+    + '&$select=Ref_Key,Номенклатура_Key,Цена,Коэффициент';
+  while (true) {
+    const data = await odataGet(env, `${lbase}&$top=${TOP}&$skip=${skip}`);
+    const rows = data.value || [];
+    if (!rows.length) break;
+    for (const r of rows) {
+      lines++;
+      const nk = r['Номенклатура_Key'];
+      if (!nk) continue;
+      const coef = Number(r['Коэффициент']) || 1;
+      const price = Number(r['Цена']) / (coef > 0 ? coef : 1);
+      if (!Number.isFinite(price) || price <= 0) continue;
+      if (isAvg) {
+        const a = agg[nk] || (agg[nk] = { sum: 0, count: 0 });
+        a.sum += price; a.count++;
+      } else {
+        const date = dateByDoc[r.Ref_Key] || '';
+        const a = agg[nk];
+        if (!a || date >= a.date) agg[nk] = { date, price };
+      }
+    }
+    if (rows.length < TOP) break;
+    skip += TOP;
+  }
+
+  // 3) запись закупочной цены в товары (по сопоставленным номенклатурам)
+  const stmts = [];
+  let updated = 0, missing = 0, priced = 0;
+  for (const nk in agg) {
+    const a = agg[nk];
+    const price = isAvg ? a.sum / a.count : a.price;
+    if (!Number.isFinite(price) || price <= 0) continue;
+    priced++;
+    const pid = byRef[nk];
+    if (!pid) { missing++; continue; }
+    stmts.push(env.DB.prepare('UPDATE products SET price_cost=? WHERE id=?').bind(Math.round(price * 100) / 100, pid));
+    updated++;
+  }
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+
+  const info = `${isAvg ? 'средняя' : 'последняя'}: приходов ${docs}, строк ${lines}, с ценой ${priced}, обновлено ${updated}, не сопоставлено ${missing}`;
+  await env.DB.prepare(
+    `INSERT INTO sync_state (entity, last_at, info) VALUES ('prices_1c', datetime('now'), ?)
+     ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+  ).bind(info).run();
+  return json({ mode: isAvg ? 'avg' : 'last', docs, lines, priced, updated, missing });
 }
 
 // Категории каталога с числом товаров (только непустые) — для плиток каталога
