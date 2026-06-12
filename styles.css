@@ -537,19 +537,25 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .funnel-step.done { background: #DBEAFE; color: #1D4ED8; }
 .funnel-step.active { background: var(--brand); color: #fff; }
 
-.deal-split { display: grid; grid-template-columns: 1.05fr 1fr; }
-.deal-left { padding: 18px 20px; border-right: 1px solid var(--border); overflow-y: auto; max-height: 66vh; }
+.deal-split { display: grid; grid-template-columns: 1.05fr 1fr; height: 68vh; }
+.deal-left { padding: 18px 20px; border-right: 1px solid var(--border); overflow-y: auto; }
 .deal-section { margin-bottom: 20px; }
 .deal-section:last-of-type { margin-bottom: 8px; }
 .deal-left .form-row { margin-bottom: 12px; }
 .deal-left .form-row input, .deal-left .form-row select, .deal-left .form-row textarea { width: 100%; box-sizing: border-box; }
 .deal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.line-items-table { width: 100%; table-layout: fixed; font-size: 12.5px; }
-.line-items-table th, .line-items-table td { padding: 6px 6px; vertical-align: middle; }
-.line-items-table td > div:first-child { overflow: hidden; text-overflow: ellipsis; }
-.line-items-table input.qty { width: 100%; box-sizing: border-box; padding: 5px 6px; text-align: right; }
+.line-items-table { width: 100%; table-layout: fixed; font-size: 12.5px; border-collapse: collapse; }
+.line-items-table th { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: none; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.line-items-table td { padding: 6px 6px; vertical-align: middle; border-bottom: 1px solid #F3F4F6; }
+.line-items-table th.num, .line-items-table td.num { text-align: right; white-space: nowrap; }
+.line-items-table td:first-child > div:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.line-items-table input.qty { width: 100%; box-sizing: border-box; padding: 5px 6px; text-align: right; font-size: 12.5px; }
+.line-items-table input[type="number"] { -webkit-appearance: none; -moz-appearance: textfield; appearance: none; }
+.line-items-table input[type="number"]::-webkit-outer-spin-button,
+.line-items-table input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .line-items-table .x-btn { border: 0; background: transparent; color: #EF4444; font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; }
-.deal-right { display: flex; flex-direction: column; max-height: 66vh; min-height: 360px; }
+
+.deal-right { display: flex; flex-direction: column; min-height: 0; }
 .section-title { font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: #9CA3AF; margin: 0 0 12px; }
 
 .client-block { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
@@ -585,8 +591,8 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .chat-comments textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 13px; font-family: inherit; outline: none; resize: vertical; min-height: 120px; }
 
 @media (max-width: 860px) {
-  .deal-split { grid-template-columns: 1fr; }
-  .deal-left { border-right: 0; border-bottom: 1px solid var(--border); max-height: none; }
+  .deal-split { grid-template-columns: 1fr; height: auto; }
+  .deal-left { border-right: 0; border-bottom: 1px solid var(--border); }
   .deal-right { max-height: 70vh; }
 }
 

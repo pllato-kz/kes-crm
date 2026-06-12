@@ -1844,9 +1844,7 @@ async function openDealDetail(id) {
           el('td', { class:'num' }, canEdit
             ? el('input', { class:'qty', type:'number', min:'1', value: it.qty, oninput: (e) => { it.qty = Math.max(1, +e.target.value || 1); recalc(); } })
             : String(it.qty)),
-          el('td', { class:'num' }, canEdit
-            ? el('input', { class:'qty', type:'number', min:'0', value: it.priceUsed, oninput: (e) => { it.priceUsed = Math.max(0, +e.target.value || 0); recalc(); } })
-            : fmtMoney(it.priceUsed)),
+          el('td', { class:'num muted' }, fmtMoney(it.priceUsed)),
           sumCell,
           el('td', {}, canEdit ? el('button', { class:'x-btn', title:'Удалить', onclick: () => { d.lineItems.splice(idx, 1); recomputeAmount(); renderItems(); } }, '×') : null),
         ]));
