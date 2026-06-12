@@ -95,6 +95,9 @@ const ICONS = {
   'cpu': '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>',
   'building': '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01M16 6h.01M8 10h.01M16 10h.01M8 14h.01M16 14h.01"/>',
   'receipt': '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M8 7h8M8 11h8M8 15h5"/>',
+  'message': '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  'send': '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+  'phone': '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
 };
 const EMOJI_ICON = {
   '📊':'bar-chart','📈':'trending-up','📥':'inbox','💼':'briefcase','👥':'users','👤':'user',
@@ -107,7 +110,7 @@ const EMOJI_ICON = {
   '🔌':'plug','🧵':'plug','🧰':'tool','🛠':'tool','🔩':'tool','🗄':'archive','🔧':'wrench','🎛':'sliders',
   '🪜':'package','📏':'ruler','🌡':'thermometer','📡':'antenna','🔘':'circle-dot','🚦':'traffic',
   '🔋':'battery','👔':'briefcase','⏻':'power','🚫':'ban','⌕':'search','🛡':'shield','🔥':'flame',
-  '🧲':'magnet','📟':'cpu','🏛':'building','🧾':'receipt',
+  '🧲':'magnet','📟':'cpu','🏛':'building','🧾':'receipt','💬':'message','📨':'send','📞':'phone','📲':'phone',
   '→':'arrow-right','←':'arrow-left','↓':'arrow-down','▲':'chevron-up','▼':'chevron-down','▸':'chevron-right','▾':'chevron-down',
 };
 // 'wrench' если нет — алиас на tool
@@ -1928,6 +1931,7 @@ async function openDealDetail(id) {
     body,
     foot: [
       el('div', { style:'margin-right:auto;font-size:12px;color:#6B7280;display:flex;align-items:center;gap:8px' }, ['Этап:', stageSelect]),
+      el('button', { class: 'btn', onclick: () => openWhatsApp(d) }, '💬 WhatsApp'),
       el('button', { class: 'btn', onclick: () => printInvoice(d) }, '🖨 Печать СФ'),
       (currentUser && currentUser.roleKey === 'director') ? el('button', { class: 'btn btn-danger', onclick: async () => {
         if (!confirm(`Удалить сделку «${d.title}» (№${d.no})?\nСвязанные счета, отгрузки и задачи будут отвязаны. Действие необратимо.`)) return;
@@ -1947,6 +1951,61 @@ async function openDealDetail(id) {
         } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Сохранить') : null,
     ],
+  });
+}
+
+// WhatsApp по сделке через Green API: отправка + история сообщений
+function openWhatsApp(deal) {
+  const cl = clientById(deal.client);
+  const phone = (cl && cl.phone) || '';
+  const status = el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Проверка Green API…');
+  const ta = el('textarea', { rows:4, style:'width:100%' });
+  ta.value = `Здравствуйте${cl && cl.contact ? ', ' + cl.contact : ''}! Пишем по сделке №${deal.no} «${deal.title}».`;
+  const histHost = el('div', { style:'margin-top:12px' }, el('div', { class:'muted', style:'font-size:12px' }, 'История сообщений…'));
+
+  function loadHistory() {
+    window.__API__.apiFetch('greenapi/messages?dealId=' + encodeURIComponent(deal.id)).then(rows => {
+      histHost.innerHTML = '';
+      if (!rows || !rows.length) { histHost.append(el('div', { class:'muted', style:'font-size:12px' }, 'Сообщений пока нет')); return; }
+      histHost.append(el('div', { style:'font-weight:600;font-size:12px;margin-bottom:6px' }, 'Последние сообщения'));
+      rows.forEach(m => histHost.append(el('div', { style:'padding:6px 8px;border:1px solid #E5E7EB;border-radius:8px;margin-bottom:6px' }, [
+        el('div', { style:'font-size:13px' }, m.text),
+        el('div', { class:'muted', style:'font-size:10.5px;margin-top:2px' }, `${m.direction === 'out' ? '→ ' : '← '}${String(m.created_at || '').slice(0, 16)} · ${m.status === 'sent' ? 'отправлено' : m.status}`),
+      ])));
+    }).catch(() => { histHost.innerHTML = ''; });
+  }
+
+  const sendBtn = el('button', { class:'btn btn-primary', onclick: async () => {
+    const text = ta.value.trim();
+    if (!text) { toast('Введите сообщение', 'warn'); return; }
+    sendBtn.disabled = true; const o = sendBtn.textContent; sendBtn.textContent = 'Отправка…';
+    try {
+      await window.__API__.apiFetch('greenapi/send', { method:'POST', body: { dealId: deal.id, text } });
+      toast('Сообщение отправлено', 'success'); ta.value = ''; loadHistory();
+    } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
+    sendBtn.disabled = false; sendBtn.textContent = o;
+  } }, 'Отправить');
+
+  window.__API__.apiFetch('greenapi/status').then(s => {
+    if (s && s.configured) {
+      status.textContent = `Получатель: ${cl ? cl.name : '—'} · ${phone || 'номер не указан'}`;
+    } else {
+      status.innerHTML = '';
+      status.append(el('div', { class:'pill pill-warn', style:'font-size:11px' }, 'Green API не настроен — задайте секреты GREENAPI_INSTANCE и GREENAPI_TOKEN'));
+      sendBtn.disabled = true;
+    }
+  }).catch(() => {});
+
+  loadHistory();
+
+  openModal({
+    title: 'WhatsApp — ' + (cl ? cl.name : 'клиент'),
+    body: el('div', {}, [
+      status,
+      el('div', { class:'form-row' }, [el('label', {}, 'Сообщение'), ta]),
+      histHost,
+    ]),
+    foot: [el('button', { class:'btn', onclick: closeModal }, 'Закрыть'), sendBtn],
   });
 }
 

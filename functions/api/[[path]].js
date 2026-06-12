@@ -143,6 +143,14 @@ export async function onRequest(context) {
     // агрегаты для раздела «Отчёты» (всё из данных CRM)
     if (seg[0] === 'reports' && seg[1] === 'summary' && request.method === 'GET') return reportsSummary(env);
 
+    // интеграция WhatsApp через Green API (сообщения по сделке/клиенту)
+    if (seg[0] === 'greenapi') {
+      if (seg[1] === 'status' && request.method === 'GET') return greenapiStatus(env);
+      if (seg[1] === 'send' && request.method === 'POST') return greenapiSend(env, request, auth);
+      if (seg[1] === 'messages' && request.method === 'GET') return greenapiMessages(env, url);
+      return err(404, 'Неизвестный метод Green API');
+    }
+
     // инвентаризация склада (лист пересчёта → проведение → корректировка остатков)
     if (seg[0] === 'inventory') {
       await ensureInventorySchema(env);
@@ -529,6 +537,110 @@ async function scanOverdueTasks(env) {
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
   return json({ overdue: overdueIds.size });
+}
+
+// --------------------------------------------------------------------------
+// Green API (WhatsApp) — интеграция для раздела «Сделки».
+//   Секреты: GREENAPI_INSTANCE, GREENAPI_TOKEN (wrangler pages secret put).
+//   Лог сообщений — таблица messages (создаётся на лету).
+// --------------------------------------------------------------------------
+async function ensureMessagesSchema(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    deal_id TEXT,
+    client_id TEXT,
+    phone TEXT,
+    direction TEXT,
+    channel TEXT,
+    text TEXT,
+    status TEXT,
+    ext_id TEXT,
+    user_id TEXT,
+    created_at TEXT
+  )`).run();
+}
+
+// Номер телефона -> chatId Green API (формат <digits>@c.us). Нормализуем KZ-номера.
+function toChatId(phone) {
+  let d = String(phone || '').replace(/\D/g, '');
+  if (!d) return null;
+  if (d.length === 10) d = '7' + d;            // 7012345678 -> 77012345678
+  else if (d.length === 11 && d[0] === '8') d = '7' + d.slice(1); // 8XXX -> 7XXX
+  if (d.length < 11) return null;
+  return d + '@c.us';
+}
+
+function greenapiCreds(env) {
+  return { inst: env.GREENAPI_INSTANCE, tok: env.GREENAPI_TOKEN, base: (env.GREENAPI_URL || 'https://api.green-api.com').replace(/\/+$/, '') };
+}
+
+async function greenapiStatus(env) {
+  const { inst, tok } = greenapiCreds(env);
+  return json({ configured: !!(inst && tok) });
+}
+
+async function greenapiMessages(env, url) {
+  await ensureMessagesSchema(env);
+  const dealId = url.searchParams.get('dealId');
+  const clientId = url.searchParams.get('clientId');
+  const where = [], args = [];
+  if (dealId) { where.push('deal_id=?'); args.push(dealId); }
+  if (clientId) { where.push('client_id=?'); args.push(clientId); }
+  const ws = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const r = await env.DB.prepare(`SELECT * FROM messages ${ws} ORDER BY created_at DESC LIMIT 50`).bind(...args).all();
+  return json(r.results);
+}
+
+// Отправка WhatsApp-сообщения по сделке/клиенту через Green API + лог.
+async function greenapiSend(env, request, auth) {
+  await ensureMessagesSchema(env);
+  const b = await request.json().catch(() => ({}));
+  const text = String(b.text || '').trim();
+  if (!text) return err(400, 'Пустое сообщение');
+
+  let phone = b.phone || null;
+  let clientId = b.clientId || null;
+  const dealId = b.dealId || null;
+
+  if ((!phone || !clientId) && dealId) {
+    const d = await env.DB.prepare(
+      'SELECT c.id AS cid, c.phone AS phone FROM deals dd LEFT JOIN clients c ON c.id = dd.client_id WHERE dd.id=?'
+    ).bind(dealId).first();
+    if (d) { phone = phone || d.phone; clientId = clientId || d.cid; }
+  }
+  if (!phone && clientId) {
+    const c = await env.DB.prepare('SELECT phone FROM clients WHERE id=?').bind(clientId).first();
+    phone = c && c.phone;
+  }
+
+  const chatId = toChatId(phone);
+  if (!chatId) return err(400, 'У клиента не указан корректный номер телефона');
+
+  const { inst, tok, base } = greenapiCreds(env);
+  if (!inst || !tok) {
+    return err(503, 'Green API не настроен: задайте секреты GREENAPI_INSTANCE и GREENAPI_TOKEN');
+  }
+
+  let status = 'sent', extId = null, errMsg = null;
+  try {
+    const res = await fetch(`${base}/waInstance${inst}/sendMessage/${tok}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chatId, message: text }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) { status = 'error'; errMsg = 'Green API ' + res.status + (data && data.message ? ': ' + data.message : ''); }
+    else extId = (data && data.idMessage) || null;
+  } catch (e) { status = 'error'; errMsg = String((e && e.message) || e); }
+
+  const id = genId();
+  await env.DB.prepare(
+    `INSERT INTO messages (id, deal_id, client_id, phone, direction, channel, text, status, ext_id, user_id, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))`
+  ).bind(id, dealId, clientId, String(phone), 'out', 'whatsapp', text, status, extId, auth && auth.sub).run();
+
+  if (status === 'error') return err(502, errMsg || 'Не удалось отправить сообщение');
+  return json({ ok: true, id, idMessage: extId, chatId });
 }
 
 // Агрегаты раздела «Отчёты» — считаются в SQL по данным CRM (сделки/позиции).
