@@ -306,6 +306,7 @@ async function dataRoute({ request, env }, seg, url, auth) {
   if (resource === 'deals' && id && seg[2] === 'history' && method === 'GET') return dealHistory(env, id);
   if (resource === 'deals' && method === 'GET' && id) return getDeal(env, id);
   if (resource === 'deals' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeDeal(env, request, method, id, auth);
+  if (resource === 'deals' && method === 'DELETE' && id) return deleteDeal(env, id, auth);
   if (resource === 'clients' && method === 'GET') return id ? getClient(env, id) : listClients(env, url);
   if (resource === 'clients' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeClient(env, request, method, id);
   if (resource === 'leads' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeLead(env, request, method, id);
@@ -466,6 +467,23 @@ async function warehouseSummary(env) {
 }
 
 // --------------------------------------------------------------------------
+// Удаление сделки: отвязываем счета/отгрузки/задачи, чистим позиции и историю.
+// Доступ: директор или менеджер-владелец сделки.
+async function deleteDeal(env, id, auth) {
+  const d = await env.DB.prepare(`SELECT id, manager_id FROM deals WHERE id=?`).bind(id).first();
+  if (!d) return err(404, 'Сделка не найдена');
+  if (auth.role !== 'director' && d.manager_id !== auth.sub) return err(403, 'Можно удалять только свои сделки');
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE invoices SET deal_id=NULL WHERE deal_id=?`).bind(id),
+    env.DB.prepare(`UPDATE shipments SET deal_id=NULL WHERE deal_id=?`).bind(id),
+    env.DB.prepare(`UPDATE tasks SET deal_id=NULL WHERE deal_id=?`).bind(id),
+    env.DB.prepare(`DELETE FROM deal_items WHERE deal_id=?`).bind(id),
+    env.DB.prepare(`DELETE FROM deal_stage_history WHERE deal_id=?`).bind(id),
+    env.DB.prepare(`DELETE FROM deals WHERE id=?`).bind(id),
+  ]);
+  return json({ deleted: 1, id });
+}
+
 // Сделки: позиции (deal_items) вложены в объект сделки
 // --------------------------------------------------------------------------
 async function getDeal(env, id) {
