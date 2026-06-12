@@ -662,8 +662,8 @@ function openNewInvoice() {
 // ============================================================
 // DETAIL MODALS — продукт / отгрузка / счёт / поставщик / уведомления
 // ============================================================
-function openProductDetail(id) {
-  const p = byId(state.products, id);
+function openProductDetail(idOrProduct) {
+  const p = (idOrProduct && typeof idOrProduct === 'object') ? idOrProduct : byId(state.products, idOrProduct);
   if (!p) return;
   const cat = categoryById(p.cat);
   const free = p.stock - p.reserved;
@@ -1809,103 +1809,95 @@ function openClientDetail(id) {
 // ============================================================
 VIEWS.catalog = () => {
   const wrap = el('div');
+  const sub = el('div', { class: 'sub' }, 'Загрузка…');
   wrap.append(el('div', { class: 'page-head' }, [
-    el('div', {}, [
-      el('h1', {}, 'Каталог номенклатуры'),
-      el('div', { class: 'sub' }, `${state.categories.length} категорий · ${state.products.length} SKU в демо (~1100 в проде)`),
-    ]),
+    el('div', {}, [el('h1', {}, 'Каталог номенклатуры'), sub]),
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn', onclick: () => openImport('products') }, '📥 Импорт прайса EKF'),
       el('button', { class: 'btn btn-primary', onclick: openNewProduct }, '+ Товар'),
     ]),
   ]));
 
-  // Категории плиткой
-  const filterCat = { id: null };
+  const q = { q: '', category: '', brand: '', page: 1, limit: 50, total: 0 };
+
+  // Категории (серверный подсчёт)
   wrap.append(el('div', { style:'font-weight:600;margin:8px 0 12px;font-size:14px' }, 'Категории'));
-  const tiles = el('div', { class: 'cat-grid' });
-  state.categories.forEach(c => {
-    const tile = el('div', { class: 'cat-tile' }, [
-      el('div', { class:'cat-icon' }, c.icon),
-      el('div', { class:'cat-name' }, c.name),
-      el('div', { class:'cat-count' }, c.count + ' SKU'),
-    ]);
-    tile.onclick = () => {
-      filterCat.id = filterCat.id === c.id ? null : c.id;
-      $$('.cat-tile', wrap).forEach(t => t.classList.remove('active'));
-      if (filterCat.id) tile.classList.add('active');
-      refresh();
-      if (filterCat.id) {
-        toast(`Фильтр: ${c.name}`, 'info');
-        // прокрутка к таблице
-        wrap.querySelector('.table-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      } else {
-        toast('Фильтр снят', 'info');
-      }
-    };
-    tiles.append(tile);
-  });
-  wrap.append(tiles);
+  const tilesHost = el('div', { class: 'cat-grid' });
+  wrap.append(tilesHost);
 
-  // Таблица товаров
-  const productsTitle = el('div', { style:'font-weight:600;margin:24px 0 12px;font-size:14px' }, 'Все товары (демо ' + state.products.length + ')');
-  wrap.append(productsTitle);
-  const tw = el('div', { class: 'table-wrap' });
-  const searchI = el('input', { placeholder:'Поиск по артикулу или названию…', oninput: e => { filterQ = e.target.value.toLowerCase(); refresh(); } });
-  const catSel = el('select', { onchange: e => { filterCat.id = e.target.value || null; refresh(); } },
-    [el('option', { value:'' }, 'Все категории')].concat(state.categories.map(c => el('option', { value: c.id }, c.name))));
-  const brandSel = el('select', { onchange: e => { filterBrand = e.target.value; refresh(); } },
+  // Тулбар: поиск + бренд
+  const searchI = el('input', { placeholder:'Поиск по артикулу или названию…' });
+  const brandSel = el('select', {},
     [el('option', { value:'' }, 'Все бренды'), el('option', { value:'EKF' }, 'EKF'), el('option', { value:'KazКабель' }, 'KazКабель'), el('option', { value:'WAGO' }, 'WAGO'), el('option', { value:'КВТ' }, 'КВТ')]);
-  let filterQ = '';
-  let filterBrand = '';
-
-  tw.append(el('div', { class: 'table-toolbar' }, [searchI, catSel, brandSel]));
-  const t = el('table', { class:'data' });
-  t.append(el('thead', {}, el('tr', {}, [
-    el('th', {}, 'Артикул'),
-    el('th', {}, 'Наименование'),
-    el('th', {}, 'Бренд'),
-    el('th', { class:'num' }, 'Закуп'),
-    el('th', { class:'num' }, 'Опт'),
-    el('th', { class:'num' }, 'Розница'),
-    el('th', {}, 'Остаток'),
-  ])));
-  t.append(buildPRows(state.products));
-  tw.append(t);
+  const tw = el('div', { class: 'table-wrap' });
+  tw.append(el('div', { class: 'table-toolbar' }, [searchI, brandSel]));
+  const tableHost = el('div');
+  tw.append(tableHost);
   wrap.append(tw);
+  const pager = el('div', { class:'row', style:'justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px' });
+  wrap.append(pager);
 
-  function buildPRows(list) {
-    return el('tbody', {}, list.length ? list.map(p => {
-      const free = p.stock - p.reserved;
-      return el('tr', { onclick: () => openProductDetail(p.id) }, [
-        el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, p.sku),
-        el('td', { class:'strong' }, p.image
-          ? el('span', { style:'display:inline-flex;align-items:center;gap:8px' }, [
-              el('img', { src: p.image, alt: '', style:'width:28px;height:28px;object-fit:cover;border-radius:4px;border:1px solid #E5E7EB' }),
-              p.name,
-            ])
-          : p.name),
-        el('td', {}, el('span', { class:'tag' }, p.brand)),
-        el('td', { class:'num muted' }, fmtMoney(p.priceCost)),
-        el('td', { class:'num' }, fmtMoney(p.priceWholesale)),
-        el('td', { class:'num strong' }, fmtMoney(p.priceRetail)),
-        el('td', {}, stockIndicator(free, p.stock)),
+  let deb;
+  searchI.oninput = (e) => { clearTimeout(deb); const v = e.target.value; deb = setTimeout(() => { q.q = v; q.page = 1; loadProducts(); }, 300); };
+  brandSel.onchange = (e) => { q.brand = e.target.value; q.page = 1; loadProducts(); };
+
+  async function loadCats() {
+    try {
+      const cats = await window.__API__.apiFetch('catalog/categories');
+      tilesHost.innerHTML = '';
+      const mkTile = (id, icon, name, count) => el('div', { class: 'cat-tile' + (q.category === id ? ' active' : ''), onclick: () => { q.category = id; q.page = 1; loadCats(); loadProducts(); wrap.querySelector('.table-wrap') && wrap.querySelector('.table-wrap').scrollIntoView({ behavior:'smooth', block:'start' }); } }, [
+        el('div', { class:'cat-icon' }, icon), el('div', { class:'cat-name' }, name), el('div', { class:'cat-count' }, count + ' SKU'),
       ]);
-    }) : [el('tr', {}, el('td', { colspan: 7, class:'empty', style:'padding:30px;text-align:center' }, 'По фильтру ничего не найдено'))]);
+      tilesHost.append(mkTile('', '🗂', 'Все категории', cats.reduce((s, c) => s + c.count, 0)));
+      cats.forEach(c => tilesHost.append(mkTile(c.id, c.icon || '📁', c.name, c.count)));
+    } catch (e) { tilesHost.innerHTML = ''; tilesHost.append(el('div', { class:'muted' }, 'Категории недоступны')); }
   }
-  function refresh() {
-    catSel.value = filterCat.id || '';
-    const visible = state.products.filter(p => {
-      if (filterCat.id && p.cat !== filterCat.id) return false;
-      if (filterBrand && p.brand !== filterBrand) return false;
-      if (filterQ && !(p.name + p.sku).toLowerCase().includes(filterQ)) return false;
-      return true;
-    });
-    productsTitle.textContent = filterCat.id
-      ? `${categoryById(filterCat.id).name} (${visible.length})`
-      : 'Все товары (' + visible.length + ')';
-    t.querySelector('tbody')?.replaceWith(buildPRows(visible));
+
+  async function loadProducts() {
+    tableHost.innerHTML = ''; tableHost.append(el('div', { class:'muted', style:'padding:14px' }, 'Загрузка…'));
+    try {
+      const qs = `q=${encodeURIComponent(q.q)}&category=${encodeURIComponent(q.category)}&brand=${encodeURIComponent(q.brand)}&page=${q.page}&limit=${q.limit}`;
+      const r = await window.__API__.apiFetch('products?' + qs);
+      q.total = r.total || 0;
+      sub.textContent = `${q.total} позиций` + (q.category ? ' в категории' : '');
+      const t = el('table', { class:'data' });
+      t.append(el('thead', {}, el('tr', {}, [
+        el('th', {}, 'Артикул'), el('th', {}, 'Наименование'), el('th', {}, 'Бренд'),
+        el('th', { class:'num' }, 'Опт'), el('th', { class:'num' }, 'Розница'), el('th', {}, 'Остаток'),
+      ])));
+      const rows = (r.data || []).map(row => {
+        const p = window.__API__.map.product(row);
+        return el('tr', { onclick: () => openProductDetail(p) }, [
+          el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, p.sku),
+          el('td', { class:'strong' }, p.image
+            ? el('span', { style:'display:inline-flex;align-items:center;gap:8px' }, [el('img', { src:p.image, alt:'', style:'width:28px;height:28px;object-fit:cover;border-radius:4px;border:1px solid #E5E7EB' }), p.name])
+            : p.name),
+          el('td', {}, el('span', { class:'tag' }, p.brand || '—')),
+          el('td', { class:'num' }, fmtMoney(p.priceWholesale)),
+          el('td', { class:'num strong' }, fmtMoney(p.priceRetail)),
+          el('td', {}, stockIndicator(p.stock - p.reserved, p.stock)),
+        ]);
+      });
+      t.append(el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 6, class:'muted', style:'text-align:center;padding:24px' }, 'Ничего не найдено'))]));
+      tableHost.innerHTML = ''; tableHost.append(t);
+      renderPager();
+    } catch (e) { tableHost.innerHTML = ''; tableHost.append(el('div', { class:'pill pill-danger' }, 'Ошибка загрузки: ' + ((e && e.message) || e))); }
   }
+
+  function renderPager() {
+    const pages = Math.max(1, Math.ceil(q.total / q.limit));
+    pager.innerHTML = '';
+    pager.append(
+      el('div', { class:'muted', style:'font-size:12px' }, `Найдено: ${q.total} · стр. ${q.page} из ${pages}`),
+      el('div', { class:'row', style:'gap:6px' }, [
+        el('button', { class:'btn btn-sm', disabled: q.page <= 1 ? 'disabled' : null, onclick: () => { if (q.page > 1) { q.page--; loadProducts(); } } }, '← Назад'),
+        el('button', { class:'btn btn-sm', disabled: q.page >= pages ? 'disabled' : null, onclick: () => { if (q.page < pages) { q.page++; loadProducts(); } } }, 'Вперёд →'),
+      ]),
+    );
+  }
+
+  loadCats();
+  loadProducts();
   return wrap;
 };
 
@@ -2451,6 +2443,8 @@ VIEWS.settings = () => {
       b.disabled = true; const old = b.textContent;
       let skip = 0, created = 0, updated = 0, fetched = 0, page = 0;
       try {
+        b.textContent = 'Категории…';
+        await window.__API__.apiFetch('sync/1c/categories', { method: 'POST' });
         while (true) {
           page++;
           b.textContent = `Импорт… ${fetched}`;

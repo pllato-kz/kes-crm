@@ -104,6 +104,7 @@ export async function onRequest(context) {
       if (auth.role !== 'director') return err(403, 'Только директор может запускать синхронизацию');
       if (seg[1] === 'status' && request.method === 'GET') return syncStatus(env);
       if (seg[1] === '1c' && seg[2] === 'clients' && request.method === 'POST') return syncClients(env);
+      if (seg[1] === '1c' && seg[2] === 'categories' && request.method === 'POST') return syncCategories(env);
       if (seg[1] === '1c' && seg[2] === 'products' && request.method === 'POST') {
         const u = new URL(request.url);
         const lim = parseInt(u.searchParams.get('limit'), 10);
@@ -126,6 +127,9 @@ export async function onRequest(context) {
 
     // данные: всё требует валидный токен
     if (!auth) return err(401, 'Требуется авторизация');
+
+    // категории каталога с подсчётом товаров (для плиток)
+    if (seg[0] === 'catalog' && seg[1] === 'categories' && request.method === 'GET') return catalogCategories(env);
 
     // управление пользователями (создание/изменение/удаление) — только директор
     const res = ALIASES[seg[0]] || seg[0];
@@ -712,10 +716,11 @@ async function syncProducts(env, limit, skip) {
   const base = 'Catalog_Номенклатура?$format=json'
     + '&$filter=DeletionMark eq false and IsFolder eq false and Услуга eq false'
     + '&$orderby=Ref_Key'
-    + '&$select=Ref_Key,Code,Артикул,Description';
+    + '&$select=Ref_Key,Code,Артикул,Description,Parent_Key';
 
   const data = await odataGet(env, `${base}&$top=${top}&$skip=${off}`);
   const rows = data.value || [];
+  const ZERO = '00000000-0000-0000-0000-000000000000';
 
   const before = (await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first()).n;
   const stmts = [];
@@ -725,11 +730,12 @@ async function syncProducts(env, limit, skip) {
     const sku = (String(r['Артикул'] || '').trim() || String(r.Code || '').trim() || ref);
     const name = String(r.Description || '').trim();
     if (!ref || !name) continue;
+    const cat = r.Parent_Key && r.Parent_Key !== ZERO ? r.Parent_Key : null;
     processed++;
     stmts.push(env.DB.prepare(
-      `INSERT INTO products (id, sku, name, unit, ext_ref) VALUES (?,?,?,?,?)
-       ON CONFLICT(sku) DO UPDATE SET name=excluded.name, ext_ref=excluded.ext_ref`
-    ).bind(genId(), sku, name, 'шт', ref));
+      `INSERT INTO products (id, sku, name, unit, ext_ref, category_id) VALUES (?,?,?,?,?,?)
+       ON CONFLICT(sku) DO UPDATE SET name=excluded.name, ext_ref=excluded.ext_ref, category_id=excluded.category_id`
+    ).bind(genId(), sku, name, 'шт', ref, cat));
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
@@ -744,6 +750,48 @@ async function syncProducts(env, limit, skip) {
   ).bind(`обработано до ${off + rows.length}` + (done ? ' (готово)' : ' (идёт…)')).run();
 
   return json({ fetched: rows.length, created, updated, next: off + rows.length, done });
+}
+
+// Папки номенклатуры 1С -> категории товаров (id = Ref_Key папки)
+async function syncCategories(env) {
+  let skip = 0, fetched = 0, upserted = 0;
+  const base = 'Catalog_Номенклатура?$format=json'
+    + '&$filter=DeletionMark eq false and IsFolder eq true'
+    + '&$orderby=Ref_Key&$select=Ref_Key,Description';
+  while (true) {
+    const data = await odataGet(env, `${base}&$top=1000&$skip=${skip}`);
+    const rows = data.value || [];
+    if (!rows.length) break;
+    const stmts = [];
+    for (const r of rows) {
+      const id = r.Ref_Key, name = String(r.Description || '').trim();
+      if (!id || !name) continue;
+      stmts.push(env.DB.prepare(
+        `INSERT INTO product_categories (id, name, icon) VALUES (?,?,'📁')
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name`
+      ).bind(id, name));
+      upserted++;
+    }
+    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+    fetched += rows.length;
+    if (rows.length < 1000) break;
+    skip += rows.length;
+  }
+  await env.DB.prepare(
+    `INSERT INTO sync_state (entity, last_at, info) VALUES ('categories_1c', datetime('now'), ?)
+     ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+  ).bind(`категорий ${upserted}`).run();
+  return json({ fetched, upserted });
+}
+
+// Категории каталога с числом товаров (только непустые) — для плиток каталога
+async function catalogCategories(env) {
+  const r = await env.DB.prepare(
+    `SELECT c.id, c.name, c.icon, COUNT(p.id) AS count
+       FROM product_categories c JOIN products p ON p.category_id = c.id
+      GROUP BY c.id, c.name, c.icon HAVING count > 0 ORDER BY c.name`
+  ).all();
+  return json(r.results);
 }
 
 // --------------------------------------------------------------------------
