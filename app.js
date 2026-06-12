@@ -1845,12 +1845,14 @@ VIEWS.catalog = () => {
 
   async function loadCats() {
     try {
-      const cats = await window.__API__.apiFetch('catalog/categories');
+      const resp = await window.__API__.apiFetch('catalog/categories');
+      const cats = resp.categories || resp || [];
+      const total = resp.total != null ? resp.total : cats.reduce((s, c) => s + c.count, 0);
       tilesHost.innerHTML = '';
       const mkTile = (id, icon, name, count) => el('div', { class: 'cat-tile' + (q.category === id ? ' active' : ''), onclick: () => { q.category = id; q.page = 1; loadCats(); loadProducts(); wrap.querySelector('.table-wrap') && wrap.querySelector('.table-wrap').scrollIntoView({ behavior:'smooth', block:'start' }); } }, [
         el('div', { class:'cat-icon' }, icon), el('div', { class:'cat-name' }, name), el('div', { class:'cat-count' }, count + ' SKU'),
       ]);
-      tilesHost.append(mkTile('', '🗂', 'Все категории', cats.reduce((s, c) => s + c.count, 0)));
+      tilesHost.append(mkTile('', '🗂', 'Все товары', total));
       cats.forEach(c => tilesHost.append(mkTile(c.id, c.icon || '📁', c.name, c.count)));
     } catch (e) { tilesHost.innerHTML = ''; tilesHost.append(el('div', { class:'muted' }, 'Категории недоступны')); }
   }
