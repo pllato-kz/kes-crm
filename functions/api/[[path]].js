@@ -304,6 +304,9 @@ async function dataRoute({ request, env }, seg, url, auth) {
   const id = seg[1];
   const method = request.method;
 
+  // задачи: расширенные поля (описание/дата начала/статус/комментарии) — добавляем на лету
+  if (resource === 'tasks') await ensureTaskColumns(env);
+
   // изменять роли (матрицу доступа) может только директор
   if (resource === 'roles' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     if (!auth || auth.role !== 'director') return err(403, 'Менять доступы по ролям может только директор');
@@ -461,6 +464,19 @@ async function listProducts(env, url) {
   ).bind(...args, limit, offset).all();
 
   return json({ data: rows.results, total: total ? total.n : 0, page, limit });
+}
+
+// Расширенные поля задачи (добавляются на лету, один раз на изолят).
+let TASKS_SCHEMA_OK = false;
+async function ensureTaskColumns(env) {
+  if (TASKS_SCHEMA_OK) return;
+  for (const ddl of [
+    'ALTER TABLE tasks ADD COLUMN description TEXT',
+    'ALTER TABLE tasks ADD COLUMN start_date TEXT',
+    'ALTER TABLE tasks ADD COLUMN status TEXT',
+    'ALTER TABLE tasks ADD COLUMN comments TEXT',
+  ]) { try { await env.DB.prepare(ddl).run(); } catch (e) { /* уже есть */ } }
+  TASKS_SCHEMA_OK = true;
 }
 
 // Уведомления — адресные (user_id) + широковещательные (user_id IS NULL).
