@@ -1664,6 +1664,7 @@ VIEWS.deals = () => {
     el('div', {}, [el('h1', {}, 'Сделки'), subEl]),
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn', onclick: () => { DEALS_VIEW = isList ? 'kanban' : 'list'; navigate('deals'); } }, isList ? '🗂 Канбан' : '📋 Список'),
+      (currentUser && currentUser.roleKey === 'director') ? el('button', { class: 'btn', onclick: openStageManager }, '⚙ Этапы') : null,
       el('button', { class: 'btn btn-primary', onclick: () => openNewDeal() }, '+ Сделка'),
     ]),
   ]));
@@ -1818,6 +1819,56 @@ VIEWS.deals = () => {
   renderContent();
   return wrap;
 };
+
+// Управление этапами воронки (директор): добавление / переименование / цвет / удаление
+function openStageManager() {
+  const working = STAGES.map(s => ({ id: s.id, label: s.label, color: s.color || '#00A6E2' }));
+  const origIds = new Set(STAGES.map(s => s.id));
+  const listHost = el('div');
+
+  function renderRows() {
+    listHost.innerHTML = '';
+    if (!working.length) listHost.append(el('div', { class:'muted', style:'font-size:12px;padding:6px 0' }, 'Нет этапов — добавьте хотя бы один.'));
+    working.forEach((s, idx) => {
+      const colorI = el('input', { type:'color', value: s.color, title:'Цвет', style:'width:38px;height:34px;padding:2px;flex:none' });
+      colorI.oninput = () => { s.color = colorI.value; };
+      const labelI = el('input', { value: s.label, placeholder:'Название этапа', style:'flex:1;min-width:120px' });
+      labelI.oninput = () => { s.label = labelI.value; };
+      const delB = el('button', { class:'btn btn-sm btn-danger', title:'Удалить этап', onclick: () => { working.splice(idx, 1); renderRows(); } }, '×');
+      listHost.append(el('div', { class:'row', style:'gap:8px;align-items:center;margin-bottom:8px' }, [colorI, labelI, delB]));
+    });
+  }
+  renderRows();
+
+  const addBtn = el('button', { class:'btn btn-sm', style:'margin-top:4px', onclick: () => { working.push({ id:null, label:'', color:'#9CA3AF' }); renderRows(); } }, '+ Добавить этап');
+  const saveBtn = el('button', { class:'btn btn-primary', onclick: async () => {
+    if (!working.length) { toast('Должен остаться хотя бы один этап', 'warn'); return; }
+    if (working.some(s => !s.label.trim())) { toast('У всех этапов должно быть название', 'warn'); return; }
+    saveBtn.disabled = true; const o = saveBtn.textContent; saveBtn.textContent = 'Сохранение…';
+    try {
+      const keepIds = new Set(working.filter(s => s.id).map(s => s.id));
+      for (const id of origIds) if (!keepIds.has(id)) await window.__API__.apiFetch('deal_stages/' + encodeURIComponent(id), { method:'DELETE' });
+      let sort = 0;
+      for (const s of working) {
+        const body = { label: s.label.trim(), color: s.color, sort: sort++ };
+        if (s.id && origIds.has(s.id)) await window.__API__.apiFetch('deal_stages/' + encodeURIComponent(s.id), { method:'PUT', body });
+        else await window.__API__.apiFetch('deal_stages', { method:'POST', body });
+      }
+      toast('Этапы сохранены', 'success');
+      closeModal(); await loadData(); navigate('deals');
+    } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); saveBtn.disabled = false; saveBtn.textContent = o; }
+  } }, 'Сохранить');
+
+  openModal({
+    title: 'Этапы воронки',
+    body: el('div', {}, [
+      el('p', { class:'muted', style:'font-size:12px;margin:0 0 12px' }, 'Цвет, название, добавление и удаление этапов. Сделки удалённого этапа автоматически переносятся на первый этап.'),
+      listHost,
+      addBtn,
+    ]),
+    foot: [el('button', { class:'btn', onclick: closeModal }, 'Закрыть'), saveBtn],
+  });
+}
 
 async function openDealDetail(id) {
   const d = byId(state.deals, id);
