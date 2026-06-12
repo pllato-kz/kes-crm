@@ -2067,7 +2067,7 @@ async function openDealDetail(id) {
   openModal({
     wide: true,
     title: 'Сделка №' + d.no + ' · ' + d.title,
-    body: el('div', {}, [funnel, el('div', { class:'deal-split' }, [left, right])]),
+    body: el('div', { class:'deal-modal' }, [funnel, el('div', { class:'deal-split' }, [left, right])]),
     foot: [
       el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
       canEdit ? el('button', { class:'btn btn-primary', onclick: async () => {
