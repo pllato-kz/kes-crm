@@ -523,8 +523,15 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 }
 
 /* ---------- Карточка сделки (широкое модальное окно) ---------- */
-.modal.modal-xl { max-width: 1060px; width: 96vw; }
-.modal.modal-xl .modal-body { padding: 0; }
+.modal.modal-xl { max-width: 1200px; width: 96vw; height: 90vh; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+.modal.modal-xl .modal-head { flex: none; }
+.modal.modal-xl .modal-body { flex: 1; min-height: 0; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.modal.modal-xl .modal-foot { flex: none; }
+.deal-modal { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.deal-modal .funnel-steps { flex: none; }
+/* убираем скроллбары внутри карточки сделки (скролл остаётся) */
+.modal.modal-xl * { scrollbar-width: none; }
+.modal.modal-xl *::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
 .funnel-steps { display: flex; gap: 3px; padding: 14px 18px; border-bottom: 1px solid var(--border); overflow-x: auto; }
 .funnel-step {
@@ -537,7 +544,7 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .funnel-step.done { background: #DBEAFE; color: #1D4ED8; }
 .funnel-step.active { background: var(--brand); color: #fff; }
 
-.deal-split { display: grid; grid-template-columns: 1.05fr 1fr; height: 68vh; }
+.deal-split { display: grid; grid-template-columns: 1.05fr 1fr; flex: 1; min-height: 0; }
 .deal-left { padding: 18px 20px; border-right: 1px solid var(--border); overflow-y: auto; }
 .deal-section { margin-bottom: 20px; }
 .deal-section:last-of-type { margin-bottom: 8px; }
