@@ -1912,10 +1912,7 @@ async function openDealDetail(id) {
   recomputeAmount = (function (orig) { return function () { orig(); amountI.value = Math.round(d.amount || 0); dealItemsTotal.textContent = fmtMoney(d.amount); }; })(recomputeAmount);
   const mgrSel = el('select');
   state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.manager) o.selected = true; mgrSel.append(o); });
-  const coMgrSel = el('select');
-  coMgrSel.append(el('option', { value:'' }, '— не назначен —'));
-  state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.coManager) o.selected = true; coMgrSel.append(o); });
-  if (!canEdit) [titleI, amountI, mgrSel, coMgrSel].forEach(i => i.disabled = true);
+  if (!canEdit) [titleI, amountI, mgrSel].forEach(i => i.disabled = true);
 
   // ----- Клиент: редактируемый, с заменой (поиск/выбор) -----
   let currentClient = clx;
@@ -1969,8 +1966,7 @@ async function openDealDetail(id) {
       fieldRow('Название', titleI),
       el('div', { class:'form-row' }, [el('label', {}, 'Клиент'), clientHost]),
       fieldRow('Сумма, ₸', amountI),
-      fieldRow('Ответственный', mgrSel),
-      fieldRow('Отв. менеджер', coMgrSel),
+      fieldRow('Отв. менеджер', mgrSel),
     ]),
     el('div', { class:'deal-actions' }, [printBtn, delBtn]),
   ]);
@@ -2080,7 +2076,6 @@ async function openDealDetail(id) {
         d.stage = chosenStage;
         d.title = titleI.value.trim() || d.title;
         d.manager = mgrSel.value;
-        d.coManager = coMgrSel.value || null;
         d.comments = commentsTA.value;
         if (!(d.lineItems && d.lineItems.length)) d.amount = Number(amountI.value) || 0;
         try {
