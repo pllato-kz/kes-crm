@@ -1404,19 +1404,24 @@ function stockIndicator(free, total) {
 // ============================================================
 // VIEW: DEALS (kanban)
 // ============================================================
+let DEALS_VIEW = 'kanban'; // 'kanban' | 'list' — режим отображения сделок
+
 VIEWS.deals = () => {
   const wrap = el('div');
   const myDeals = visibleDeals();
+  const isList = DEALS_VIEW === 'list';
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Сделки'),
-      el('div', { class: 'sub' }, `${myDeals.length} ${role().seeAllData ? 'активных' : 'ваших активных'} · общая сумма ${fmtMoneyK(myDeals.reduce((s,d)=>s+d.amount,0))} · 💡 перетаскивайте карточки между этапами`),
+      el('div', { class: 'sub' }, `${myDeals.length} ${role().seeAllData ? 'активных' : 'ваших активных'} · общая сумма ${fmtMoneyK(myDeals.reduce((s,d)=>s+d.amount,0))}` + (isList ? '' : ' · 💡 перетаскивайте карточки между этапами')),
     ]),
     el('div', { class: 'actions' }, [
-      el('button', { class: 'btn', onclick: () => toast('Переключение список/Kanban — добавлю отдельный list-view', 'info') }, '📋 Список'),
+      el('button', { class: 'btn', onclick: () => { DEALS_VIEW = isList ? 'kanban' : 'list'; navigate('deals'); } }, isList ? '🗂 Канбан' : '📋 Список'),
       el('button', { class: 'btn btn-primary', onclick: () => openNewDeal() }, '+ Сделка'),
     ]),
   ]));
+
+  if (isList) { wrap.append(renderDealsList(myDeals)); return wrap; }
 
   let dragged = null;
 
@@ -1485,6 +1490,57 @@ VIEWS.deals = () => {
   wrap.append(kanban);
   return wrap;
 };
+
+// Табличный вид сделок (toggle «Список») — поиск, фильтр по этапу, сортировка по дате
+function renderDealsList(deals) {
+  const tw = el('div', { class: 'table-wrap' });
+  const searchI = el('input', { placeholder:'Поиск по №, названию, клиенту…', style:'flex:1;min-width:160px' });
+  const stageSel = el('select', {}, [el('option', { value:'' }, 'Все этапы'), ...STAGES.map(s => el('option', { value:s.id }, s.label))]);
+  tw.append(el('div', { class:'table-toolbar' }, [searchI, stageSel]));
+  const host = el('div');
+  tw.append(host);
+
+  function render() {
+    const q = searchI.value.trim().toLowerCase();
+    const st = stageSel.value;
+    const list = deals
+      .filter(d => !st || d.stage === st)
+      .filter(d => {
+        if (!q) return true;
+        const cl = clientById(d.client);
+        return String(d.no || '').toLowerCase().includes(q)
+          || String(d.title || '').toLowerCase().includes(q)
+          || String(cl && cl.name || '').toLowerCase().includes(q);
+      })
+      .sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')));
+
+    const t = el('table', { class:'data' });
+    t.append(el('thead', {}, el('tr', {}, [
+      el('th', {}, '№'), el('th', {}, 'Сделка'), el('th', {}, 'Клиент'), el('th', {}, 'Менеджер'),
+      el('th', {}, 'Этап'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Срок'),
+    ])));
+    t.append(el('tbody', {}, list.length ? list.map(d => {
+      const cl = clientById(d.client);
+      const m = userById(d.manager);
+      const s = stageById(d.stage);
+      return el('tr', { style:'cursor:pointer', onclick: () => openDealDetail(d.id) }, [
+        el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, '№' + d.no),
+        el('td', { class:'strong' }, d.title),
+        el('td', {}, cl ? cl.name : '—'),
+        el('td', {}, el('span', { class:'avatar', style:`background:${m.color};width:26px;height:26px;font-size:11px`, title:m.name }, m.avatar)),
+        el('td', {}, el('span', { class:'pill', style:`background:${s.color}22;color:${s.color}` }, s.label)),
+        el('td', { class:'num strong' }, fmtMoneyK(d.amount)),
+        el('td', { class:'muted' }, d.target ? fmtDate(d.target) : '—'),
+      ]);
+    }) : [el('tr', {}, el('td', { colspan:7, class:'muted', style:'text-align:center;padding:24px' }, 'Сделок не найдено'))]));
+    host.innerHTML = ''; host.append(t);
+  }
+
+  let sd; searchI.oninput = () => { clearTimeout(sd); sd = setTimeout(render, 200); };
+  stageSel.onchange = render;
+  render();
+  return tw;
+}
 
 async function openDealDetail(id) {
   const d = byId(state.deals, id);
