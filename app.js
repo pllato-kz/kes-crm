@@ -2647,173 +2647,165 @@ VIEWS.tasks = () => {
 // ============================================================
 VIEWS.reports = () => {
   const wrap = el('div');
+  const now = new Date();
+  const monthName = now.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
   wrap.append(el('div', { class:'page-head' }, [
-    el('div', {}, [el('h1', {}, 'Отчёты'), el('div', { class:'sub' }, 'Май 2026 · ABC-анализ клиентов, продажи по менеджерам и категориям')]),
+    el('div', {}, [el('h1', {}, 'Отчёты'), el('div', { class:'sub' }, `${monthName} · по данным CRM (выигранные сделки: оплата/отгрузка/закрытие)`)]),
     el('div', { class:'actions' }, [el('button', { class:'btn', onclick: () => exportReportPDF() }, '📥 Экспорт PDF')]),
   ]));
 
-  // Продажи по неделям — line chart
+  // helper: «YYYY-MM» -> «мес ГГ»
+  const MON = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+  const monLabel = (m) => { const [y, mm] = String(m).split('-'); return (MON[(+mm) - 1] || m) + ' ' + String(y).slice(2); };
+  const noData = (text) => el('div', { class:'muted', style:'padding:28px;text-align:center' }, text);
+
+  // Выручка по месяцам — line
   const card1 = el('div', { class:'card' });
-  card1.append(el('div', { class:'card-head' }, el('h3', {}, 'Продажи по неделям мая (млн ₸)')));
-  const cv1 = el('canvas', { style:'max-height:260px' });
-  card1.append(el('div', { style:'padding:8px 4px' }, cv1));
+  card1.append(el('div', { class:'card-head' }, el('h3', {}, 'Выручка по месяцам (млн ₸)')));
+  const host1 = el('div', { style:'padding:8px 4px' }, noData('Загрузка…'));
+  card1.append(host1);
   wrap.append(card1);
 
-  // Двойной ряд: pie + bar
   const rowCharts = el('div', { class:'grid grid-2 mt-16' });
   const cardCat = el('div', { class:'card' });
   cardCat.append(el('div', { class:'card-head' }, el('h3', {}, 'Доля продаж по категориям')));
-  const cv2 = el('canvas', { style:'max-height:260px' });
-  cardCat.append(el('div', { style:'padding:8px 4px' }, cv2));
+  const host2 = el('div', { style:'padding:8px 4px' }, noData('Загрузка…'));
+  cardCat.append(host2);
   rowCharts.append(cardCat);
 
   const cardMgr = el('div', { class:'card' });
-  cardMgr.append(el('div', { class:'card-head' }, el('h3', {}, 'Менеджеры — факт vs план')));
-  const cv3 = el('canvas', { style:'max-height:260px' });
-  cardMgr.append(el('div', { style:'padding:8px 4px' }, cv3));
+  cardMgr.append(el('div', { class:'card-head' }, el('h3', {}, 'Продажи по менеджерам (млн ₸)')));
+  const host3 = el('div', { style:'padding:8px 4px' }, noData('Загрузка…'));
+  cardMgr.append(host3);
   rowCharts.append(cardMgr);
   wrap.append(rowCharts);
 
-  // Рисуем графики после вставки в DOM
-  setTimeout(() => {
-    if (!window.Chart) return;
-    const brand = '#00A6E2';
-    Chart.defaults.font.family = "'Inter', sans-serif";
-    Chart.defaults.font.size = 12;
-    Chart.defaults.color = '#6B7280';
-
-    new Chart(cv1.getContext('2d'), {
-      type: 'line',
-      data: {
-        labels: ['нед. 1','нед. 2','нед. 3','нед. 4','нед. 5'],
-        datasets: [{
-          label: 'Выручка, млн ₸',
-          data: [8.2, 11.6, 9.4, 14.8, 12.1],
-          borderColor: brand, backgroundColor: brand + '22',
-          tension: 0.35, fill: true, borderWidth: 3,
-          pointBackgroundColor: brand, pointBorderColor: '#fff', pointBorderWidth: 2, pointRadius: 6,
-        }, {
-          label: 'План',
-          data: [10, 10, 10, 10, 10],
-          borderColor: '#9CA3AF', borderDash: [4,4], borderWidth: 2, fill: false, pointRadius: 0,
-        }],
-      },
-      options: { responsive: true, plugins: { legend: { position: 'bottom' } }, scales: { y: { beginAtZero: true } } },
-    });
-
-    // По категориям — считаем долю на основе lineItems всех закрытых сделок
-    const catTotals = {};
-    state.deals.forEach(d => {
-      (d.lineItems || []).forEach(it => {
-        const p = byId(state.products, it.product);
-        if (!p) return;
-        const cat = categoryById(p.cat).name;
-        catTotals[cat] = (catTotals[cat] || 0) + it.qty * (it.priceUsed || p.priceWholesale);
-      });
-    });
-    // Если позиций нет — синтезируем демо-разбивку
-    if (!Object.keys(catTotals).length) {
-      Object.assign(catTotals, {
-        'Автоматы EKF': 6400000, 'Кабель и провод': 4200000, 'Щиты': 2800000,
-        'Контакторы и реле': 1900000, 'Освещение': 1100000, 'Прочее': 850000,
-      });
-    }
-    const catEntries = Object.entries(catTotals).sort((a,b) => b[1]-a[1]).slice(0, 6);
-    new Chart(cv2.getContext('2d'), {
-      type: 'doughnut',
-      data: {
-        labels: catEntries.map(([k]) => k),
-        datasets: [{
-          data: catEntries.map(([,v]) => v),
-          backgroundColor: ['#00A6E2','#7B61FF','#FF9F43','#28C76F','#EF4444','#06B6D4'],
-          borderWidth: 2, borderColor: '#fff',
-        }],
-      },
-      options: { responsive: true, plugins: { legend: { position: 'right' }, tooltip: { callbacks: { label: ctx => ctx.label + ': ' + fmtMoneyK(ctx.parsed) } } } },
-    });
-
-    // Менеджеры
-    const mgrs = state.users.filter(u => u.roleKey === 'manager').map(u => {
-      const sum = state.deals.filter(d => d.manager === u.id && ['paid','shipped','closed'].includes(d.stage)).reduce((s,d)=>s+d.amount,0);
-      return { name: u.name.split(' ')[0], sum: Math.round(sum/1_000_000*10)/10, plan: 15 };
-    });
-    new Chart(cv3.getContext('2d'), {
-      type: 'bar',
-      data: {
-        labels: mgrs.map(m => m.name),
-        datasets: [
-          { label: 'Факт', data: mgrs.map(m => m.sum), backgroundColor: brand, borderRadius: 6 },
-          { label: 'План', data: mgrs.map(m => m.plan), backgroundColor: '#E5E7EB', borderRadius: 6 },
-        ],
-      },
-      options: { responsive: true, plugins: { legend: { position: 'bottom' }, tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y + ' млн ₸' } } }, scales: { y: { beginAtZero: true, title: { display: true, text: 'млн ₸' } } } },
-    });
-  }, 50);
-
-  // ABC + по менеджерам
+  // По менеджерам (таблица) + ABC
   const row = el('div', { class:'grid grid-2 mt-16' });
+  const mgrCard = el('div', { class:'card' });
+  mgrCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Менеджеры — продажи')));
+  const mgrHost = el('div', {}, noData('Загрузка…'));
+  mgrCard.append(mgrHost);
+  row.append(mgrCard);
 
-  // ABC клиентов
+  // ABC клиентов — из данных CRM (LTV клиентов)
   const abc = el('div', { class:'card' });
   abc.append(el('div', { class:'card-head' }, el('h3', {}, 'ABC-анализ клиентов (по LTV)')));
-  const sorted = [...state.clients].sort((a,b)=>b.ltv-a.ltv);
+  const sorted = [...state.clients].sort((a,b)=>b.ltv-a.ltv).filter(c => c.ltv > 0);
   const totalLtv = sorted.reduce((s,c)=>s+c.ltv,0);
-  let cum = 0;
-  const abcTab = el('table', { class:'data' });
-  abcTab.append(el('thead', {}, el('tr', {}, [
-    el('th', {}, 'Клиент'),
-    el('th', { class:'num' }, 'LTV'),
-    el('th', { class:'num' }, 'Доля'),
-    el('th', {}, 'ABC'),
-  ])));
-  abcTab.append(el('tbody', {}, sorted.slice(0,8).map(c => {
-    cum += c.ltv;
-    const share = c.ltv / totalLtv * 100;
-    const cumShare = cum / totalLtv * 100;
-    const grp = cumShare < 80 ? 'A' : cumShare < 95 ? 'B' : 'C';
-    return el('tr', {}, [
-      el('td', { class:'strong' }, c.name),
-      el('td', { class:'num' }, fmtMoneyK(c.ltv)),
-      el('td', { class:'num muted' }, share.toFixed(1) + '%'),
-      el('td', {}, el('span', { class:'pill ' + (grp==='A'?'pill-success':grp==='B'?'pill-warn':'pill-muted') }, grp)),
-    ]);
-  })));
-  abc.append(abcTab);
+  if (!sorted.length || totalLtv <= 0) {
+    abc.append(noData('Нет данных по LTV клиентов'));
+  } else {
+    let cum = 0;
+    const abcTab = el('table', { class:'data' });
+    abcTab.append(el('thead', {}, el('tr', {}, [
+      el('th', {}, 'Клиент'), el('th', { class:'num' }, 'LTV'), el('th', { class:'num' }, 'Доля'), el('th', {}, 'ABC'),
+    ])));
+    abcTab.append(el('tbody', {}, sorted.slice(0,8).map(c => {
+      cum += c.ltv;
+      const share = c.ltv / totalLtv * 100;
+      const cumShare = cum / totalLtv * 100;
+      const grp = cumShare < 80 ? 'A' : cumShare < 95 ? 'B' : 'C';
+      return el('tr', {}, [
+        el('td', { class:'strong' }, c.name),
+        el('td', { class:'num' }, fmtMoneyK(c.ltv)),
+        el('td', { class:'num muted' }, share.toFixed(1) + '%'),
+        el('td', {}, el('span', { class:'pill ' + (grp==='A'?'pill-success':grp==='B'?'pill-warn':'pill-muted') }, grp)),
+      ]);
+    })));
+    abc.append(abcTab);
+  }
   row.append(abc);
-
-  // По менеджерам
-  const mgrs = el('div', { class:'card' });
-  mgrs.append(el('div', { class:'card-head' }, el('h3', {}, 'Менеджеры — план/факт')));
-  const mgrStats = state.users.filter(u => u.role.includes('Менеджер')).map(u => {
-    const my = state.deals.filter(d => d.manager === u.id && ['paid','shipped','closed'].includes(d.stage));
-    const sum = my.reduce((s,d)=>s+d.amount,0);
-    return { ...u, sum, plan: 15_000_000, count: my.length };
-  });
-  const mt = el('table', { class:'data' });
-  mt.append(el('thead', {}, el('tr', {}, [
-    el('th', {}, 'Менеджер'),
-    el('th', { class:'num' }, 'Сделок'),
-    el('th', { class:'num' }, 'Факт'),
-    el('th', { class:'num' }, 'План'),
-    el('th', {}, '%'),
-  ])));
-  mt.append(el('tbody', {}, mgrStats.map(m => {
-    const pct = Math.round(m.sum / m.plan * 100);
-    return el('tr', {}, [
-      el('td', {}, el('div', { class:'row' }, [
-        el('span', { class:'avatar', style:`width:24px;height:24px;font-size:10px;background:${m.color}` }, m.avatar),
-        el('span', {}, m.name),
-      ])),
-      el('td', { class:'num' }, m.count),
-      el('td', { class:'num strong' }, fmtMoneyK(m.sum)),
-      el('td', { class:'num muted' }, fmtMoneyK(m.plan)),
-      el('td', {}, el('div', { class:'bar-mini', style:'min-width:120px' }, el('div', { style:`width:${Math.min(100,pct)}%; background:${pct>=100?'#10B981':'#00A6E2'}` }))),
-    ]);
-  })));
-  mgrs.append(mt);
-  row.append(mgrs);
-
   wrap.append(row);
+
+  // Загрузка реальных агрегатов и отрисовка
+  window.__API__.apiFetch('reports/summary').then(rep => {
+    const brand = '#00A6E2';
+    const palette = ['#00A6E2','#7B61FF','#FF9F43','#28C76F','#EF4444','#06B6D4'];
+    if (window.Chart) {
+      Chart.defaults.font.family = "'Inter', sans-serif";
+      Chart.defaults.font.size = 12;
+      Chart.defaults.color = '#6B7280';
+    }
+
+    // 1) Выручка по месяцам
+    const months = rep.byMonth || [];
+    host1.innerHTML = '';
+    if (!window.Chart || !months.length) {
+      host1.append(noData(months.length ? 'График недоступен' : 'Нет выигранных сделок с датой'));
+    } else {
+      const cv1 = el('canvas', { style:'max-height:260px' }); host1.append(cv1);
+      new Chart(cv1.getContext('2d'), {
+        type: 'line',
+        data: { labels: months.map(m => monLabel(m.month)), datasets: [{
+          label: 'Выручка, млн ₸', data: months.map(m => Math.round(m.sum / 1e6 * 10) / 10),
+          borderColor: brand, backgroundColor: brand + '22', tension: 0.35, fill: true, borderWidth: 3,
+          pointBackgroundColor: brand, pointBorderColor: '#fff', pointBorderWidth: 2, pointRadius: 5,
+        }] },
+        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+      });
+    }
+
+    // 2) Доля продаж по категориям
+    const cats = (rep.byCategory || []).slice(0, 6);
+    host2.innerHTML = '';
+    if (!window.Chart || !cats.length) {
+      host2.append(noData('Нет продаж с позициями. Добавьте товары в сделки.'));
+    } else {
+      const cv2 = el('canvas', { style:'max-height:260px' }); host2.append(cv2);
+      new Chart(cv2.getContext('2d'), {
+        type: 'doughnut',
+        data: { labels: cats.map(c => c.category), datasets: [{ data: cats.map(c => c.sum), backgroundColor: palette, borderWidth: 2, borderColor: '#fff' }] },
+        options: { responsive: true, plugins: { legend: { position: 'right' }, tooltip: { callbacks: { label: ctx => ctx.label + ': ' + fmtMoneyK(ctx.parsed) } } } },
+      });
+    }
+
+    // 3) Продажи по менеджерам (bar) + таблица
+    const mgr = (rep.byManager || [])
+      .map(m => ({ ...m, user: byId(state.users, m.manager_id) }))
+      .filter(m => m.sum > 0 || m.count > 0)
+      .sort((a, b) => b.sum - a.sum);
+    host3.innerHTML = '';
+    if (!window.Chart || !mgr.length) {
+      host3.append(noData('Нет выигранных сделок'));
+    } else {
+      const cv3 = el('canvas', { style:'max-height:260px' }); host3.append(cv3);
+      new Chart(cv3.getContext('2d'), {
+        type: 'bar',
+        data: { labels: mgr.map(m => (m.user ? m.user.name.split(' ')[0] : '—')), datasets: [{ label: 'Факт', data: mgr.map(m => Math.round(m.sum / 1e6 * 10) / 10), backgroundColor: brand, borderRadius: 6 }] },
+        options: { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.parsed.y + ' млн ₸' } } }, scales: { y: { beginAtZero: true, title: { display: true, text: 'млн ₸' } } } },
+      });
+    }
+
+    // таблица менеджеров — доля от общего факта
+    const totalFact = mgr.reduce((s, m) => s + m.sum, 0);
+    mgrHost.innerHTML = '';
+    if (!mgr.length) {
+      mgrHost.append(noData('Нет выигранных сделок'));
+    } else {
+      const mt = el('table', { class:'data' });
+      mt.append(el('thead', {}, el('tr', {}, [
+        el('th', {}, 'Менеджер'), el('th', { class:'num' }, 'Сделок'), el('th', { class:'num' }, 'Факт'), el('th', {}, 'Доля'),
+      ])));
+      mt.append(el('tbody', {}, mgr.map(m => {
+        const u = m.user || { name: '—', avatar: '?', color: '#9CA3AF' };
+        const pct = totalFact > 0 ? Math.round(m.sum / totalFact * 100) : 0;
+        return el('tr', {}, [
+          el('td', {}, el('div', { class:'row' }, [
+            el('span', { class:'avatar', style:`width:24px;height:24px;font-size:10px;background:${u.color}` }, u.avatar),
+            el('span', {}, u.name),
+          ])),
+          el('td', { class:'num' }, m.count),
+          el('td', { class:'num strong' }, fmtMoneyK(m.sum)),
+          el('td', {}, el('div', { class:'bar-mini', style:'min-width:120px' }, el('div', { style:`width:${Math.min(100,pct)}%; background:${brand}` }))),
+        ]);
+      })));
+      mgrHost.append(mt);
+    }
+  }).catch(e => {
+    [host1, host2, host3, mgrHost].forEach(h => { h.innerHTML = ''; h.append(noData('Ошибка загрузки аналитики')); });
+  });
+
   return wrap;
 };
 
