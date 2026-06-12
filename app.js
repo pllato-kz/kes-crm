@@ -1651,7 +1651,7 @@ function stockIndicator(free, total) {
 // VIEW: DEALS (kanban)
 // ============================================================
 let DEALS_VIEW = 'kanban'; // 'kanban' | 'list'
-let DEALS_Q = '', DEALS_STAGE = '', DEALS_MGR = '', DEALS_SORT = 'date_desc';
+let DEALS_Q = '', DEALS_STAGE = '', DEALS_MGR = '', DEALS_FROM = '', DEALS_TO = '';
 
 VIEWS.deals = () => {
   const wrap = el('div');
@@ -1667,12 +1667,10 @@ VIEWS.deals = () => {
     ]),
   ]));
 
-  // Тулбар: поиск + этап + менеджер + сортировка по дате
+  // Тулбар: поиск + этап + менеджер + диапазон дат создания
   const searchI = el('input', { placeholder:'Поиск по №, названию, клиенту…', value: DEALS_Q, style:'flex:1;min-width:160px' });
   const stageSel = el('select', {}, [el('option', { value:'' }, 'Все этапы'), ...STAGES.map(s => el('option', { value:s.id }, s.label))]);
   stageSel.value = DEALS_STAGE;
-  const sortSel = el('select', {}, [el('option', { value:'date_desc' }, 'Дата: новые → старые'), el('option', { value:'date_asc' }, 'Дата: старые → новые')]);
-  sortSel.value = DEALS_SORT;
   const toolbarKids = [searchI, stageSel];
   let mgrSel = null;
   if (role().seeAllData) {
@@ -1681,9 +1679,13 @@ VIEWS.deals = () => {
     mgrSel.onchange = () => { DEALS_MGR = mgrSel.value; renderContent(); };
     toolbarKids.push(mgrSel);
   }
-  toolbarKids.push(sortSel);
+  const fromI = el('input', { type:'date', value: DEALS_FROM, title:'Создана с', style:'padding:6px' });
+  const toI = el('input', { type:'date', value: DEALS_TO, title:'Создана по', style:'padding:6px' });
+  fromI.onchange = () => { DEALS_FROM = fromI.value; renderContent(); };
+  toI.onchange = () => { DEALS_TO = toI.value; renderContent(); };
+  toolbarKids.push(el('span', { class:'muted', style:'font-size:12px' }, 'Период c:'), fromI, el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI);
+  if (DEALS_FROM || DEALS_TO) toolbarKids.push(el('button', { class:'btn btn-sm', onclick: () => { DEALS_FROM = ''; DEALS_TO = ''; navigate('deals'); } }, 'Сбросить'));
   stageSel.onchange = () => { DEALS_STAGE = stageSel.value; renderContent(); };
-  sortSel.onchange = () => { DEALS_SORT = sortSel.value; renderContent(); };
   let sd; searchI.oninput = () => { clearTimeout(sd); sd = setTimeout(() => { DEALS_Q = searchI.value; renderContent(); }, 200); };
   wrap.append(el('div', { class:'table-toolbar', style:'margin-bottom:12px' }, toolbarKids));
 
@@ -1695,14 +1697,19 @@ VIEWS.deals = () => {
     const r = all.filter(d => {
       if (DEALS_MGR && d.manager !== DEALS_MGR) return false;
       if (DEALS_STAGE && d.stage !== DEALS_STAGE) return false;
+      if (DEALS_FROM || DEALS_TO) {
+        const dd = String(d.created || '').slice(0, 10);
+        if (!dd) return false;
+        if (DEALS_FROM && dd < DEALS_FROM) return false;
+        if (DEALS_TO && dd > DEALS_TO) return false;
+      }
       if (q) {
         const cl = clientById(d.client);
         if (!(String(d.no || '').toLowerCase().includes(q) || String(d.title || '').toLowerCase().includes(q) || String(cl && cl.name || '').toLowerCase().includes(q))) return false;
       }
       return true;
     });
-    const dir = DEALS_SORT === 'date_asc' ? 1 : -1;
-    return r.sort((a, b) => dir * String(a.created || '').localeCompare(String(b.created || '')));
+    return r.sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')));
   }
 
   function renderContent() {
