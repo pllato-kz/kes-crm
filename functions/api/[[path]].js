@@ -93,7 +93,7 @@ export async function onRequest(context) {
   try {
     // --- публичные эндпоинты ---
     if (seg.length === 0) return json({ ok: true, name: 'KES CRM API', resources: Object.keys(TABLES) });
-    if (seg[0] === 'login' && request.method === 'POST') return loginRoute(env, request);
+    if (seg[0] === 'login' && request.method === 'POST') return await loginRoute(env, request);
 
     // токен (если есть и валиден) -> payload, иначе null
     const auth = await authenticate(request, env);
@@ -167,7 +167,7 @@ export async function onRequest(context) {
       return err(403, 'Только директор может управлять пользователями');
     }
 
-    return dataRoute(context, seg, url, auth);
+    return await dataRoute(context, seg, url, auth);
   } catch (e) {
     return err(500, e && e.message ? e.message : String(e));
   }
@@ -622,6 +622,14 @@ async function writeDeal(env, request, method, id, auth) {
 
   const cols = (await columns(env, 'deals')).map((c) => c.name);
   const data = { ...body, id: dealId };
+  // авто-номер сделки на сервере (уникальный) — чтобы не было коллизий UNIQUE(no)
+  if (method === 'POST') {
+    const yr = new Date().getFullYear();
+    const last = await env.DB.prepare("SELECT no FROM deals WHERE no GLOB ? ORDER BY no DESC LIMIT 1").bind(yr + '-*').first();
+    let next = 1;
+    if (last && last.no) { const mm = String(last.no).match(/(\d+)\s*$/); if (mm) next = parseInt(mm[1], 10) + 1; }
+    data.no = `${yr}-${String(next).padStart(4, '0')}`;
+  }
   // сумма и количество пересчитываются по позициям (как в мокапе)
   if (lineItems) {
     data.amount = lineItems.reduce((s, it) => s + num(it.qty) * num(it.price_used != null ? it.price_used : it.priceUsed), 0);
