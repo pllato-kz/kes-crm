@@ -2445,9 +2445,26 @@ VIEWS.settings = () => {
         await loadData(); navigate('settings');
       } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
     } }, label);
+    const productsFullBtn = el('button', { class:'btn btn-primary', onclick: async (e) => {
+      const b = e.currentTarget;
+      if (!confirm('Полный импорт всех товаров (без услуг) из 1С? Может занять несколько минут.')) return;
+      b.disabled = true; const old = b.textContent;
+      let skip = 0, created = 0, updated = 0, fetched = 0, page = 0;
+      try {
+        while (true) {
+          page++;
+          b.textContent = `Импорт… ${fetched}`;
+          const r = await window.__API__.apiFetch(`sync/1c/products?limit=1000&skip=${skip}`, { method: 'POST' });
+          created += r.created; updated += r.updated; fetched += r.fetched; skip = r.next;
+          if (r.done || r.fetched === 0 || page > 80) break;
+        }
+        toast(`Номенклатура: получено ${fetched}, новых ${created}, обновлено ${updated}`, 'success');
+        await loadData(); navigate('settings');
+      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
+    } }, '🔄 Номенклатура → Товары (всё)');
     syncCard.append(statusHost, el('div', { class:'row', style:'flex-wrap:wrap;gap:8px' }, [
       syncBtn('🔄 Контрагенты → Клиенты', 'sync/1c/clients', 'Загрузить контрагентов из 1С в «Клиенты»? Может занять до минуты.'),
-      syncBtn('🔄 Номенклатура → Товары (тест 100)', 'sync/1c/products?limit=100', 'Загрузить тестовые ~100 товаров из 1С (без услуг)?'),
+      productsFullBtn,
     ]));
     wrap.append(syncCard);
     window.__API__.apiFetch('sync/status').then(rows => {
