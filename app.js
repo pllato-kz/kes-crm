@@ -1746,6 +1746,26 @@ VIEWS.deals = () => {
   function buildDealsKanban(deals) {
     let dragged = null;
     const kanban = el('div', { class: 'kanban' });
+
+    // Авто-прокрутка доски при перетаскивании у края экрана
+    const EDGE = 70, SPEED = 22;
+    let hDir = 0, vDir = 0, rafId = null;
+    const mainEl = () => kanban.closest('.main') || document.querySelector('.main');
+    function autoStep() {
+      if (hDir) kanban.scrollLeft += hDir * SPEED;
+      if (vDir) { const m = mainEl(); if (m) m.scrollTop += vDir * SPEED; }
+      rafId = (hDir || vDir) ? requestAnimationFrame(autoStep) : null;
+    }
+    function stopAuto() { hDir = 0; vDir = 0; if (rafId) { cancelAnimationFrame(rafId); rafId = null; } }
+    kanban.addEventListener('dragover', (e) => {
+      if (!dragged) return;
+      const r = kanban.getBoundingClientRect();
+      hDir = e.clientX < r.left + EDGE ? -1 : (e.clientX > r.right - EDGE ? 1 : 0);
+      vDir = e.clientY < EDGE ? -1 : (e.clientY > window.innerHeight - EDGE ? 1 : 0);
+      if ((hDir || vDir) && !rafId) rafId = requestAnimationFrame(autoStep);
+      else if (!hDir && !vDir) stopAuto();
+    });
+
     STAGES.forEach(s => {
       const dealsOnStage = deals.filter(d => d.stage === s.id);
       const body = el('div', { class: 'k-col-body' });
@@ -1764,7 +1784,7 @@ VIEWS.deals = () => {
         ]);
         if (canDragThis) {
           card.addEventListener('dragstart', (e) => { dragged = { id: d.id }; card.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', d.id); } catch(_){} });
-          card.addEventListener('dragend', () => { card.classList.remove('dragging'); dragged = null; });
+          card.addEventListener('dragend', () => { card.classList.remove('dragging'); dragged = null; stopAuto(); });
         }
         body.appendChild(card);
       });
@@ -1779,7 +1799,7 @@ VIEWS.deals = () => {
       col.addEventListener('dragover', (e) => { if (!dragged) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('drag-over'); });
       col.addEventListener('dragleave', (e) => { if (e.target === col) col.classList.remove('drag-over'); });
       col.addEventListener('drop', async (e) => {
-        e.preventDefault(); col.classList.remove('drag-over');
+        e.preventDefault(); col.classList.remove('drag-over'); stopAuto();
         if (!dragged) return;
         const deal = byId(state.deals, dragged.id);
         if (!deal || deal.stage === s.id) return;
