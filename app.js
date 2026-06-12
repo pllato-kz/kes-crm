@@ -195,18 +195,23 @@ function autoFormatDmy(s) {
   if (d.length > 4) out += '.' + d.slice(4, 8);
   return out;
 }
-// Поле даты: текстовый ввод с авто-форматом ДД.ММ.ГГГГ + календарь (синхронизированы)
+// Поле даты: текстовый ввод с авто-форматом ДД.ММ.ГГГГ + кнопка-календарь.
+// Нативный date-input скрыт (служит только пикером) — без браузерного «ДД» вида.
 function fDateField(label, initialISO) {
   const iso0 = String(initialISO || '').slice(0, 10);
   const text = el('input', { type: 'text', placeholder: 'ДД.ММ.ГГГГ', value: isoToDmy(iso0), inputmode: 'numeric', maxlength: '10', style: 'flex:1;min-width:120px' });
-  const pick = el('input', { type: 'date', value: iso0, title: 'Выбрать в календаре', style: 'flex:none;width:44px;padding:6px;cursor:pointer' });
+  const pick = el('input', { type: 'date', value: iso0, class: 'crm-cal-native', tabindex: '-1' });
+  const calBtn = el('button', { type: 'button', class: 'btn btn-sm crm-cal-btn', title: 'Выбрать в календаре', onclick: () => {
+    const iso = dmyToIso(text.value); if (iso) pick.value = iso;
+    try { pick.showPicker(); } catch (_) { pick.focus(); pick.click(); }
+  } }, '📅');
   text.oninput = () => {
     text.value = autoFormatDmy(text.value);
     const iso = dmyToIso(text.value);
     if (iso) pick.value = iso;
   };
   pick.onchange = () => { if (pick.value) text.value = isoToDmy(pick.value); };
-  const box = el('div', { class: 'row', style: 'gap:6px;align-items:center' }, [text, pick]);
+  const box = el('div', { class: 'crm-datefield' }, [text, calBtn, pick]);
   return {
     row: el('div', { class: 'form-row' }, [el('label', {}, label), box]),
     // храним как «YYYY-MM-DD 18:00» (сохраняет дефолтный дедлайн-час и логику просрочки)
@@ -592,10 +597,9 @@ function openNewTask() {
     [{value:'low',label:'низкий'},{value:'medium',label:'средний'},{value:'high',label:'высокий'}],
     'medium');
   const status = fSelect('Статус', TASK_STATUS, 'new');
-  const comments = fTextarea('Комментарии', '');
   openModal({
     title: 'Новая задача',
-    body: el('div', {}, [title.row, desc.row, owner.row, start.row, due.row, time.row, prio.row, status.row, comments.row]),
+    body: el('div', {}, [title.row, desc.row, owner.row, start.row, due.row, time.row, prio.row, status.row]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
       el('button', { class: 'btn btn-primary', onclick: async () => {
@@ -606,7 +610,7 @@ function openNewTask() {
         const t = {
           title: title.get().trim(), description: desc.get(), owner: owner.get(),
           startDate: start.getDate(), due: due.getDate() + ' ' + (time.get() || '18:00'),
-          deal: null, priority: prio.get(), status: st, done: st === 'done', comments: comments.get(),
+          deal: null, priority: prio.get(), status: st, done: st === 'done',
         };
         try {
           const saved = await window.__API__.apiFetch('tasks', { method: 'POST', body: window.__API__.toApi.task(t) });
@@ -2834,13 +2838,12 @@ function openTaskDetail(id) {
   const time = fTimeField('Время выполнения', (String(t.due || '').slice(11, 16) || '18:00'));
   const prio = fSelect('Приоритет', [{value:'low',label:'низкий'},{value:'medium',label:'средний'},{value:'high',label:'высокий'}], t.priority || 'medium');
   const status = fSelect('Статус', TASK_STATUS, t.status || (t.done ? 'done' : 'new'));
-  const comments = fTextarea('Комментарии', t.comments || '');
 
   const linkedDeal = t.deal ? byId(state.deals, t.deal) : null;
   const meta = el('div', { class:'muted', style:'font-size:12px;margin-top:8px' },
     linkedDeal ? `Связана со сделкой: №${linkedDeal.no} — ${linkedDeal.title}` : 'Не связана со сделкой');
 
-  const fields = [title, desc, owner, start, due, time, prio, status, comments];
+  const fields = [title, desc, owner, start, due, time, prio, status];
   if (!canEdit) fields.forEach(f => f.row.querySelectorAll('input,select,textarea').forEach(i => i.disabled = true));
 
   const foot = [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')];
@@ -2852,7 +2855,7 @@ function openTaskDetail(id) {
         const i = state.tasks.findIndex(x => x.id === t.id); if (i >= 0) state.tasks.splice(i, 1);
         closeModal(); toast('Задача удалена', 'success'); navigate('tasks');
       } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
-    } }, '🗑 Удалить'));
+    } }, 'Удалить'));
     foot.push(el('button', { class:'btn btn-primary', onclick: async () => {
       if (!title.get().trim()) { toast('Введите название', 'warn'); return; }
       if (!due.getDate()) { toast('Укажите дату окончания', 'warn'); return; }
@@ -2861,7 +2864,7 @@ function openTaskDetail(id) {
       const upd = {
         id: t.id, title: title.get().trim(), description: desc.get(), owner: owner.get(),
         startDate: start.getDate(), due: due.getDate() + ' ' + (time.get() || '18:00'),
-        priority: prio.get(), status: st, done: st === 'done', comments: comments.get(),
+        priority: prio.get(), status: st, done: st === 'done',
       };
       try {
         const saved = await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body: window.__API__.toApi.task(upd) });
