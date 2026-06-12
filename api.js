@@ -64,6 +64,7 @@
     }),
     deal: (d) => ({
       id: d.id, no: d.no, title: d.title, client: d.client_id, manager: d.manager_id,
+      coManager: d.co_manager_id, comments: d.comments,
       stage: d.stage_id, amount: d.amount, items: d.items, created: d.created, target: d.target,
       lineItems: (d.lineItems || []).map((it) => ({ product: it.product_id, qty: it.qty, priceUsed: it.price_used })),
     }),
@@ -111,6 +112,7 @@
     }),
     deal: (d) => clean({
       id: d.id, no: d.no, title: d.title, client_id: d.client, manager_id: d.manager,
+      co_manager_id: d.coManager, comments: d.comments,
       stage_id: d.stage, amount: d.amount, created: d.created, target: d.target,
     }),
     // позиции сделки шлём отдельно (только когда редактируем состав)
