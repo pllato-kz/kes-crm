@@ -1494,7 +1494,6 @@ VIEWS.dashboard = () => {
     .reduce((s,d) => s + d.amount, 0);
   const debtTotal = myClients.reduce((s,c) => s + (c.balance < 0 ? -c.balance : 0), 0);
   const overdueCount = state.invoices.filter(i => i.status === 'overdue').length;
-  const newLeads = state.leads.filter(l => l.status === 'new').length;
   const tasksToday = myTasks.filter(t => !t.done).length;
 
   const wrap = el('div');
@@ -1518,7 +1517,7 @@ VIEWS.dashboard = () => {
   stats.append(statCard('Выручка (закрыто)', fmtMoneyK(totalRevenue), '', '', '💰'));
   stats.append(statCard('Пайплайн',          fmtMoneyK(pipelineValue), '', '', '📈'));
   stats.append(statCard('Дебиторка',         fmtMoneyK(debtTotal), overdueCount ? overdueCount + ' просрочка' : '', '', '⚠️'));
-  stats.append(statCard('Новые заявки',      newLeads, '', '', '📥'));
+  stats.append(statCard('Открытые сделки',   myDeals.filter(d => !['closed','lost'].includes(d.stage)).length, '', '', '💼'));
   wrap.append(stats);
 
   // 2 колонки: воронка + активность
@@ -3338,7 +3337,7 @@ VIEWS.settings = () => {
   // Матрица прав
   const permsCard = el('div', { class:'card mt-16' });
   const ALL_MODULES = [
-    ['dashboard','Дашборд'],['leads','Заявки'],['deals','Сделки'],['clients','Клиенты'],
+    ['dashboard','Дашборд'],['deals','Сделки'],['clients','Клиенты'],
     ['catalog','Каталог'],['warehouse','Склад'],['shipments','Отгрузки'],['invoices','Документы'],
     ['suppliers','Поставщики'],['tasks','Задачи'],['reports','Отчёты'],['settings','Настройки'],
   ];
@@ -3640,7 +3639,6 @@ function renderShell() {
   // Сайдбар — только разрешённые модули
   const NAV_ITEMS = [
     { v: 'dashboard',  icon: '📊', label: 'Дашборд' },
-    { v: 'leads',      icon: '📥', label: 'Заявки',     badge: state.leads.filter(l => l.status === 'new').length },
     { v: 'deals',      icon: '💼', label: 'Сделки',     badge: visibleDeals().length },
     { v: 'clients',    icon: '👥', label: 'Клиенты',    badge: visibleClients().length },
     { v: 'catalog',    icon: '📦', label: 'Каталог',    badge: state.products.length },
