@@ -314,6 +314,7 @@ async function dataRoute({ request, env }, seg, url, auth) {
 
   // задачи: расширенные поля (описание/дата начала/статус/комментарии) — добавляем на лету
   if (resource === 'tasks') await ensureTaskColumns(env);
+  if (resource === 'deals') await ensureDealColumns(env);
 
   // изменять роли (матрицу доступа) может только директор
   if (resource === 'roles' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
@@ -485,6 +486,17 @@ async function ensureTaskColumns(env) {
     'ALTER TABLE tasks ADD COLUMN comments TEXT',
   ]) { try { await env.DB.prepare(ddl).run(); } catch (e) { /* уже есть */ } }
   TASKS_SCHEMA_OK = true;
+}
+
+// Доп. поля сделки: со-ответственный менеджер + комментарии.
+let DEALS_SCHEMA_OK = false;
+async function ensureDealColumns(env) {
+  if (DEALS_SCHEMA_OK) return;
+  for (const ddl of [
+    'ALTER TABLE deals ADD COLUMN co_manager_id TEXT',
+    'ALTER TABLE deals ADD COLUMN comments TEXT',
+  ]) { try { await env.DB.prepare(ddl).run(); } catch (e) { /* уже есть */ } }
+  DEALS_SCHEMA_OK = true;
 }
 
 // Уведомления — адресные (user_id) + широковещательные (user_id IS NULL).

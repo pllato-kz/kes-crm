@@ -96,6 +96,7 @@ const ICONS = {
   'building': '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01M16 6h.01M8 10h.01M16 10h.01M8 14h.01M16 14h.01"/>',
   'receipt': '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M8 7h8M8 11h8M8 15h5"/>',
   'message': '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  'paperclip': '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
   'send': '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
   'phone': '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
 };
@@ -110,7 +111,7 @@ const EMOJI_ICON = {
   '🔌':'plug','🧵':'plug','🧰':'tool','🛠':'tool','🔩':'tool','🗄':'archive','🔧':'wrench','🎛':'sliders',
   '🪜':'package','📏':'ruler','🌡':'thermometer','📡':'antenna','🔘':'circle-dot','🚦':'traffic',
   '🔋':'battery','👔':'briefcase','⏻':'power','🚫':'ban','⌕':'search','🛡':'shield','🔥':'flame',
-  '🧲':'magnet','📟':'cpu','🏛':'building','🧾':'receipt','💬':'message','📨':'send','📞':'phone','📲':'phone',
+  '🧲':'magnet','📟':'cpu','🏛':'building','🧾':'receipt','💬':'message','📨':'send','📞':'phone','📲':'phone','📎':'paperclip',
   '→':'arrow-right','←':'arrow-left','↓':'arrow-down','▲':'chevron-up','▼':'chevron-down','▸':'chevron-right','▾':'chevron-down',
 };
 // 'wrench' если нет — алиас на tool
@@ -296,7 +297,9 @@ function stub(title, description, bullets = []) {
 }
 
 // ---------- Modal ----------
-function openModal({ title, body, foot = [] }) {
+function openModal({ title, body, foot = [], wide = false }) {
+  const box = document.querySelector('#modal .modal');
+  if (box) box.classList.toggle('modal-xl', !!wide);
   $('#modal-title').textContent = title;
   $('#modal-body').innerHTML = '';
   $('#modal-body').append(body);
@@ -304,7 +307,10 @@ function openModal({ title, body, foot = [] }) {
   foot.forEach(b => $('#modal-foot').append(b));
   $('#modal').classList.add('show');
 }
-function closeModal() { const m = $('#modal'); if (m) m.classList.remove('show'); }
+function closeModal() {
+  const m = $('#modal'); if (m) m.classList.remove('show');
+  const box = document.querySelector('#modal .modal'); if (box) box.classList.remove('modal-xl');
+}
 // Делегированные обработчики через document — переживают перерисовку body
 document.addEventListener('click', (e) => {
   if (e.target.id === 'modal-close') closeModal();
@@ -1890,62 +1896,168 @@ async function openDealDetail(id) {
   renderItems();
   renderPicker();
 
-  const body = el('div', {}, [
-    el('div', { style:'display:flex;justify-content:space-between;align-items:center;margin-bottom:14px' }, [
-      el('span', { class: 'pill', style: `background:${s.color}22;color:${s.color};font-size:13px;padding:4px 12px` }, s.label),
-      totalHost,
+  const clx = cl || { name: '—', phone: '', bin: '' };
+
+  // ----- Воронка-шевроны -----
+  let chosenStage = d.stage;
+  const funnel = el('div', { class:'funnel-steps' });
+  const renderFunnel = () => {
+    funnel.innerHTML = '';
+    const curIdx = STAGES.findIndex(st => st.id === chosenStage);
+    STAGES.forEach((st, i) => {
+      const cls = st.id === chosenStage ? 'active' : (curIdx >= 0 && i < curIdx ? 'done' : '');
+      funnel.append(el('div', { class:'funnel-step ' + cls, title: st.label, onclick: () => { if (!canEdit) return; chosenStage = st.id; renderFunnel(); } }, st.label));
+    });
+  };
+  renderFunnel();
+
+  // ----- Левая панель: форма -----
+  const titleI = el('input', { value: d.title || '', placeholder:'Название сделки' });
+  const amountI = el('input', { type:'number', value: Math.round(d.amount || 0), min:'0' });
+  recomputeAmount = (function (orig) { return function () { orig(); amountI.value = Math.round(d.amount || 0); }; })(recomputeAmount);
+  const mgrSel = el('select');
+  state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.manager) o.selected = true; mgrSel.append(o); });
+  const coMgrSel = el('select');
+  coMgrSel.append(el('option', { value:'' }, '— не назначен —'));
+  state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.coManager) o.selected = true; coMgrSel.append(o); });
+  if (!canEdit) [titleI, amountI, mgrSel, coMgrSel].forEach(i => i.disabled = true);
+
+  const clientBlock = el('div', { class:'client-block' }, [
+    el('div', { class:'avatar', style:`background:${m.color}` }, (clx.name || '?').slice(0, 1).toUpperCase()),
+    el('div', { class:'who' }, [
+      el('div', { class:'nm' }, clx.name),
+      el('div', { class:'ph' }, clx.phone || 'телефон не указан'),
     ]),
-    el('dl', { class: 'kv', style:'margin-bottom:14px' }, [
-      el('dt', {}, 'Номер'),    el('dd', {}, '№' + d.no),
-      el('dt', {}, 'Клиент'),    el('dd', {}, cl.name + (cl.bin ? ' · БИН ' + cl.bin : '')),
-      el('dt', {}, 'Менеджер'),  el('dd', {}, m.name),
-      el('dt', {}, 'Создана'),    el('dd', {}, fmtDate(d.created)),
-      el('dt', {}, 'Срок'),       el('dd', {}, fmtDate(d.target)),
+    el('div', { class:'cact' }, [
+      el('button', { title:'Позвонить', onclick: () => { if (clx.phone) location.href = 'tel:' + String(clx.phone).replace(/[^\d+]/g, ''); else toast('Телефон не указан', 'warn'); } }, '📞'),
+      el('button', { title:'Написать в WhatsApp', onclick: () => switchTab('whatsapp') }, '💬'),
     ]),
-    el('div', { style:'font-weight:600;font-size:13px;margin-bottom:6px' }, 'Позиции'),
-    itemsHost,
-    pickerHost,
-    history.length ? el('div', { style:'margin-top:16px' }, [
-      el('div', { style:'font-weight:600;font-size:13px;margin-bottom:8px' }, 'История этапов'),
-      el('div', {}, history.map(h => {
-        const to = stageById(h.to_stage);
-        const from = h.from_stage ? stageById(h.from_stage) : null;
-        return el('div', { style:'display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #F3F4F6;font-size:12px' }, [
-          el('span', { class:'pill', style:`background:${to.color}22;color:${to.color};font-size:11px` }, to.label),
-          el('span', { class:'muted' }, (from ? from.label + ' → ' : 'создана') + ' · ' + (h.user_name || '—') + ' · ' + String(h.changed_at || '').slice(0, 16)),
-        ]);
-      })),
-    ]) : null,
   ]);
 
-  const stageSelect = el('select', { style:'padding:6px 10px;border:1px solid #E5E7EB;border-radius:6px' });
-  STAGES.forEach(st => {
-    const opt = el('option', { value: st.id }, st.label);
-    if (st.id === d.stage) opt.selected = true;
-    stageSelect.append(opt);
-  });
-  if (!canEdit) stageSelect.disabled = true;
+  const fieldRow = (label, input) => el('div', { class:'form-row' }, [el('label', {}, label), input]);
+  const printBtn = el('button', { class:'btn btn-sm', onclick: () => printInvoice(d) }, '🖨 Печать СФ');
+  const delBtn = (currentUser && currentUser.roleKey === 'director') ? el('button', { class:'btn btn-sm btn-danger', onclick: async () => {
+    if (!confirm(`Удалить сделку «${d.title}» (№${d.no})? Действие необратимо.`)) return;
+    try {
+      await window.__API__.apiFetch('deals/' + d.id, { method:'DELETE' });
+      const i = state.deals.findIndex(x => x.id === d.id); if (i >= 0) state.deals.splice(i, 1);
+      closeModal(); toast('Сделка удалена', 'success'); navigate('deals');
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+  } }, 'Удалить') : null;
+
+  const left = el('div', { class:'deal-left' }, [
+    el('div', { class:'section-title' }, 'О сделке'),
+    fieldRow('Название', titleI),
+    el('div', { class:'form-row' }, [el('label', {}, 'Клиент'), clientBlock]),
+    fieldRow('Сумма, ₸', amountI),
+    fieldRow('Ответственный', mgrSel),
+    fieldRow('Отв. менеджер', coMgrSel),
+    el('div', { class:'section-title', style:'margin-top:18px' }, 'Позиции'),
+    itemsHost, pickerHost,
+    el('div', { class:'row', style:'gap:8px;margin-top:16px' }, [printBtn, delBtn]),
+  ]);
+
+  // ----- Правая панель: вкладки (Комментарии / WhatsApp / История) -----
+  const commentsTA = el('textarea', { placeholder:'Внутренние комментарии по сделке…' });
+  commentsTA.value = d.comments || '';
+  if (!canEdit) commentsTA.disabled = true;
+  const paneComments = el('div', { class:'chat-pane chat-comments', 'data-pane':'comments' }, [commentsTA]);
+
+  const chatBody = el('div', { class:'chat-body' });
+  const chatInputEl = el('input', { placeholder:'Сообщение…' });
+  const paneWhats = el('div', { class:'chat-pane active', 'data-pane':'whatsapp' }, [
+    chatBody,
+    el('div', { class:'chat-input' }, [
+      el('button', { title:'Прикрепить файл', onclick: () => toast('Прикрепление файлов — скоро', 'info') }, '📎'),
+      chatInputEl,
+      el('button', { title:'Отправить', onclick: () => sendChat() }, '📨'),
+    ]),
+  ]);
+
+  const histList = el('div', { style:'padding:14px;overflow-y:auto' });
+  if (history.length) {
+    history.forEach(h => {
+      const to = stageById(h.to_stage); const from = h.from_stage ? stageById(h.from_stage) : null;
+      histList.append(el('div', { style:'display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6;font-size:12px' }, [
+        el('span', { class:'pill', style:`background:${to.color}22;color:${to.color};font-size:11px` }, to.label),
+        el('span', { class:'muted' }, (from ? from.label + ' → ' : 'создана') + ' · ' + (h.user_name || '—') + ' · ' + String(h.changed_at || '').slice(0, 16)),
+      ]));
+    });
+  } else histList.append(el('div', { class:'muted', style:'font-size:12px' }, 'История пуста'));
+  const paneHist = el('div', { class:'chat-pane', 'data-pane':'history' }, [histList]);
+
+  const tabs = el('div', { class:'chat-tabs' });
+  function switchTab(key) {
+    tabs.querySelectorAll('.chat-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === key));
+    [paneComments, paneWhats, paneHist].forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
+  }
+  [['comments','Комментарии'],['whatsapp','WhatsApp'],['history','История']].forEach(([k, label]) =>
+    tabs.append(el('div', { class:'chat-tab' + (k === 'whatsapp' ? ' active' : ''), 'data-tab':k, onclick: () => switchTab(k) }, label)));
+
+  const right = el('div', { class:'deal-right' }, [tabs, paneComments, paneWhats, paneHist]);
+
+  // ----- Чат (Green API) -----
+  function bubble(mm) {
+    const out = mm.direction === 'out';
+    const mark = out ? (mm.status === 'sent' ? ' ✓' : (mm.status === 'error' ? ' ✕' : '')) : '';
+    return el('div', { class:'msg ' + (out ? 'out' : 'in') }, [el('div', {}, mm.text || ''), el('div', { class:'time' }, String(mm.created_at || '').slice(11, 16) + mark)]);
+  }
+  function exampleChat() {
+    chatBody.append(
+      el('div', { class:'chat-date' }, 'Сегодня'),
+      el('div', { class:'msg in' }, [
+        el('div', { class:'msg-file' }, [
+          el('span', { class:'fi' }, '📄'),
+          el('div', {}, [el('div', { class:'fn' }, 'Счёт №' + d.no + '.pdf'), el('div', { class:'fd' }, 'PDF · 142 КБ · коммерческое предложение')]),
+        ]),
+        el('div', { class:'time' }, '09:14'),
+      ]),
+      el('div', { class:'msg in' }, [el('div', {}, 'Здравствуйте! Получили счёт, спасибо.'), el('div', { class:'time' }, '09:20')]),
+      el('div', { class:'msg out' }, [el('div', {}, 'Добрый день! Готовы отгрузить на этой неделе.'), el('div', { class:'time' }, '09:25 ✓')]),
+      el('div', { class:'msg-sys' }, ['✓ Клиент согласовал условия сделки · 09:40']),
+    );
+  }
+  function renderChat() {
+    chatBody.innerHTML = '';
+    window.__API__.apiFetch('greenapi/messages?dealId=' + encodeURIComponent(d.id)).then(rows => {
+      chatBody.innerHTML = '';
+      if (!rows || !rows.length) { exampleChat(); return; }
+      let lastDate = '';
+      rows.slice().reverse().forEach(mm => {
+        const day = String(mm.created_at || '').slice(0, 10);
+        if (day && day !== lastDate) { chatBody.append(el('div', { class:'chat-date' }, fmtDate(day))); lastDate = day; }
+        chatBody.append(bubble(mm));
+      });
+      chatBody.scrollTop = chatBody.scrollHeight;
+    }).catch(() => { chatBody.innerHTML = ''; exampleChat(); });
+  }
+  async function sendChat() {
+    const text = chatInputEl.value.trim();
+    if (!text) return;
+    chatInputEl.value = '';
+    try { await window.__API__.apiFetch('greenapi/send', { method:'POST', body:{ dealId: d.id, text } }); renderChat(); }
+    catch (e) { toast('WhatsApp: ' + ((e && e.message) || e), 'error'); chatInputEl.value = text; }
+  }
+  chatInputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendChat(); } });
+  renderChat();
 
   openModal({
-    title: d.title,
-    body,
+    wide: true,
+    title: 'Сделка №' + d.no + ' · ' + d.title,
+    body: el('div', {}, [funnel, el('div', { class:'deal-split' }, [left, right])]),
     foot: [
-      el('div', { style:'margin-right:auto;font-size:12px;color:#6B7280;display:flex;align-items:center;gap:8px' }, ['Этап:', stageSelect]),
-      el('button', { class: 'btn', onclick: () => openWhatsApp(d) }, '💬 WhatsApp'),
-      el('button', { class: 'btn', onclick: () => printInvoice(d) }, '🖨 Печать СФ'),
-      (currentUser && currentUser.roleKey === 'director') ? el('button', { class: 'btn btn-danger', onclick: async () => {
-        if (!confirm(`Удалить сделку «${d.title}» (№${d.no})?\nСвязанные счета, отгрузки и задачи будут отвязаны. Действие необратимо.`)) return;
+      el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
+      canEdit ? el('button', { class:'btn btn-primary', onclick: async () => {
+        d.stage = chosenStage;
+        d.title = titleI.value.trim() || d.title;
+        d.manager = mgrSel.value;
+        d.coManager = coMgrSel.value || null;
+        d.comments = commentsTA.value;
+        if (!(d.lineItems && d.lineItems.length)) d.amount = Number(amountI.value) || 0;
         try {
-          await window.__API__.apiFetch('deals/' + d.id, { method: 'DELETE' });
-          const i = state.deals.findIndex(x => x.id === d.id);
-          if (i >= 0) state.deals.splice(i, 1);
-          closeModal(); toast('Сделка удалена', 'success'); navigate('deals');
-        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
-      } }, '🗑 Удалить') : null,
-      canEdit ? el('button', { class: 'btn btn-primary', onclick: async () => {
-        d.stage = stageSelect.value;
-        try {
-          const saved = await window.__API__.apiFetch('deals/' + d.id, { method: 'PUT', body: { ...window.__API__.toApi.deal(d), lineItems: window.__API__.toApi.dealItems(d.lineItems) } });
+          const payload = { ...window.__API__.toApi.deal(d) };
+          if (d.lineItems && d.lineItems.length) payload.lineItems = window.__API__.toApi.dealItems(d.lineItems);
+          const saved = await window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body: payload });
           Object.assign(d, window.__API__.map.deal(saved));
           closeModal(); toast('Сделка сохранена', 'success'); navigate('deals');
         } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
