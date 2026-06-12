@@ -1545,7 +1545,8 @@ VIEWS.dashboard = () => {
     const dealsOnStage = myDeals.filter(d => d.stage === s.id);
     const sum = dealsOnStage.reduce((a,d)=>a+d.amount,0);
     const w = maxByStage ? Math.max(2, Math.round(sum / maxByStage * 100)) : 0;
-    funnel.append(el('div', { class: 'funnel-row' }, [
+    funnel.append(el('div', { class: 'funnel-row', style:'cursor:pointer', title:`Открыть сделки на этапе «${s.label}»`,
+      onclick: () => { DEALS_VIEW = 'kanban'; DEALS_STAGE = s.id; DEALS_Q = ''; DEALS_MGR = ''; DEALS_FROM = ''; DEALS_TO = ''; navigate('deals'); } }, [
       el('div', { class: 'fn-label' }, `${s.label} (${dealsOnStage.length})`),
       el('div', { class: 'fn-bar' }, el('div', { style: `width:${w}%; background:${s.color}` })),
       el('div', { class: 'fn-val' }, fmtMoneyK(sum)),
