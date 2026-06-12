@@ -1650,125 +1650,77 @@ function stockIndicator(free, total) {
 // ============================================================
 // VIEW: DEALS (kanban)
 // ============================================================
-let DEALS_VIEW = 'kanban'; // 'kanban' | 'list' — режим отображения сделок
+let DEALS_VIEW = 'kanban'; // 'kanban' | 'list'
+let DEALS_Q = '', DEALS_STAGE = '', DEALS_MGR = '', DEALS_SORT = 'date_desc';
 
 VIEWS.deals = () => {
   const wrap = el('div');
-  const myDeals = visibleDeals();
   const isList = DEALS_VIEW === 'list';
+  const all = visibleDeals();
+
+  const subEl = el('div', { class: 'sub' });
   wrap.append(el('div', { class: 'page-head' }, [
-    el('div', {}, [
-      el('h1', {}, 'Сделки'),
-      el('div', { class: 'sub' }, `${myDeals.length} ${role().seeAllData ? 'активных' : 'ваших активных'} · общая сумма ${fmtMoneyK(myDeals.reduce((s,d)=>s+d.amount,0))}` + (isList ? '' : ' · 💡 перетаскивайте карточки между этапами')),
-    ]),
+    el('div', {}, [el('h1', {}, 'Сделки'), subEl]),
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn', onclick: () => { DEALS_VIEW = isList ? 'kanban' : 'list'; navigate('deals'); } }, isList ? '🗂 Канбан' : '📋 Список'),
       el('button', { class: 'btn btn-primary', onclick: () => openNewDeal() }, '+ Сделка'),
     ]),
   ]));
 
-  if (isList) { wrap.append(renderDealsList(myDeals)); return wrap; }
-
-  let dragged = null;
-
-  const kanban = el('div', { class: 'kanban' });
-  STAGES.forEach(s => {
-    const dealsOnStage = myDeals.filter(d => d.stage === s.id);
-    const body = el('div', { class: 'k-col-body' });
-    dealsOnStage.forEach(d => {
-      const cl = clientById(d.client);
-      const m = userById(d.manager);
-      const canDragThis = can('edit-deal', d);
-      const card = el('div', {
-        class: 'k-card',
-        draggable: canDragThis ? 'true' : null,
-        onclick: () => openDealDetail(d.id),
-      }, [
-        el('div', { class: 'k-card-no' }, '№' + d.no + ' · до ' + fmtDate(d.target)),
-        el('div', { class: 'k-card-title' }, d.title),
-        el('div', { class: 'muted', style:'font-size:11.5px' }, cl.name),
-        el('div', { class: 'k-card-foot mt-12' }, [
-          el('span', { class: 'k-card-amount' }, fmtMoneyK(d.amount)),
-          el('span', { class: 'avatar', style: `background:${m.color}`, title: m.name }, m.avatar),
-        ]),
-      ]);
-      if (canDragThis) {
-        card.addEventListener('dragstart', (e) => {
-          dragged = { id: d.id, fromStage: d.stage };
-          card.classList.add('dragging');
-          e.dataTransfer.effectAllowed = 'move';
-          try { e.dataTransfer.setData('text/plain', d.id); } catch(_){}
-        });
-        card.addEventListener('dragend', () => { card.classList.remove('dragging'); dragged = null; });
-      }
-      body.appendChild(card);
-    });
-
-    const col = el('div', { class: 'k-col', 'data-stage': s.id }, [
-      el('div', { class: 'k-col-head' }, [
-        el('span', { class: 'stage-dot', style: `background:${s.color}` }),
-        el('span', { class: 'stage-label' }, s.label),
-        el('span', { class: 'stage-count' }, dealsOnStage.length),
-      ]),
-      body,
-    ]);
-
-    col.addEventListener('dragover', (e) => { if (!dragged) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('drag-over'); });
-    col.addEventListener('dragleave', (e) => { if (e.target === col) col.classList.remove('drag-over'); });
-    col.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      col.classList.remove('drag-over');
-      if (!dragged) return;
-      const deal = byId(state.deals, dragged.id);
-      if (!deal) return;
-      if (deal.stage === s.id) return;
-      const fromLabel = stageById(deal.stage).label;
-      deal.stage = s.id;
-      navigate('deals');
-      try {
-        await window.__API__.apiFetch('deals/' + deal.id, { method: 'PUT', body: { stage_id: s.id } });
-        toast(`${deal.title.slice(0,30)}: ${fromLabel} → ${s.label}`, 'success');
-      } catch (err) { toast('Не удалось сохранить этап', 'error'); }
-    });
-
-    kanban.append(col);
-  });
-  wrap.append(kanban);
-  return wrap;
-};
-
-// Табличный вид сделок (toggle «Список») — поиск, фильтр по этапу, сортировка по дате
-function renderDealsList(deals) {
-  const tw = el('div', { class: 'table-wrap' });
-  const searchI = el('input', { placeholder:'Поиск по №, названию, клиенту…', style:'flex:1;min-width:160px' });
+  // Тулбар: поиск + этап + менеджер + сортировка по дате
+  const searchI = el('input', { placeholder:'Поиск по №, названию, клиенту…', value: DEALS_Q, style:'flex:1;min-width:160px' });
   const stageSel = el('select', {}, [el('option', { value:'' }, 'Все этапы'), ...STAGES.map(s => el('option', { value:s.id }, s.label))]);
-  tw.append(el('div', { class:'table-toolbar' }, [searchI, stageSel]));
-  const host = el('div');
-  tw.append(host);
+  stageSel.value = DEALS_STAGE;
+  const sortSel = el('select', {}, [el('option', { value:'date_desc' }, 'Дата: новые → старые'), el('option', { value:'date_asc' }, 'Дата: старые → новые')]);
+  sortSel.value = DEALS_SORT;
+  const toolbarKids = [searchI, stageSel];
+  let mgrSel = null;
+  if (role().seeAllData) {
+    mgrSel = el('select', {}, [el('option', { value:'' }, 'Все менеджеры'), ...state.users.filter(u => u.active !== false).map(u => el('option', { value:u.id }, u.name))]);
+    mgrSel.value = DEALS_MGR;
+    mgrSel.onchange = () => { DEALS_MGR = mgrSel.value; renderContent(); };
+    toolbarKids.push(mgrSel);
+  }
+  toolbarKids.push(sortSel);
+  stageSel.onchange = () => { DEALS_STAGE = stageSel.value; renderContent(); };
+  sortSel.onchange = () => { DEALS_SORT = sortSel.value; renderContent(); };
+  let sd; searchI.oninput = () => { clearTimeout(sd); sd = setTimeout(() => { DEALS_Q = searchI.value; renderContent(); }, 200); };
+  wrap.append(el('div', { class:'table-toolbar', style:'margin-bottom:12px' }, toolbarKids));
 
-  function render() {
-    const q = searchI.value.trim().toLowerCase();
-    const st = stageSel.value;
-    const list = deals
-      .filter(d => !st || d.stage === st)
-      .filter(d => {
-        if (!q) return true;
+  const content = el('div');
+  wrap.append(content);
+
+  function filtered() {
+    const q = String(DEALS_Q || '').trim().toLowerCase();
+    const r = all.filter(d => {
+      if (DEALS_MGR && d.manager !== DEALS_MGR) return false;
+      if (DEALS_STAGE && d.stage !== DEALS_STAGE) return false;
+      if (q) {
         const cl = clientById(d.client);
-        return String(d.no || '').toLowerCase().includes(q)
-          || String(d.title || '').toLowerCase().includes(q)
-          || String(cl && cl.name || '').toLowerCase().includes(q);
-      })
-      .sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')));
+        if (!(String(d.no || '').toLowerCase().includes(q) || String(d.title || '').toLowerCase().includes(q) || String(cl && cl.name || '').toLowerCase().includes(q))) return false;
+      }
+      return true;
+    });
+    const dir = DEALS_SORT === 'date_asc' ? 1 : -1;
+    return r.sort((a, b) => dir * String(a.created || '').localeCompare(String(b.created || '')));
+  }
 
+  function renderContent() {
+    const deals = filtered();
+    subEl.textContent = `${deals.length} ${role().seeAllData ? 'сделок' : 'ваших сделок'} · сумма ${fmtMoneyK(deals.reduce((s, d) => s + d.amount, 0))}`;
+    content.innerHTML = '';
+    content.append(isList ? buildDealsTable(deals) : buildDealsKanban(deals));
+  }
+
+  function buildDealsTable(deals) {
+    const tw = el('div', { class: 'table-wrap' });
     const t = el('table', { class:'data' });
     t.append(el('thead', {}, el('tr', {}, [
       el('th', {}, '№'), el('th', {}, 'Сделка'), el('th', {}, 'Клиент'), el('th', {}, 'Менеджер'),
-      el('th', {}, 'Этап'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Срок'),
+      el('th', {}, 'Этап'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Создана'), el('th', {}, 'Срок'),
     ])));
-    t.append(el('tbody', {}, list.length ? list.map(d => {
-      const cl = clientById(d.client);
-      const m = userById(d.manager);
-      const s = stageById(d.stage);
+    t.append(el('tbody', {}, deals.length ? deals.map(d => {
+      const cl = clientById(d.client); const m = userById(d.manager); const s = stageById(d.stage);
       return el('tr', { style:'cursor:pointer', onclick: () => openDealDetail(d.id) }, [
         el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, '№' + d.no),
         el('td', { class:'strong' }, d.title),
@@ -1776,17 +1728,67 @@ function renderDealsList(deals) {
         el('td', {}, el('span', { class:'avatar', style:`background:${m.color};width:26px;height:26px;font-size:11px`, title:m.name }, m.avatar)),
         el('td', {}, el('span', { class:'pill', style:`background:${s.color}22;color:${s.color}` }, s.label)),
         el('td', { class:'num strong' }, fmtMoneyK(d.amount)),
+        el('td', { class:'muted' }, d.created ? fmtDate(d.created) : '—'),
         el('td', { class:'muted' }, d.target ? fmtDate(d.target) : '—'),
       ]);
-    }) : [el('tr', {}, el('td', { colspan:7, class:'muted', style:'text-align:center;padding:24px' }, 'Сделок не найдено'))]));
-    host.innerHTML = ''; host.append(t);
+    }) : [el('tr', {}, el('td', { colspan:8, class:'muted', style:'text-align:center;padding:24px' }, 'Сделок не найдено'))]));
+    tw.append(t);
+    return tw;
   }
 
-  let sd; searchI.oninput = () => { clearTimeout(sd); sd = setTimeout(render, 200); };
-  stageSel.onchange = render;
-  render();
-  return tw;
-}
+  function buildDealsKanban(deals) {
+    let dragged = null;
+    const kanban = el('div', { class: 'kanban' });
+    STAGES.forEach(s => {
+      const dealsOnStage = deals.filter(d => d.stage === s.id);
+      const body = el('div', { class: 'k-col-body' });
+      dealsOnStage.forEach(d => {
+        const cl = clientById(d.client); const m = userById(d.manager);
+        const canDragThis = can('edit-deal', d);
+        const card = el('div', { class: 'k-card', draggable: canDragThis ? 'true' : null, onclick: () => openDealDetail(d.id) }, [
+          el('div', { class: 'k-card-no' }, '№' + d.no + ' · до ' + fmtDate(d.target)),
+          el('div', { class: 'k-card-title' }, d.title),
+          el('div', { class: 'muted', style:'font-size:11.5px' }, cl ? cl.name : '—'),
+          el('div', { class: 'k-card-foot mt-12' }, [
+            el('span', { class: 'k-card-amount' }, fmtMoneyK(d.amount)),
+            el('span', { class: 'avatar', style: `background:${m.color}`, title: m.name }, m.avatar),
+          ]),
+        ]);
+        if (canDragThis) {
+          card.addEventListener('dragstart', (e) => { dragged = { id: d.id }; card.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', d.id); } catch(_){} });
+          card.addEventListener('dragend', () => { card.classList.remove('dragging'); dragged = null; });
+        }
+        body.appendChild(card);
+      });
+      const col = el('div', { class: 'k-col', 'data-stage': s.id }, [
+        el('div', { class: 'k-col-head' }, [
+          el('span', { class: 'stage-dot', style: `background:${s.color}` }),
+          el('span', { class: 'stage-label' }, s.label),
+          el('span', { class: 'stage-count' }, dealsOnStage.length),
+        ]),
+        body,
+      ]);
+      col.addEventListener('dragover', (e) => { if (!dragged) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('drag-over'); });
+      col.addEventListener('dragleave', (e) => { if (e.target === col) col.classList.remove('drag-over'); });
+      col.addEventListener('drop', async (e) => {
+        e.preventDefault(); col.classList.remove('drag-over');
+        if (!dragged) return;
+        const deal = byId(state.deals, dragged.id);
+        if (!deal || deal.stage === s.id) return;
+        const fromLabel = stageById(deal.stage).label;
+        deal.stage = s.id;
+        renderContent();
+        try { await window.__API__.apiFetch('deals/' + deal.id, { method: 'PUT', body: { stage_id: s.id } }); toast(`${deal.title.slice(0,30)}: ${fromLabel} → ${s.label}`, 'success'); }
+        catch (err) { toast('Не удалось сохранить этап', 'error'); }
+      });
+      kanban.append(col);
+    });
+    return kanban;
+  }
+
+  renderContent();
+  return wrap;
+};
 
 async function openDealDetail(id) {
   const d = byId(state.deals, id);
