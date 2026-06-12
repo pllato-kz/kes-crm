@@ -1684,7 +1684,9 @@ VIEWS.deals = () => {
   fromI.onchange = () => { DEALS_FROM = fromI.value; renderContent(); };
   toI.onchange = () => { DEALS_TO = toI.value; renderContent(); };
   toolbarKids.push(el('span', { class:'muted', style:'font-size:12px' }, 'Период c:'), fromI, el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI);
-  if (DEALS_FROM || DEALS_TO) toolbarKids.push(el('button', { class:'btn btn-sm', onclick: () => { DEALS_FROM = ''; DEALS_TO = ''; navigate('deals'); } }, 'Сбросить'));
+  if (DEALS_Q || DEALS_STAGE || DEALS_MGR || DEALS_FROM || DEALS_TO) {
+    toolbarKids.push(el('button', { class:'btn btn-sm', onclick: () => { DEALS_Q = ''; DEALS_STAGE = ''; DEALS_MGR = ''; DEALS_FROM = ''; DEALS_TO = ''; navigate('deals'); } }, 'Сбросить'));
+  }
   stageSel.onchange = () => { DEALS_STAGE = stageSel.value; renderContent(); };
   let sd; searchI.oninput = () => { clearTimeout(sd); sd = setTimeout(() => { DEALS_Q = searchI.value; renderContent(); }, 200); };
   wrap.append(el('div', { class:'table-toolbar', style:'margin-bottom:12px' }, toolbarKids));
