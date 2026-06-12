@@ -495,6 +495,7 @@ async function ensureDealColumns(env) {
   for (const ddl of [
     'ALTER TABLE deals ADD COLUMN co_manager_id TEXT',
     'ALTER TABLE deals ADD COLUMN comments TEXT',
+    'ALTER TABLE deals ADD COLUMN address TEXT',
   ]) { try { await env.DB.prepare(ddl).run(); } catch (e) { /* уже есть */ } }
   DEALS_SCHEMA_OK = true;
 }
