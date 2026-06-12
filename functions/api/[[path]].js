@@ -139,6 +139,24 @@ export async function onRequest(context) {
     // сводка по складу (для карточек: SKU, единиц, резерв, стоимость)
     if (seg[0] === 'warehouse' && seg[1] === 'summary' && request.method === 'GET') return warehouseSummary(env);
 
+    // инвентаризация склада (лист пересчёта → проведение → корректировка остатков)
+    if (seg[0] === 'inventory') {
+      await ensureInventorySchema(env);
+      const canStock = auth.role === 'director' || auth.role === 'warehouse';
+      const id = seg[1];
+      if (!id) {
+        if (request.method === 'GET') return inventoryList(env);
+        if (request.method === 'POST') return canStock ? inventoryCreate(env, request, auth) : err(403, 'Недостаточно прав для инвентаризации');
+      } else if (seg[2] === 'items' && request.method === 'PUT') {
+        return canStock ? inventorySaveItems(env, id, request) : err(403, 'Недостаточно прав');
+      } else if (seg[2] === 'post' && request.method === 'POST') {
+        return canStock ? inventoryPost(env, id) : err(403, 'Недостаточно прав');
+      } else if (request.method === 'GET') {
+        return inventoryGet(env, id);
+      }
+      return err(405, 'Метод не поддерживается');
+    }
+
     // управление пользователями (создание/изменение/удаление) — только директор
     const res = ALIASES[seg[0]] || seg[0];
     if (res === 'users' && request.method !== 'GET' && auth.role !== 'director') {
@@ -931,6 +949,144 @@ async function syncPrices(env, mode) {
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
   ).bind(info).run();
   return json({ mode: isAvg ? 'avg' : 'last', docs, lines, priced, updated, missing });
+}
+
+// --------------------------------------------------------------------------
+// Инвентаризация склада
+//   inventory        — документ пересчёта (draft/posted)
+//   inventory_items  — строки: учётный (expected) и фактический (counted) остаток
+// Таблицы создаются на лету (CREATE IF NOT EXISTS) — без отдельной миграции.
+// --------------------------------------------------------------------------
+async function ensureInventorySchema(env) {
+  await env.DB.batch([
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS inventory (
+      id TEXT PRIMARY KEY,
+      no TEXT,
+      date TEXT,
+      warehouse_id TEXT,
+      status TEXT DEFAULT 'draft',
+      scope TEXT,
+      responsible_id TEXT,
+      responsible_name TEXT,
+      note TEXT,
+      posted_at TEXT,
+      items_count INTEGER DEFAULT 0,
+      surplus_qty REAL DEFAULT 0,
+      shortage_qty REAL DEFAULT 0,
+      surplus_value REAL DEFAULT 0,
+      shortage_value REAL DEFAULT 0
+    )`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS inventory_items (
+      inventory_id TEXT,
+      product_id TEXT,
+      sku TEXT,
+      name TEXT,
+      expected REAL DEFAULT 0,
+      counted REAL,
+      price_cost REAL DEFAULT 0,
+      PRIMARY KEY (inventory_id, product_id)
+    )`),
+  ]);
+}
+
+async function inventoryList(env) {
+  const r = await env.DB.prepare(`SELECT * FROM inventory ORDER BY date DESC LIMIT 100`).all();
+  return json(r.results);
+}
+
+// Создаёт документ и наполняет строки снимком учётных остатков (INSERT…SELECT — без round-trip).
+async function inventoryCreate(env, request, auth) {
+  const b = await request.json().catch(() => ({}));
+  const scope = ['all', 'instock', 'category'].includes(b.scope) ? b.scope : 'instock';
+  const category = b.category || null;
+  if (scope === 'category' && !category) return err(400, 'Для режима «по категории» нужна категория');
+  const wh = b.warehouse_id || 'w1';
+  const id = genId();
+  const no = 'ИНВ-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + id.slice(0, 4).toUpperCase();
+
+  await env.DB.prepare(
+    `INSERT INTO inventory (id,no,date,warehouse_id,status,scope,responsible_id,responsible_name,note)
+     VALUES (?,?,datetime('now'),?,'draft',?,?,?,?)`
+  ).bind(id, no, wh, scope, auth.sub, auth.name || '', String(b.note || '')).run();
+
+  const stockSub = `LEFT JOIN (SELECT product_id, SUM(stock) AS stock FROM product_stock GROUP BY product_id) s ON s.product_id = p.id`;
+  let where = '';
+  if (scope === 'instock') where = 'WHERE COALESCE(s.stock,0) > 0';
+  else if (scope === 'category') where = 'WHERE p.category_id = ?';
+
+  const insSql =
+    `INSERT INTO inventory_items (inventory_id, product_id, sku, name, expected, counted, price_cost)
+     SELECT ?, p.id, p.sku, p.name, COALESCE(s.stock,0), NULL, COALESCE(p.price_cost,0)
+       FROM products p ${stockSub} ${where}`;
+  const insArgs = scope === 'category' ? [id, category] : [id];
+  const res = await env.DB.prepare(insSql).bind(...insArgs).run();
+  const cnt = (res.meta && res.meta.changes) || 0;
+  await env.DB.prepare(`UPDATE inventory SET items_count=? WHERE id=?`).bind(cnt, id).run();
+  return json({ id, no, items_count: cnt, scope });
+}
+
+async function inventoryGet(env, id) {
+  const doc = await env.DB.prepare(`SELECT * FROM inventory WHERE id=?`).bind(id).first();
+  if (!doc) return err(404, 'Инвентаризация не найдена');
+  const items = await env.DB.prepare(
+    `SELECT product_id, sku, name, expected, counted, price_cost FROM inventory_items WHERE inventory_id=? ORDER BY name`
+  ).bind(id).all();
+  doc.items = items.results;
+  return json(doc);
+}
+
+// Массовое сохранение фактических количеств (counted). null = ещё не пересчитано.
+async function inventorySaveItems(env, id, request) {
+  const doc = await env.DB.prepare(`SELECT status FROM inventory WHERE id=?`).bind(id).first();
+  if (!doc) return err(404, 'Инвентаризация не найдена');
+  if (doc.status === 'posted') return err(409, 'Инвентаризация уже проведена');
+  const b = await request.json().catch(() => ({}));
+  const items = Array.isArray(b.items) ? b.items : [];
+  const stmts = [];
+  for (const it of items) {
+    if (!it || !it.product_id) continue;
+    const raw = it.counted;
+    const c = (raw === null || raw === undefined || raw === '') ? null : Number(raw);
+    if (c !== null && !Number.isFinite(c)) continue;
+    stmts.push(env.DB.prepare(`UPDATE inventory_items SET counted=? WHERE inventory_id=? AND product_id=?`).bind(c, id, it.product_id));
+  }
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+  return json({ ok: true, saved: stmts.length });
+}
+
+// Проведение: выставляет фактические остатки на склад и считает расхождения для актов.
+async function inventoryPost(env, id) {
+  const doc = await env.DB.prepare(`SELECT * FROM inventory WHERE id=?`).bind(id).first();
+  if (!doc) return err(404, 'Инвентаризация не найдена');
+  if (doc.status === 'posted') return err(409, 'Инвентаризация уже проведена');
+  const wh = doc.warehouse_id || 'w1';
+  const counted = await env.DB.prepare(
+    `SELECT product_id, expected, counted, price_cost FROM inventory_items WHERE inventory_id=? AND counted IS NOT NULL`
+  ).bind(id).all();
+
+  const stmts = [];
+  let surplusQty = 0, shortageQty = 0, surplusVal = 0, shortageVal = 0, adjusted = 0;
+  for (const it of counted.results) {
+    const diff = Number(it.counted) - Number(it.expected || 0);
+    if (diff !== 0) {
+      adjusted++;
+      const val = Math.abs(diff) * Number(it.price_cost || 0);
+      if (diff > 0) { surplusQty += diff; surplusVal += val; }
+      else { shortageQty += -diff; shortageVal += val; }
+    }
+    // фактический остаток на склад (upsert — товар мог быть без строки остатка)
+    stmts.push(env.DB.prepare(
+      `INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?,?,?,0)
+       ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock`
+    ).bind(it.product_id, wh, Number(it.counted)));
+  }
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+
+  await env.DB.prepare(
+    `UPDATE inventory SET status='posted', posted_at=datetime('now'),
+       surplus_qty=?, shortage_qty=?, surplus_value=?, shortage_value=? WHERE id=?`
+  ).bind(surplusQty, shortageQty, surplusVal, shortageVal, id).run();
+  return json({ ok: true, counted: counted.results.length, adjusted, surplusQty, shortageQty, surplusValue: surplusVal, shortageValue: shortageVal });
 }
 
 // Категории каталога с числом товаров (только непустые) — для плиток каталога.

@@ -1925,7 +1925,7 @@ VIEWS.warehouse = () => {
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn', onclick: () => { wrap.querySelector('[data-anchor="receipts"]')?.scrollIntoView({ behavior:'smooth' }); toast('Скроллю к приходам', 'info'); } }, '📦 Приходы'),
       el('button', { class: 'btn', onclick: () => stub('Перемещения между складами', 'У KES пока один склад в Караганде. При расширении: складки в Астане, Алматы, Темиртау — перемещения с актами М-11.') }, '🔄 Перемещения'),
-      el('button', { class: 'btn btn-primary', onclick: () => stub('Новая инвентаризация', 'Запустит лист пересчёта с PDA-сканером (или печать листов). Расхождения автоматически создают акты списания/оприходования.') }, '+ Инвентаризация'),
+      can('edit-stock') ? el('button', { class: 'btn btn-primary', onclick: () => openInventoryCreate() }, '+ Инвентаризация') : null,
     ]),
   ]));
 
@@ -1946,6 +1946,14 @@ VIEWS.warehouse = () => {
     ]);
     stats.replaceWith(grid);
   }).catch(() => {});
+
+  // Инвентаризации (документы пересчёта)
+  if (can('edit-stock')) {
+    wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Инвентаризации'));
+    const invHost = el('div', { class:'table-wrap' }, el('div', { class:'muted', style:'padding:12px' }, 'Загрузка…'));
+    wrap.append(invHost);
+    renderInventoryList(invHost);
+  }
 
   // Остатки по складу — серверная пагинация + поиск + фильтр низких остатков
   wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Остатки по складу'));
@@ -2038,6 +2046,315 @@ VIEWS.warehouse = () => {
   loadStock();
   return wrap;
 };
+
+// ============================================================
+// ИНВЕНТАРИЗАЦИЯ
+// ============================================================
+
+// Список документов инвентаризации в разделе «Склад»
+async function renderInventoryList(host) {
+  try {
+    const rows = await window.__API__.apiFetch('inventory');
+    host.innerHTML = '';
+    if (!rows || !rows.length) {
+      host.append(el('div', { class:'muted', style:'padding:12px' }, 'Инвентаризаций пока нет. Нажмите «+ Инвентаризация».'));
+      return;
+    }
+    const t = el('table', { class:'data' });
+    t.append(el('thead', {}, el('tr', {}, [
+      el('th', {}, '№'), el('th', {}, 'Дата'), el('th', {}, 'Охват'),
+      el('th', { class:'num' }, 'Позиций'), el('th', {}, 'Статус'),
+      el('th', { class:'num' }, 'Излишки'), el('th', { class:'num' }, 'Недостача'),
+    ])));
+    const scopeLabel = { all:'Вся номенклатура', instock:'С остатком', category:'По категории' };
+    t.append(el('tbody', {}, rows.map(r => el('tr', { style:'cursor:pointer', onclick: () => openInventorySheet(r.id) }, [
+      el('td', { class:'strong' }, r.no),
+      el('td', {}, String(r.date || '').slice(0, 16).replace('T', ' ')),
+      el('td', { class:'muted' }, scopeLabel[r.scope] || r.scope || '—'),
+      el('td', { class:'num' }, r.items_count || 0),
+      el('td', {}, r.status === 'posted'
+        ? el('span', { class:'pill pill-success' }, 'проведена')
+        : el('span', { class:'pill pill-warn' }, 'черновик')),
+      el('td', { class:'num' }, r.surplus_value ? fmtMoneyK(r.surplus_value) : '—'),
+      el('td', { class:'num' }, r.shortage_value ? fmtMoneyK(r.shortage_value) : '—'),
+    ]))));
+    host.append(t);
+  } catch (e) {
+    host.innerHTML = '';
+    host.append(el('div', { class:'pill pill-danger', style:'margin:8px' }, 'Не удалось загрузить инвентаризации: ' + ((e && e.message) || e)));
+  }
+}
+
+// Модалка создания: выбор охвата листа пересчёта
+function openInventoryCreate() {
+  const cats = (state.categories || []).filter(c => c.name !== 'Товары');
+  const scope = fSelect('Охват пересчёта', [
+    { value:'instock', label:'Только товары с остатком' },
+    { value:'category', label:'По категории' },
+    { value:'all', label:'Вся номенклатура (большой лист)' },
+  ], 'instock');
+  const cat = fSelect('Категория', cats.length ? cats.map(c => ({ value:c.id, label:`${c.icon || '📁'} ${c.name} (${c.count || 0})` })) : [{ value:'', label:'— нет категорий —' }]);
+  const note = fInput('Примечание', '', { placeholder:'необязательно' });
+  cat.row.style.display = 'none';
+  scope.row.querySelector('select').onchange = (e) => { cat.row.style.display = e.target.value === 'category' ? '' : 'none'; };
+  const body = el('div', {}, [
+    scope.row, cat.row, note.row,
+    el('p', { class:'muted', style:'font-size:12px;margin:4px 0 0' }, 'Будет создан лист пересчёта со снимком учётных остатков. Дальше — сканер или печать листа.'),
+  ]);
+  const createBtn = el('button', { class:'btn btn-primary', onclick: async () => {
+    if (scope.get() === 'category' && !cat.get()) { toast('Выберите категорию', 'warn'); return; }
+    createBtn.disabled = true; createBtn.textContent = 'Создаём…';
+    try {
+      const r = await window.__API__.apiFetch('inventory', { method:'POST', body: {
+        scope: scope.get(),
+        category: scope.get() === 'category' ? cat.get() : undefined,
+        note: note.get(),
+      } });
+      toast(`Лист создан: ${r.no} · ${r.items_count} позиций`, 'success');
+      closeModal();
+      openInventorySheet(r.id);
+    } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); createBtn.disabled = false; createBtn.textContent = 'Создать лист'; }
+  } }, 'Создать лист');
+  openModal({ title:'Новая инвентаризация', body, foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), createBtn] });
+}
+
+// Лист пересчёта: сканер + ручной ввод + сохранение + печать + проведение
+async function openInventorySheet(id) {
+  openModal({ title:'Лист пересчёта', body: el('div', { class:'muted', style:'padding:20px' }, 'Загрузка…'), foot: [] });
+  let doc;
+  try { doc = await window.__API__.apiFetch('inventory/' + encodeURIComponent(id)); }
+  catch (e) { toast('Ошибка загрузки: ' + ((e && e.message) || e), 'error'); return; }
+
+  const items = (doc.items || []).map(it => ({ ...it, counted: it.counted == null ? null : Number(it.counted) }));
+  const bySku = {}; items.forEach(it => { bySku[String(it.sku || '').trim().toLowerCase()] = it; });
+  const posted = doc.status === 'posted';
+  let dirty = false;
+
+  const diffOf = (it) => (it.counted == null ? null : it.counted - Number(it.expected || 0));
+  const fmtDiff = (d) => d == null ? '—' : (d > 0 ? '+' + d : String(d));
+
+  // --- toolbar ---
+  const scanI = el('input', { placeholder:'📷 Сканируйте или введите артикул + Enter', style:'flex:1;min-width:180px' });
+  const searchI = el('input', { placeholder:'Поиск по списку…', style:'flex:1;min-width:140px' });
+  const filterSel = el('select', {}, [
+    el('option', { value:'all' }, 'Все'),
+    el('option', { value:'todo' }, 'Не пересчитанные'),
+    el('option', { value:'diff' }, 'С расхождением'),
+  ]);
+  const progress = el('div', { class:'muted', style:'font-size:12px;margin:6px 0' });
+  const tbody = el('tbody', {});
+
+  function updateProgress() {
+    const counted = items.filter(it => it.counted != null).length;
+    const diffs = items.filter(it => { const d = diffOf(it); return d != null && d !== 0; }).length;
+    progress.innerHTML = '';
+    progress.append(
+      el('span', {}, `Пересчитано ${counted} из ${items.length}`),
+      el('span', { style:'margin-left:12px' }, `Расхождений: `),
+      el('b', { style: diffs ? 'color:#DC2626' : 'color:#16A34A' }, String(diffs)),
+      dirty ? el('span', { class:'pill pill-warn', style:'margin-left:10px;font-size:10px' }, 'есть несохранённое') : null,
+    );
+  }
+  function updateRowUI(it) {
+    const inp = tbody.querySelector(`[data-fact="${it.product_id}"]`);
+    if (inp && document.activeElement !== inp) inp.value = it.counted == null ? '' : it.counted;
+    const dc = tbody.querySelector(`[data-delta="${it.product_id}"]`);
+    if (dc) { const d = diffOf(it); dc.textContent = fmtDiff(d); dc.style.color = d == null ? '#9CA3AF' : d === 0 ? '#6B7280' : d > 0 ? '#16A34A' : '#DC2626'; }
+  }
+
+  function visible() {
+    const q = searchI.value.trim().toLowerCase();
+    const f = filterSel.value;
+    return items.filter(it => {
+      if (q && !(String(it.sku || '').toLowerCase().includes(q) || String(it.name || '').toLowerCase().includes(q))) return false;
+      if (f === 'todo' && it.counted != null) return false;
+      if (f === 'diff') { const d = diffOf(it); if (d == null || d === 0) return false; }
+      return true;
+    });
+  }
+  function renderList() {
+    const list = visible();
+    const cap = 400;
+    tbody.innerHTML = '';
+    list.slice(0, cap).forEach(it => {
+      const d = diffOf(it);
+      const factInput = el('input', {
+        type:'number', 'data-fact': it.product_id, value: it.counted == null ? '' : it.counted,
+        style:'width:80px', disabled: posted ? 'disabled' : null,
+        oninput: (e) => {
+          const v = e.target.value;
+          it.counted = (v === '' ? null : Number(v));
+          dirty = true;
+          updateRowUI(it); updateProgress();
+        },
+      });
+      tbody.append(el('tr', {}, [
+        el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, it.sku),
+        el('td', { class:'strong' }, it.name),
+        el('td', { class:'num' }, Math.round(Number(it.expected || 0) * 100) / 100),
+        el('td', { class:'num' }, factInput),
+        el('td', { class:'num', 'data-delta': it.product_id, style:`font-weight:600;color:${d == null ? '#9CA3AF' : d === 0 ? '#6B7280' : d > 0 ? '#16A34A' : '#DC2626'}` }, fmtDiff(d)),
+      ]));
+    });
+    if (list.length > cap) tbody.append(el('tr', {}, el('td', { colspan:5, class:'muted', style:'text-align:center;padding:10px' }, `Показаны первые ${cap} из ${list.length}. Уточните поиск или используйте сканер.`)));
+    if (!list.length) tbody.append(el('tr', {}, el('td', { colspan:5, class:'muted', style:'text-align:center;padding:14px' }, 'Ничего не найдено')));
+  }
+
+  scanI.onkeydown = (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const raw = scanI.value.trim();
+    if (!raw) return;
+    // поддержка «артикул*кол-во» (например 12 единиц одним сканом)
+    const m = raw.match(/^(.*?)\s*[*xх]\s*(\d+(?:[.,]\d+)?)$/i);
+    const sku = (m ? m[1] : raw).trim().toLowerCase();
+    const add = m ? Number(String(m[2]).replace(',', '.')) : 1;
+    const it = bySku[sku];
+    scanI.value = '';
+    if (!it) { toast(`Артикул не найден: ${raw}`, 'warn'); return; }
+    it.counted = (it.counted || 0) + add;
+    dirty = true;
+    updateRowUI(it); updateProgress();
+    toast(`${it.sku}: ${it.counted}`, 'success');
+  };
+  let sd; searchI.oninput = () => { clearTimeout(sd); sd = setTimeout(renderList, 200); };
+  filterSel.onchange = renderList;
+
+  async function save() {
+    const payload = { items: items.map(it => ({ product_id: it.product_id, counted: it.counted })) };
+    await window.__API__.apiFetch('inventory/' + encodeURIComponent(id) + '/items', { method:'PUT', body: payload });
+    dirty = false; updateProgress();
+  }
+
+  // --- сборка тела ---
+  const table = el('table', { class:'data' });
+  table.append(el('thead', {}, el('tr', {}, [
+    el('th', {}, 'Артикул'), el('th', {}, 'Наименование'),
+    el('th', { class:'num' }, 'Учёт'), el('th', { class:'num' }, 'Факт'), el('th', { class:'num' }, 'Δ'),
+  ])));
+  table.append(tbody);
+
+  const body = el('div', {}, [
+    el('div', { class:'row', style:'gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px' }, [
+      el('span', { class:'pill' }, doc.no),
+      posted ? el('span', { class:'pill pill-success' }, 'проведена') : el('span', { class:'pill pill-warn' }, 'черновик'),
+      doc.responsible_name ? el('span', { class:'muted', style:'font-size:12px' }, '👤 ' + doc.responsible_name) : null,
+    ]),
+    posted ? null : el('div', { class:'row', style:'gap:8px;flex-wrap:wrap;margin:8px 0' }, [scanI, searchI, filterSel]),
+    posted ? el('div', { class:'row', style:'gap:8px;flex-wrap:wrap;margin:8px 0' }, [searchI, filterSel]) : null,
+    progress,
+    el('div', { style:'max-height:48vh;overflow:auto;border:1px solid #E5E7EB;border-radius:8px' }, table),
+  ]);
+
+  // --- кнопки ---
+  const foot = [];
+  foot.push(el('button', { class:'btn', onclick: () => printCountSheet(doc, items) }, '🖨 Печать листа'));
+  if (posted) {
+    foot.push(el('button', { class:'btn', onclick: () => printInventoryAct(doc, items, 'shortage') }, '📄 Акт списания'));
+    foot.push(el('button', { class:'btn', onclick: () => printInventoryAct(doc, items, 'surplus') }, '📄 Акт оприходования'));
+    foot.push(el('button', { class:'btn btn-primary', onclick: () => { closeModal(); navigate('warehouse'); } }, 'Закрыть'));
+  } else {
+    const saveBtn = el('button', { class:'btn', onclick: async () => {
+      saveBtn.disabled = true; const o = saveBtn.textContent; saveBtn.textContent = 'Сохраняем…';
+      try { await save(); toast('Сохранено', 'success'); } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
+      saveBtn.disabled = false; saveBtn.textContent = o;
+    } }, '💾 Сохранить');
+    const postBtn = el('button', { class:'btn btn-primary', onclick: async () => {
+      const counted = items.filter(it => it.counted != null).length;
+      if (!counted) { toast('Внесите фактические количества хотя бы для одной позиции', 'warn'); return; }
+      if (!confirm(`Провести инвентаризацию?\nОстатки на складе будут выставлены по факту (${counted} позиций). Действие необратимо.`)) return;
+      postBtn.disabled = true; postBtn.textContent = 'Проведение…';
+      try {
+        await save();
+        const res = await window.__API__.apiFetch('inventory/' + encodeURIComponent(id) + '/post', { method:'POST' });
+        showInventoryResult(doc, items, res);
+      } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); postBtn.disabled = false; postBtn.textContent = '✅ Сравнить и провести'; }
+    } }, '✅ Сравнить и провести');
+    foot.push(saveBtn, postBtn);
+  }
+
+  openModal({ title:'Инвентаризация ' + doc.no, body, foot });
+  renderList(); updateProgress();
+  if (!posted) setTimeout(() => scanI.focus(), 50);
+}
+
+// Итог проведения: сводка расхождений + печать актов
+function showInventoryResult(doc, items, res) {
+  const shortage = items.filter(it => it.counted != null && it.counted < Number(it.expected || 0));
+  const surplus = items.filter(it => it.counted != null && it.counted > Number(it.expected || 0));
+  const body = el('div', {}, [
+    el('p', {}, 'Инвентаризация проведена, остатки на складе обновлены по факту.'),
+    el('div', { class:'grid grid-2', style:'gap:10px;margin:10px 0' }, [
+      el('div', { class:'card', style:'padding:12px' }, [
+        el('div', { class:'stat-label' }, 'Излишки (оприходование)'),
+        el('div', { style:'font-size:18px;font-weight:600;margin-top:4px;color:#16A34A' }, `${surplus.length} поз · ${fmtMoney(res.surplusValue || 0)}`),
+      ]),
+      el('div', { class:'card', style:'padding:12px' }, [
+        el('div', { class:'stat-label' }, 'Недостача (списание)'),
+        el('div', { style:'font-size:18px;font-weight:600;margin-top:4px;color:#DC2626' }, `${shortage.length} поз · ${fmtMoney(res.shortageValue || 0)}`),
+      ]),
+    ]),
+    el('p', { class:'muted', style:'font-size:12px' }, 'Распечатайте акты для оформления.'),
+  ]);
+  openModal({ title:'Результат инвентаризации', body, foot: [
+    el('button', { class:'btn', onclick: () => printInventoryAct(doc, items, 'shortage'), disabled: shortage.length ? null : 'disabled' }, '📄 Акт списания'),
+    el('button', { class:'btn', onclick: () => printInventoryAct(doc, items, 'surplus'), disabled: surplus.length ? null : 'disabled' }, '📄 Акт оприходования'),
+    el('button', { class:'btn btn-primary', onclick: () => { closeModal(); navigate('warehouse'); } }, 'Готово'),
+  ] });
+}
+
+// Печать инвентаризационного листа (слепой пересчёт — без учётных данных)
+function printCountSheet(doc, items) {
+  const w = window.open('', '_blank', 'width=900,height=1100');
+  if (!w) { toast('Браузер заблокировал окно печати — разрешите popup', 'error'); return; }
+  const dateStr = String(doc.date || '').slice(0, 10);
+  const rows = items.map((it, i) =>
+    `<tr><td>${i + 1}</td><td style="font-family:monospace;font-size:11px">${it.sku || ''}</td><td>${it.name || ''}</td><td style="width:120px;border-bottom:1px solid #999">&nbsp;</td></tr>`
+  ).join('');
+  const inner = `
+    <div class="pr-head">
+      <div class="pr-logo">${PRINT_LOGO}<div><h2>ИНВЕНТАРИЗАЦИОННЫЙ ЛИСТ ${doc.no}</h2><div style="color:#666;font-size:12px;margin-top:4px">от ${dateStr} · лист пересчёта</div></div></div>
+      <div class="pr-meta"><div>ТОО «KazEnergoSnab»</div><div>Склад: Караганда</div><div style="margin-top:6px;color:#888">Ответственный: ${doc.responsible_name || '____________'}</div></div>
+    </div>
+    <table class="pr-table"><thead><tr><th style="width:32px">#</th><th style="width:110px">Артикул</th><th>Наименование</th><th class="num" style="width:120px">Факт</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="pr-foot">
+      <div><div>Пересчёт произвёл: ____________________</div><div style="margin-top:12px">Проверил: ____________________</div><div style="margin-top:4px;color:#aaa">М.П.</div></div>
+      <div class="pr-stamp">место<br>печати</div>
+    </div>`;
+  w.document.open(); w.document.write(buildPrintDoc('Лист ' + doc.no, inner)); w.document.close();
+}
+
+// Печать акта: 'shortage' = списание (недостача), 'surplus' = оприходование (излишки)
+function printInventoryAct(doc, items, kind) {
+  const isShort = kind === 'shortage';
+  const list = items.filter(it => it.counted != null && (isShort ? it.counted < Number(it.expected || 0) : it.counted > Number(it.expected || 0)));
+  if (!list.length) { toast(isShort ? 'Недостач нет' : 'Излишков нет', 'info'); return; }
+  const w = window.open('', '_blank', 'width=900,height=1100');
+  if (!w) { toast('Браузер заблокировал окно печати — разрешите popup', 'error'); return; }
+  const dateStr = String(doc.posted_at || doc.date || '').slice(0, 10);
+  let total = 0;
+  const rows = list.map((it, i) => {
+    const diff = Math.abs(it.counted - Number(it.expected || 0));
+    const sum = diff * Number(it.price_cost || 0);
+    total += sum;
+    return `<tr><td>${i + 1}</td><td style="font-family:monospace;font-size:11px">${it.sku || ''}</td><td>${it.name || ''}</td>`
+      + `<td class="num">${Math.round(Number(it.expected || 0) * 100) / 100}</td><td class="num">${it.counted}</td>`
+      + `<td class="num"><b>${isShort ? '−' : '+'}${diff}</b></td><td class="num">${fmtMoney(it.price_cost || 0)}</td><td class="num"><b>${fmtMoney(sum)}</b></td></tr>`;
+  }).join('');
+  const title = isShort ? 'АКТ СПИСАНИЯ (недостача)' : 'АКТ ОПРИХОДОВАНИЯ (излишки)';
+  const inner = `
+    <div class="pr-head">
+      <div class="pr-logo">${PRINT_LOGO}<div><h2>${title}</h2><div style="color:#666;font-size:12px;margin-top:4px">по инвентаризации ${doc.no} от ${dateStr}</div></div></div>
+      <div class="pr-meta"><div>ТОО «KazEnergoSnab»</div><div>Склад: Караганда</div><div style="margin-top:6px;color:#888">Ответственный: ${doc.responsible_name || '____________'}</div></div>
+    </div>
+    <table class="pr-table"><thead><tr><th style="width:32px">#</th><th style="width:100px">Артикул</th><th>Наименование</th><th class="num">Учёт</th><th class="num">Факт</th><th class="num">Откл.</th><th class="num">Закуп</th><th class="num">Сумма</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="pr-totals"><div class="total-line grand"><span>Итого ${isShort ? 'недостача' : 'излишки'}:</span> <span>${fmtMoney(total)}</span></div></div>
+    <div class="pr-foot">
+      <div><div>Председатель комиссии: ____________________</div><div style="margin-top:12px">Члены комиссии: ____________________</div><div style="margin-top:12px">МОЛ: ____________________</div><div style="margin-top:4px;color:#aaa">М.П.</div></div>
+      <div class="pr-stamp">место<br>печати</div>
+    </div>`;
+  w.document.open(); w.document.write(buildPrintDoc(title + ' ' + doc.no, inner)); w.document.close();
+}
 
 // ============================================================
 // VIEW: SHIPMENTS
