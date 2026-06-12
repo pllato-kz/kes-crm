@@ -98,6 +98,15 @@ export async function onRequest(context) {
     // токен (если есть и валиден) -> payload, иначе null
     const auth = await authenticate(request, env);
 
+    // синхронизация с 1С — только директор
+    if (seg[0] === 'sync') {
+      if (!auth) return err(401, 'Требуется авторизация');
+      if (auth.role !== 'director') return err(403, 'Только директор может запускать синхронизацию');
+      if (seg[1] === 'status' && request.method === 'GET') return syncStatus(env);
+      if (seg[1] === '1c' && seg[2] === 'clients' && request.method === 'POST') return syncClients(env);
+      return err(404, 'Неизвестная синхронизация: ' + seg.join('/'));
+    }
+
     // установка/смена пароля: первичная установка (хэш ещё null) разрешена без токена
     if (seg[0] === 'users' && seg[2] === 'password' && request.method === 'POST') {
       return setPasswordRoute(env, request, seg[1], auth);
@@ -621,6 +630,70 @@ async function filesRoute({ request, env }, seg) {
   }
 
   return err(405, 'Метод не поддерживается');
+}
+
+// --------------------------------------------------------------------------
+// Синхронизация с 1С (OData). Креды — в секретах ODATA_URL/USER/PASSWORD.
+// --------------------------------------------------------------------------
+async function odataGet(env, path) {
+  if (!env.ODATA_URL) throw new Error('ODATA_URL не задан (секрет)');
+  const url = encodeURI(env.ODATA_URL.replace(/\/+$/, '') + '/' + path);
+  const auth = 'Basic ' + btoa(`${env.ODATA_USER}:${env.ODATA_PASSWORD}`);
+  const res = await fetch(url, { headers: { Authorization: auth, Accept: 'application/json' } });
+  if (!res.ok) throw new Error('1С OData ' + res.status + ' на ' + path.split('?')[0]);
+  return res.json();
+}
+
+async function syncStatus(env) {
+  const r = await env.DB.prepare('SELECT entity, last_at, info FROM sync_state').all();
+  return json(r.results);
+}
+
+// Контрагенты 1С -> клиенты CRM. Идемпотентно по ext_ref (Ref_Key) и БИН.
+async function syncClients(env) {
+  const ex = await env.DB.prepare('SELECT id, ext_ref, bin FROM clients').all();
+  const byRef = {}, byBin = {};
+  for (const c of ex.results) { if (c.ext_ref) byRef[c.ext_ref] = c.id; if (c.bin) byBin[c.bin] = c.id; }
+
+  const top = 1000;
+  let skip = 0, fetched = 0, created = 0, updated = 0;
+  const base = 'Catalog_Контрагенты?$format=json'
+    + '&$filter=DeletionMark eq false and IsFolder eq false'
+    + '&$select=Ref_Key,Description,НаименованиеПолное,ИдентификационныйКодЛичности';
+
+  while (true) {
+    const data = await odataGet(env, `${base}&$top=${top}&$skip=${skip}`);
+    const rows = data.value || [];
+    if (!rows.length) break;
+    fetched += rows.length;
+    const stmts = [];
+    for (const r of rows) {
+      const ref = r.Ref_Key;
+      const bin = String(r['ИдентификационныйКодЛичности'] || '').trim();
+      const name = String(r.Description || r['НаименованиеПолное'] || '').trim();
+      if (!ref || !name) continue;
+      let id = byRef[ref] || (bin && byBin[bin]) || null;
+      if (id) {
+        stmts.push(env.DB.prepare('UPDATE clients SET name=?, bin=?, ext_ref=? WHERE id=?').bind(name, bin, ref, id));
+        updated++;
+      } else {
+        id = genId();
+        stmts.push(env.DB.prepare('INSERT INTO clients (id,name,bin,type_key,ext_ref,balance,ltv,email) VALUES (?,?,?,?,?,0,0,?)').bind(id, name, bin, 'opt', ref, '—'));
+        created++;
+      }
+      byRef[ref] = id; if (bin) byBin[bin] = id;
+    }
+    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+    if (rows.length < top) break;
+    skip += top;
+  }
+
+  const info = `получено ${fetched}, новых ${created}, обновлено ${updated}`;
+  await env.DB.prepare(
+    `INSERT INTO sync_state (entity, last_at, info) VALUES ('clients_1c', datetime('now'), ?)
+     ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+  ).bind(info).run();
+  return json({ fetched, created, updated });
 }
 
 // --------------------------------------------------------------------------

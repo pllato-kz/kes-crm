@@ -2429,6 +2429,29 @@ VIEWS.settings = () => {
   card.append(tab);
   wrap.append(card);
 
+  // Синхронизация с 1С (только директор)
+  if (can('edit-users')) {
+    const syncCard = el('div', { class:'card mt-16' });
+    syncCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Синхронизация с 1С')));
+    const statusHost = el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Статус: загрузка…');
+    const btn = el('button', { class:'btn btn-primary', onclick: async () => {
+      if (!confirm('Загрузить контрагентов из 1С в раздел «Клиенты»? Может занять до минуты.')) return;
+      btn.disabled = true; const old = btn.textContent; btn.textContent = 'Синхронизация…';
+      toast('Импорт контрагентов из 1С…', 'info');
+      try {
+        const r = await window.__API__.apiFetch('sync/1c/clients', { method: 'POST' });
+        toast(`1С: получено ${r.fetched}, новых ${r.created}, обновлено ${r.updated}`, 'success');
+        await loadData(); navigate('settings');
+      } catch (err) { toast('Ошибка синхронизации: ' + ((err && err.message) || err), 'error'); btn.disabled = false; btn.textContent = old; }
+    } }, '🔄 Контрагенты 1С → Клиенты');
+    syncCard.append(statusHost, btn);
+    wrap.append(syncCard);
+    window.__API__.apiFetch('sync/status').then(rows => {
+      const cl = (rows || []).find(x => x.entity === 'clients_1c');
+      statusHost.textContent = cl ? `Контрагенты: ${String(cl.last_at).slice(0, 16)} · ${cl.info}` : 'Контрагенты ещё не синхронизировались';
+    }).catch(() => { statusHost.textContent = ''; });
+  }
+
   // Матрица прав
   const permsCard = el('div', { class:'card mt-16' });
   permsCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Матрица доступа по ролям')));
