@@ -140,6 +140,9 @@ export async function onRequest(context) {
     // сводка по складу (для карточек: SKU, единиц, резерв, стоимость)
     if (seg[0] === 'warehouse' && seg[1] === 'summary' && request.method === 'GET') return warehouseSummary(env);
 
+    // агрегаты для раздела «Отчёты» (всё из данных CRM)
+    if (seg[0] === 'reports' && seg[1] === 'summary' && request.method === 'GET') return reportsSummary(env);
+
     // инвентаризация склада (лист пересчёта → проведение → корректировка остатков)
     if (seg[0] === 'inventory') {
       await ensureInventorySchema(env);
@@ -451,6 +454,39 @@ async function listProducts(env, url) {
   ).bind(...args, limit, offset).all();
 
   return json({ data: rows.results, total: total ? total.n : 0, page, limit });
+}
+
+// Агрегаты раздела «Отчёты» — считаются в SQL по данным CRM (сделки/позиции).
+// «Выигранные» сделки: этапы paid/shipped/closed.
+async function reportsSummary(env) {
+  const WON = "('paid','shipped','closed')";
+  const byStage = await env.DB.prepare(
+    `SELECT stage_id, COUNT(*) AS count, COALESCE(SUM(amount),0) AS sum FROM deals GROUP BY stage_id`
+  ).all();
+  const byManager = await env.DB.prepare(
+    `SELECT manager_id, COUNT(*) AS count, COALESCE(SUM(amount),0) AS sum
+       FROM deals WHERE stage_id IN ${WON} GROUP BY manager_id`
+  ).all();
+  const byCategory = await env.DB.prepare(
+    `SELECT COALESCE(c.name,'Без категории') AS category, COALESCE(SUM(di.qty * di.price_used),0) AS sum
+       FROM deal_items di
+       JOIN deals d ON d.id = di.deal_id
+       LEFT JOIN products p ON p.id = di.product_id
+       LEFT JOIN product_categories c ON c.id = p.category_id
+      WHERE d.stage_id IN ${WON}
+      GROUP BY c.name HAVING sum > 0 ORDER BY sum DESC`
+  ).all();
+  const byMonth = await env.DB.prepare(
+    `SELECT substr(created,1,7) AS month, COALESCE(SUM(amount),0) AS sum
+       FROM deals WHERE stage_id IN ${WON} AND created IS NOT NULL AND created <> ''
+      GROUP BY month ORDER BY month DESC LIMIT 6`
+  ).all();
+  return json({
+    byStage: byStage.results,
+    byManager: byManager.results,
+    byCategory: byCategory.results,
+    byMonth: byMonth.results.reverse(), // хронологически
+  });
 }
 
 // Сводка по складу: всего SKU, единиц на остатке, в резерве, стоимость (по закупу).
