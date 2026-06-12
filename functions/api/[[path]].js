@@ -105,6 +105,7 @@ export async function onRequest(context) {
       if (seg[1] === 'status' && request.method === 'GET') return syncStatus(env);
       if (seg[1] === '1c' && seg[2] === 'clients' && request.method === 'POST') return syncClients(env);
       if (seg[1] === '1c' && seg[2] === 'categories' && request.method === 'POST') return syncCategories(env);
+      if (seg[1] === '1c' && seg[2] === 'stock' && request.method === 'POST') return syncStock(env);
       if (seg[1] === '1c' && seg[2] === 'products' && request.method === 'POST') {
         const u = new URL(request.url);
         const lim = parseInt(u.searchParams.get('limit'), 10);
@@ -782,6 +783,36 @@ async function syncCategories(env) {
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
   ).bind(`категорий ${upserted}`).run();
   return json({ fetched, upserted });
+}
+
+// Остатки 1С (агрегированный баланс по номенклатуре) -> product_stock (склад w1).
+async function syncStock(env) {
+  const prods = await env.DB.prepare('SELECT id, ext_ref FROM products WHERE ext_ref IS NOT NULL').all();
+  const byRef = {};
+  for (const p of prods.results) byRef[p.ext_ref] = p.id;
+
+  const data = await odataGet(env, "AccumulationRegister_ТоварыНаВиртуальныхСкладах/Balance(Dimensions='Номенклатура')?$format=json");
+  const rows = data.value || [];
+  let updated = 0, missing = 0;
+  const stmts = [];
+  for (const r of rows) {
+    if (!String(r['Номенклатура_Type'] || '').endsWith('Catalog_Номенклатура')) continue; // пропускаем ОС и пр.
+    const ref = r['Номенклатура'];
+    const qty = Number(r['КоличествоBalance'] || 0);
+    const pid = byRef[ref];
+    if (!pid) { missing++; continue; }
+    stmts.push(env.DB.prepare(
+      `INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?, 'w1', ?, 0)
+       ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock`
+    ).bind(pid, qty));
+    updated++;
+  }
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+  await env.DB.prepare(
+    `INSERT INTO sync_state (entity, last_at, info) VALUES ('stock_1c', datetime('now'), ?)
+     ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+  ).bind(`позиций с остатком ${updated}, не сопоставлено ${missing}`).run();
+  return json({ rows: rows.length, updated, missing });
 }
 
 // Категории каталога с числом товаров (только непустые) — для плиток каталога
