@@ -320,6 +320,11 @@ async function dataRoute({ request, env }, seg, url, auth) {
   if (resource === 'roles' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     if (!auth || auth.role !== 'director') return err(403, 'Менять доступы по ролям может только директор');
   }
+  // управлять этапами воронки может только директор
+  if (resource === 'deal_stages' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    if (!auth || auth.role !== 'director') return err(403, 'Только директор может управлять этапами');
+    if (method === 'DELETE' && id) return deleteStage(env, id);
+  }
 
   // --- точечная обработка ---
   if (resource === 'products' && id && seg[2] === 'stock') return productStock(env, request, id);
@@ -719,6 +724,15 @@ async function deleteDeal(env, id, auth) {
     env.DB.prepare(`DELETE FROM deals WHERE id=?`).bind(id),
   ]);
   return json({ deleted: 1, id });
+}
+
+// Удаление этапа воронки: сделки этого этапа переносим на другой этап (по сортировке).
+async function deleteStage(env, id) {
+  const fallback = await env.DB.prepare('SELECT id FROM deal_stages WHERE id<>? ORDER BY sort, id LIMIT 1').bind(id).first();
+  if (!fallback) return err(400, 'Нельзя удалить последний этап воронки');
+  await env.DB.prepare('UPDATE deals SET stage_id=? WHERE stage_id=?').bind(fallback.id, id).run();
+  await env.DB.prepare('DELETE FROM deal_stages WHERE id=?').bind(id).run();
+  return json({ deleted: 1, reassignedTo: fallback.id });
 }
 
 // Сделки: позиции (deal_items) вложены в объект сделки
