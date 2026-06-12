@@ -2093,18 +2093,21 @@ VIEWS.warehouse = () => {
     el('th', {}, 'Статус'),
     el('th', {}, 'Примечание'),
   ])));
-  tab.append(el('tbody', {}, state.receipts.map(r => {
-    const sp = byId(state.suppliers, r.supplier);
+  const recentReceipts = state.receipts.slice()
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+    .slice(0, 20);
+  tab.append(el('tbody', {}, recentReceipts.length ? recentReceipts.map(r => {
+    const supplier = r.supplierName || (byId(state.suppliers, r.supplier) || {}).name || '—';
     return el('tr', {}, [
       el('td', { class:'strong' }, r.no),
       el('td', {}, fmtDate(r.date)),
-      el('td', {}, sp?.name || '—'),
+      el('td', {}, supplier),
       el('td', { class:'num' }, r.items),
       el('td', { class:'num strong' }, fmtMoneyK(r.amount)),
-      el('td', {}, el('span', { class:'pill pill-success' }, r.status)),
+      el('td', {}, el('span', { class: 'pill ' + (r.status === 'оприходовано' ? 'pill-success' : 'pill-warn') }, r.status)),
       el('td', { class:'muted' }, r.note),
     ]);
-  })));
+  }) : [el('tr', {}, el('td', { colspan: 7, class:'muted', style:'text-align:center;padding:16px' }, 'Приходов нет. Синхронизируйте из 1С в Настройках.'))]));
   t.append(tab);
   wrap.append(t);
 
@@ -2910,24 +2913,36 @@ VIEWS.settings = () => {
         await loadData(); navigate('settings');
       } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
     } }, label);
+    const receiptsBtn = el('button', { class:'btn btn-primary', onclick: async (e) => {
+      const b = e.currentTarget;
+      if (!confirm('Загрузить последние приходы из 1С? Импортируются свежие документы поступления.')) return;
+      b.disabled = true; const old = b.textContent; b.textContent = 'Приходы…';
+      try {
+        const r = await window.__API__.apiFetch('sync/1c/receipts', { method: 'POST' });
+        toast(`Приходы: импортировано ${r.imported}`, 'success');
+        await loadData(); navigate('settings');
+      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
+    } }, '🔄 Приходы → Склад');
     syncCard.append(statusHost, el('div', { class:'row', style:'flex-wrap:wrap;gap:8px' }, [
       syncBtn('🔄 Контрагенты → Клиенты', 'sync/1c/clients', 'Загрузить контрагентов из 1С в «Клиенты»? Может занять до минуты.'),
       productsFullBtn,
       stockBtn,
       pricesBtn('last', '🔄 Цены из приходов → Закуп'),
       pricesBtn('avg', '🔄 Закуп (средняя)'),
+      receiptsBtn,
     ]));
     wrap.append(syncCard);
     window.__API__.apiFetch('sync/status').then(rows => {
       rows = rows || [];
       const f = (e) => rows.find(x => x.entity === e);
-      const cl = f('clients_1c'), pr = f('products_1c'), st = f('stock_1c'), px = f('prices_1c');
+      const cl = f('clients_1c'), pr = f('products_1c'), st = f('stock_1c'), px = f('prices_1c'), rc = f('receipts_1c');
       statusHost.innerHTML = '';
       statusHost.append(
         el('div', {}, cl ? `Контрагенты: ${String(cl.last_at).slice(0, 16)} · ${cl.info}` : 'Контрагенты ещё не синхронизировались'),
         el('div', {}, pr ? `Номенклатура: ${String(pr.last_at).slice(0, 16)} · ${pr.info}` : 'Номенклатура ещё не синхронизировалась'),
         el('div', {}, st ? `Остатки: ${String(st.last_at).slice(0, 16)} · ${st.info}` : 'Остатки ещё не синхронизировались'),
         el('div', {}, px ? `Цены: ${String(px.last_at).slice(0, 16)} · ${px.info}` : 'Цены ещё не пересчитывались'),
+        el('div', {}, rc ? `Приходы: ${String(rc.last_at).slice(0, 16)} · ${rc.info}` : 'Приходы ещё не синхронизировались'),
       );
     }).catch(() => { statusHost.textContent = ''; });
   }

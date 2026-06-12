@@ -89,7 +89,7 @@
       weight: s.weight, transport: s.transport, driver: s.driver, status: s.status_id, destination: s.destination,
     }),
     receipt: (r) => ({
-      id: r.id, no: r.no, supplier: r.supplier_id, date: r.date, items: r.items,
+      id: r.id, no: r.no, supplier: r.supplier_id, supplierName: r.supplier_name, date: r.date, items: r.items,
       amount: r.amount, status: r.status, note: r.note,
     }),
     notification: (n) => ({ id: n.id, text: n.text, type: n.type, time: n.created_at || '' }),
