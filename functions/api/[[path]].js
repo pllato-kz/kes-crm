@@ -1217,6 +1217,35 @@ async function inventoryPost(env, id) {
   return json({ ok: true, counted: counted.results.length, adjusted, surplusQty, shortageQty, surplusValue: surplusVal, shortageValue: shortageVal });
 }
 
+// Иконка категории по названию (для категорий из 1С, у которых стоит заглушка 📁).
+const CATEGORY_ICONS = [
+  [/автомат|выключател|модульн/i, '⚡'],
+  [/кабел|провод/i, '🔌'],
+  [/кнопк/i, '🔘'],
+  [/контактор|пускател|реле/i, '🧲'],
+  [/наконечник|гильз|клемм|зажим/i, '🔩'],
+  [/предохранител/i, '🛡'],
+  [/щит|корпус|бокс|шкаф/i, '🗄'],
+  [/освещ|лампа|светильник|прожектор|свет/i, '💡'],
+  [/розетк|вилк|удлинител/i, '🔌'],
+  [/трансформатор/i, '🔋'],
+  [/счётчик|счетчик|прибор|учёт|учет|измер/i, '📟'],
+  [/инструмент/i, '🛠'],
+  [/нва/i, '⚙'],
+  [/тэц/i, '🔥'],
+  [/тдм/i, '🏭'],
+  [/материал/i, '🧰'],
+  [/гос.?закуп/i, '🏛'],
+  [/готов/i, '✅'],
+  [/услуг/i, '🧾'],
+];
+function categoryIcon(name, current) {
+  if (current && current !== '📁') return current; // уважаем заданную вручную
+  const s = String(name || '');
+  for (const [re, ic] of CATEGORY_ICONS) if (re.test(s)) return ic;
+  return '📦';
+}
+
 // Категории каталога с числом товаров (только непустые) — для плиток каталога.
 // Корневую папку «Товары» не показываем как категорию: товары из неё попадают
 // в общий список «Все товары». total — честное число всех товаров (для плитки «Все»).
@@ -1227,8 +1256,9 @@ async function catalogCategories(env) {
       WHERE c.name <> 'Товары'
       GROUP BY c.id, c.name, c.icon HAVING count > 0 ORDER BY c.name`
   ).all();
+  const list = cats.results.map((c) => ({ ...c, icon: categoryIcon(c.name, c.icon) }));
   const total = await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first();
-  return json({ total: total ? total.n : 0, categories: cats.results });
+  return json({ total: total ? total.n : 0, categories: list });
 }
 
 // --------------------------------------------------------------------------
