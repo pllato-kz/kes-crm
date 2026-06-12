@@ -104,6 +104,10 @@ export async function onRequest(context) {
       if (auth.role !== 'director') return err(403, 'Только директор может запускать синхронизацию');
       if (seg[1] === 'status' && request.method === 'GET') return syncStatus(env);
       if (seg[1] === '1c' && seg[2] === 'clients' && request.method === 'POST') return syncClients(env);
+      if (seg[1] === '1c' && seg[2] === 'products' && request.method === 'POST') {
+        const lim = parseInt(new URL(request.url).searchParams.get('limit'), 10);
+        return syncProducts(env, Number.isFinite(lim) ? lim : 100);
+      }
       return err(404, 'Неизвестная синхронизация: ' + seg.join('/'));
     }
 
@@ -691,6 +695,54 @@ async function syncClients(env) {
   const info = `получено ${fetched}, новых ${created}, обновлено ${updated}`;
   await env.DB.prepare(
     `INSERT INTO sync_state (entity, last_at, info) VALUES ('clients_1c', datetime('now'), ?)
+     ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+  ).bind(info).run();
+  return json({ fetched, created, updated });
+}
+
+// Номенклатура 1С (только товары, Услуга=false) -> товары CRM. limit — ограничение выборки.
+async function syncProducts(env, limit) {
+  const ex = await env.DB.prepare('SELECT id, ext_ref, sku FROM products').all();
+  const byRef = {}, bySku = {};
+  for (const p of ex.results) { if (p.ext_ref) byRef[p.ext_ref] = p.id; if (p.sku) bySku[p.sku] = p.id; }
+
+  const cap = limit && limit > 0 ? limit : 100;
+  let skip = 0, fetched = 0, created = 0, updated = 0;
+  const base = 'Catalog_Номенклатура?$format=json'
+    + '&$filter=DeletionMark eq false and IsFolder eq false and Услуга eq false'
+    + '&$select=Ref_Key,Code,Артикул,Description';
+
+  while (fetched < cap) {
+    const pageTop = Math.min(1000, cap - fetched);
+    const data = await odataGet(env, `${base}&$top=${pageTop}&$skip=${skip}`);
+    const rows = data.value || [];
+    if (!rows.length) break;
+    const stmts = [];
+    for (const r of rows) {
+      const ref = r.Ref_Key;
+      const sku = (String(r['Артикул'] || '').trim() || String(r.Code || '').trim() || ref);
+      const name = String(r.Description || '').trim();
+      if (!ref || !name) continue;
+      let id = byRef[ref] || (sku && bySku[sku]) || null;
+      if (id) {
+        stmts.push(env.DB.prepare('UPDATE products SET name=?, sku=?, ext_ref=? WHERE id=?').bind(name, sku, ref, id));
+        updated++;
+      } else {
+        id = genId();
+        stmts.push(env.DB.prepare('INSERT INTO products (id,sku,name,unit,ext_ref) VALUES (?,?,?,?,?)').bind(id, sku, name, 'шт', ref));
+        created++;
+      }
+      byRef[ref] = id; if (sku) bySku[sku] = id;
+    }
+    fetched += rows.length;
+    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+    if (rows.length < pageTop) break;
+    skip += rows.length;
+  }
+
+  const info = `получено ${fetched}, новых ${created}, обновлено ${updated}`;
+  await env.DB.prepare(
+    `INSERT INTO sync_state (entity, last_at, info) VALUES ('products_1c', datetime('now'), ?)
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
   ).bind(info).run();
   return json({ fetched, created, updated });

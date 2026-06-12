@@ -2433,22 +2433,32 @@ VIEWS.settings = () => {
   if (can('edit-users')) {
     const syncCard = el('div', { class:'card mt-16' });
     syncCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Синхронизация с 1С')));
-    const statusHost = el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Статус: загрузка…');
-    const btn = el('button', { class:'btn btn-primary', onclick: async () => {
-      if (!confirm('Загрузить контрагентов из 1С в раздел «Клиенты»? Может занять до минуты.')) return;
-      btn.disabled = true; const old = btn.textContent; btn.textContent = 'Синхронизация…';
-      toast('Импорт контрагентов из 1С…', 'info');
+    const statusHost = el('div', { class:'muted', style:'font-size:12px;margin-bottom:12px' }, 'Статус: загрузка…');
+    const syncBtn = (label, path, confirmMsg) => el('button', { class:'btn btn-primary', onclick: async (e) => {
+      const b = e.currentTarget;
+      if (!confirm(confirmMsg)) return;
+      b.disabled = true; const old = b.textContent; b.textContent = 'Синхронизация…';
+      toast('Синхронизация с 1С…', 'info');
       try {
-        const r = await window.__API__.apiFetch('sync/1c/clients', { method: 'POST' });
+        const r = await window.__API__.apiFetch(path, { method: 'POST' });
         toast(`1С: получено ${r.fetched}, новых ${r.created}, обновлено ${r.updated}`, 'success');
         await loadData(); navigate('settings');
-      } catch (err) { toast('Ошибка синхронизации: ' + ((err && err.message) || err), 'error'); btn.disabled = false; btn.textContent = old; }
-    } }, '🔄 Контрагенты 1С → Клиенты');
-    syncCard.append(statusHost, btn);
+      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
+    } }, label);
+    syncCard.append(statusHost, el('div', { class:'row', style:'flex-wrap:wrap;gap:8px' }, [
+      syncBtn('🔄 Контрагенты → Клиенты', 'sync/1c/clients', 'Загрузить контрагентов из 1С в «Клиенты»? Может занять до минуты.'),
+      syncBtn('🔄 Номенклатура → Товары (тест 100)', 'sync/1c/products?limit=100', 'Загрузить тестовые ~100 товаров из 1С (без услуг)?'),
+    ]));
     wrap.append(syncCard);
     window.__API__.apiFetch('sync/status').then(rows => {
-      const cl = (rows || []).find(x => x.entity === 'clients_1c');
-      statusHost.textContent = cl ? `Контрагенты: ${String(cl.last_at).slice(0, 16)} · ${cl.info}` : 'Контрагенты ещё не синхронизировались';
+      rows = rows || [];
+      const f = (e) => rows.find(x => x.entity === e);
+      const cl = f('clients_1c'), pr = f('products_1c');
+      statusHost.innerHTML = '';
+      statusHost.append(
+        el('div', {}, cl ? `Контрагенты: ${String(cl.last_at).slice(0, 16)} · ${cl.info}` : 'Контрагенты ещё не синхронизировались'),
+        el('div', {}, pr ? `Номенклатура: ${String(pr.last_at).slice(0, 16)} · ${pr.info}` : 'Номенклатура ещё не синхронизировалась'),
+      );
     }).catch(() => { statusHost.textContent = ''; });
   }
 

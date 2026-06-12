@@ -171,6 +171,7 @@ CREATE TABLE products (
   price_wholesale INTEGER NOT NULL DEFAULT 0,-- опт
   price_retail    INTEGER NOT NULL DEFAULT 0,-- розница
   image           TEXT,                      -- фото товара: путь /api/files/<key> в R2
+  ext_ref         TEXT,                      -- GUID номенклатуры в 1С (синхронизация)
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -332,6 +333,7 @@ CREATE TABLE sync_state (
 CREATE INDEX idx_products_category ON products(category_id);
 CREATE INDEX idx_products_brand    ON products(brand);
 CREATE INDEX idx_products_name     ON products(name);
+CREATE INDEX idx_products_extref   ON products(ext_ref);
 -- sku уже UNIQUE → индекс есть автоматически
 
 -- Клиенты
