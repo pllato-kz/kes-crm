@@ -1692,6 +1692,15 @@ async function openDealDetail(id) {
     foot: [
       el('div', { style:'margin-right:auto;font-size:12px;color:#6B7280;display:flex;align-items:center;gap:8px' }, ['Этап:', stageSelect]),
       el('button', { class: 'btn', onclick: () => printInvoice(d) }, '🖨 Печать СФ'),
+      canEdit ? el('button', { class: 'btn btn-danger', onclick: async () => {
+        if (!confirm(`Удалить сделку «${d.title}» (№${d.no})?\nСвязанные счета, отгрузки и задачи будут отвязаны. Действие необратимо.`)) return;
+        try {
+          await window.__API__.apiFetch('deals/' + d.id, { method: 'DELETE' });
+          const i = state.deals.findIndex(x => x.id === d.id);
+          if (i >= 0) state.deals.splice(i, 1);
+          closeModal(); toast('Сделка удалена', 'success'); navigate('deals');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+      } }, '🗑 Удалить') : null,
       canEdit ? el('button', { class: 'btn btn-primary', onclick: async () => {
         d.stage = stageSelect.value;
         try {
