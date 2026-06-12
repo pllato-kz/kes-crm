@@ -667,7 +667,9 @@ function openProductDetail(idOrProduct) {
   if (!p) return;
   const cat = categoryById(p.cat);
   const free = p.stock - p.reserved;
-  const margin = Math.round((p.priceRetail - p.priceCost) / p.priceCost * 100);
+  const margin = (p.priceCost > 0 && p.priceRetail > 0)
+    ? Math.round((p.priceRetail - p.priceCost) / p.priceCost * 100) + '%'
+    : '—';
 
   // Фото товара (R2) + загрузка
   const imgHost = el('div', { style:'margin-bottom:14px' });
@@ -707,16 +709,16 @@ function openProductDetail(idOrProduct) {
         el('span', { class:'tag' }, p.brand),
       ]),
       el('div', { class:'grid grid-3', style:'gap:10px;margin-bottom:14px' }, [
-        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Закуп'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, fmtMoney(p.priceCost))]),
-        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Опт'),   el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, fmtMoney(p.priceWholesale))]),
-        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Розница'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, fmtMoney(p.priceRetail))]),
+        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Закуп'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, p.priceCost ? fmtMoney(p.priceCost) : '—')]),
+        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Опт'),   el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, p.priceWholesale ? fmtMoney(p.priceWholesale) : '—')]),
+        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Розница'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, p.priceRetail ? fmtMoney(p.priceRetail) : '—')]),
       ]),
       el('dl', { class:'kv' }, [
         el('dt', {}, 'Единица'),       el('dd', {}, p.unit),
         el('dt', {}, 'Остаток'),       el('dd', {}, `${p.stock} ${p.unit}`),
         el('dt', {}, 'Зарезервировано'), el('dd', {}, `${p.reserved} ${p.unit}`),
         el('dt', {}, 'Доступно'),      el('dd', {}, stockIndicator(free, p.stock)),
-        el('dt', {}, 'Маржа розница'), el('dd', {}, margin + '%'),
+        el('dt', {}, 'Маржа розница'), el('dd', {}, margin),
       ]),
     ]),
     foot: [
@@ -1863,7 +1865,7 @@ VIEWS.catalog = () => {
       const t = el('table', { class:'data' });
       t.append(el('thead', {}, el('tr', {}, [
         el('th', {}, 'Артикул'), el('th', {}, 'Наименование'), el('th', {}, 'Бренд'),
-        el('th', { class:'num' }, 'Опт'), el('th', { class:'num' }, 'Розница'), el('th', {}, 'Остаток'),
+        el('th', { class:'num' }, 'Закуп'), el('th', { class:'num' }, 'Опт'), el('th', { class:'num' }, 'Розница'), el('th', {}, 'Остаток'),
       ])));
       const rows = (r.data || []).map(row => {
         const p = window.__API__.map.product(row);
@@ -1873,12 +1875,13 @@ VIEWS.catalog = () => {
             ? el('span', { style:'display:inline-flex;align-items:center;gap:8px' }, [el('img', { src:p.image, alt:'', style:'width:28px;height:28px;object-fit:cover;border-radius:4px;border:1px solid #E5E7EB' }), p.name])
             : p.name),
           el('td', {}, el('span', { class:'tag' }, p.brand || '—')),
-          el('td', { class:'num' }, fmtMoney(p.priceWholesale)),
-          el('td', { class:'num strong' }, fmtMoney(p.priceRetail)),
+          el('td', { class:'num strong' }, p.priceCost ? fmtMoney(p.priceCost) : '—'),
+          el('td', { class:'num muted' }, p.priceWholesale ? fmtMoney(p.priceWholesale) : '—'),
+          el('td', { class:'num muted' }, p.priceRetail ? fmtMoney(p.priceRetail) : '—'),
           el('td', {}, stockIndicator(p.stock - p.reserved, p.stock)),
         ]);
       });
-      t.append(el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 6, class:'muted', style:'text-align:center;padding:24px' }, 'Ничего не найдено'))]));
+      t.append(el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 7, class:'muted', style:'text-align:center;padding:24px' }, 'Ничего не найдено'))]));
       tableHost.innerHTML = ''; tableHost.append(t);
       renderPager();
     } catch (e) { tableHost.innerHTML = ''; tableHost.append(el('div', { class:'pill pill-danger' }, 'Ошибка загрузки: ' + ((e && e.message) || e))); }
