@@ -534,6 +534,15 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 }
 .form-row input:focus, .form-row select:focus, .form-row textarea:focus { border-color: var(--brand); }
 
+/* ---------- Иконки (инлайн-SVG вместо эмодзи) ---------- */
+svg.ic { display: inline-block; vertical-align: -0.15em; flex: none; }
+.sidebar-nav .icon { display: inline-flex; align-items: center; }
+.sidebar-nav .icon svg.ic { width: 18px; height: 18px; }
+.icon-btn svg.ic { width: 18px; height: 18px; }
+.k-col-head svg.ic, .stat-icon svg.ic { width: 18px; height: 18px; }
+.stat-icon svg.ic { width: 22px; height: 22px; }
+button svg.ic { vertical-align: -0.18em; }
+
 /* ---------- Унифицированный вид select / date / time (скрываем нативный браузерный вид) ---------- */
 select {
   -webkit-appearance: none; -moz-appearance: none; appearance: none;
