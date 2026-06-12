@@ -2641,49 +2641,144 @@ VIEWS.suppliers = () => {
 // ============================================================
 // VIEW: TASKS
 // ============================================================
+// ---------- Задачи: канбан по срокам ----------
+const TASK_COLS = [
+  { key:'overdue',  label:'Просрочено',  color:'#EF4444', drop:false },
+  { key:'today',    label:'Сегодня',     color:'#F59E0B', drop:true },
+  { key:'tomorrow', label:'Завтра',      color:'#3B82F6', drop:true },
+  { key:'week',     label:'Эта неделя',  color:'#8B5CF6', drop:true },
+  { key:'month',    label:'Этот месяц',  color:'#10B981', drop:true },
+];
+let TASKS_SORT = 'asc';   // 'asc' | 'desc' — по дате
+let TASKS_OWNER = '';      // фильтр по ответственному (id) или '' = все
+
+function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+function parseDue(due) { return new Date(String(due || '').replace(' ', 'T')); }
+// Колонка по сроку: просрочено / сегодня / завтра / эта неделя / этот месяц (и далее)
+function taskBucket(t) {
+  if (!t.due) return 'month';
+  const today = startOfDay(new Date());
+  const d = startOfDay(parseDue(t.due));
+  if (isNaN(d.getTime())) return 'month';
+  const diff = Math.round((d - today) / 86400000);
+  if (diff < 0) return 'overdue';
+  if (diff === 0) return 'today';
+  if (diff === 1) return 'tomorrow';
+  const g = today.getDay(); const daysToSun = g === 0 ? 0 : 7 - g;
+  const endWeek = startOfDay(new Date(today.getTime() + daysToSun * 86400000));
+  if (d <= endWeek) return 'week';
+  return 'month';
+}
+// Дата, на которую ставим срок при переносе карточки в колонку
+function bucketTargetDue(key) {
+  const today = startOfDay(new Date());
+  const iso = (d) => { const p = (n) => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); };
+  let d;
+  if (key === 'today') d = today;
+  else if (key === 'tomorrow') d = new Date(today.getTime() + 86400000);
+  else if (key === 'week') { const g = today.getDay(); const daysToSun = g === 0 ? 0 : 7 - g; d = new Date(today.getTime() + daysToSun * 86400000); }
+  else if (key === 'month') d = new Date(today.getFullYear(), today.getMonth() + 1, 0); // последний день месяца
+  else return null;
+  return iso(d) + ' 18:00';
+}
+
 VIEWS.tasks = () => {
   const wrap = el('div');
-  const open = state.tasks.filter(t => !t.done);
-  const overdue = open.filter(t => taskDue(t).kind === 'overdue');
-  const today = open.filter(t => taskDue(t).kind === 'today');
-  const subParts = [`${open.length} открытых · ${state.tasks.filter(t => t.done).length} выполнено`];
-  if (overdue.length) subParts.push(`⚠️ ${overdue.length} просрочено`);
-  if (today.length) subParts.push(`🔔 ${today.length} на сегодня`);
+  const base = visibleTasks(); // с учётом роли (менеджер — только свои)
+  const doneCount = base.filter(t => t.done).length;
+  const openTasks = base.filter(t => !t.done && (!TASKS_OWNER || t.owner === TASKS_OWNER));
+  const overdueN = openTasks.filter(t => taskBucket(t) === 'overdue').length;
+  const todayN = openTasks.filter(t => taskBucket(t) === 'today').length;
+
+  const subParts = [`${openTasks.length} открытых · ${doneCount} выполнено`];
+  if (overdueN) subParts.push(`⚠️ ${overdueN} просрочено`);
+  if (todayN) subParts.push(`🔔 ${todayN} на сегодня`);
+
   wrap.append(el('div', { class:'page-head' }, [
     el('div', {}, [el('h1', {}, 'Задачи'), el('div', { class:'sub' }, subParts.join(' · '))]),
     el('div', { class:'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewTask }, '+ Задача')]),
   ]));
-  const list = el('div', { class:'card' });
-  // сортировка: просроченные → на сегодня → скоро → прочие → выполненные
-  const ord = { overdue: 0, today: 1, soon: 2, future: 3, none: 4 };
-  const sorted = state.tasks.slice().sort((a, b) => {
-    const ka = a.done ? 9 : ord[taskDue(a).kind]; const kb = b.done ? 9 : ord[taskDue(b).kind];
-    if (ka !== kb) return ka - kb;
-    return String(a.due || '').localeCompare(String(b.due || ''));
-  });
-  sorted.forEach(t => {
+
+  // Тулбар: сортировка + фильтр по сотруднику
+  const sortSel = el('select', {}, [el('option', { value:'asc' }, 'Дата ↑ (раньше)'), el('option', { value:'desc' }, 'Дата ↓ (позже)')]);
+  sortSel.value = TASKS_SORT;
+  sortSel.onchange = () => { TASKS_SORT = sortSel.value; navigate('tasks'); };
+  const toolbarKids = [el('span', { class:'muted', style:'font-size:12px' }, 'Сортировка:'), sortSel];
+  if (role().seeAllData) {
+    const ownerSel = el('select', {}, [el('option', { value:'' }, 'Все сотрудники'),
+      ...state.users.filter(u => u.active !== false).map(u => el('option', { value:u.id }, u.name))]);
+    ownerSel.value = TASKS_OWNER;
+    ownerSel.onchange = () => { TASKS_OWNER = ownerSel.value; navigate('tasks'); };
+    toolbarKids.push(el('span', { class:'muted', style:'font-size:12px;margin-left:10px' }, 'Сотрудник:'), ownerSel);
+  }
+  wrap.append(el('div', { class:'row', style:'gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px' }, toolbarKids));
+
+  let dragged = null;
+  const sortCards = (arr) => arr.sort((a,b) => { const c = String(a.due || '').localeCompare(String(b.due || '')); return TASKS_SORT === 'asc' ? c : -c; });
+
+  function taskCard(t) {
     const u = userById(t.owner);
-    const st = t.done ? { kind: 'done' } : taskDue(t);
-    const remind = st.kind === 'overdue' ? el('span', { class:'pill pill-danger', style:'font-size:10px;margin-left:6px' }, '⚠️ просрочено')
-      : st.kind === 'today' ? el('span', { class:'pill pill-warn', style:'font-size:10px;margin-left:6px' }, '🔔 сегодня')
-      : st.kind === 'soon' ? el('span', { class:'pill', style:'font-size:10px;margin-left:6px;background:#EEF2FF;color:#4F46E5' }, 'скоро') : null;
-    list.append(el('div', { class:'activity-item', style:'padding:10px 0;border-bottom:1px solid #F3F4F6' }, [
-      el('input', { type:'checkbox', checked: t.done ? 'checked' : null, style:'margin-top:8px;width:18px;height:18px',
-        onchange: async (e) => { t.done = e.target.checked; try { await window.__API__.apiFetch('tasks/' + t.id, { method: 'PUT', body: { done: t.done ? 1 : 0 } }); toast(t.done ? 'Задача выполнена' : 'Задача возвращена в работу', 'success'); } catch (err) { toast('Не удалось сохранить', 'error'); } navigate('tasks'); }
-      }),
-      el('div', { class:'flex-1' }, [
-        el('div', { style: t.done ? 'text-decoration:line-through;color:#9CA3AF' : '' }, [t.title, remind]),
-        el('div', { class:'av-time' }, [
-          `${u.name} · до ${t.due} · `,
-          el('span', { class:'pill ' + (t.priority==='high' ? 'pill-danger' : t.priority==='medium' ? 'pill-warn' : 'pill-muted') }, t.priority),
+    const canMove = role().seeAllData || t.owner === currentUser.id;
+    const prCls = t.priority === 'high' ? 'pill-danger' : t.priority === 'medium' ? 'pill-warn' : 'pill-muted';
+    const dueStr = t.due ? fmtDate(String(t.due).split(' ')[0]) : '—';
+    const card = el('div', { class:'k-card', draggable: canMove ? 'true' : null }, [
+      el('div', { class:'k-card-title' }, t.title),
+      el('div', { class:'k-card-foot mt-12' }, [
+        el('span', { class:'pill ' + prCls, style:'font-size:10px' }, t.priority),
+        el('span', { style:'margin-left:auto;display:flex;align-items:center;gap:6px' }, [
+          el('span', { class:'muted', style:'font-size:11px' }, '📅 ' + dueStr),
+          el('span', { class:'avatar', style:`width:22px;height:22px;font-size:9px;background:${u.color}`, title:u.name }, u.avatar),
         ]),
       ]),
-      el('span', { class:'avatar', style:`background:${u.color}` }, u.avatar),
-    ]));
+      el('button', { class:'btn btn-sm', style:'margin-top:8px;width:100%', onclick: async (e) => {
+        e.stopPropagation();
+        try { await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body:{ done:1 } }); const tt = byId(state.tasks, t.id); if (tt) tt.done = true; toast('Задача выполнена', 'success'); navigate('tasks'); }
+        catch (err) { toast('Не удалось сохранить', 'error'); }
+      } }, '✓ Выполнить'),
+    ]);
+    if (canMove) {
+      card.addEventListener('dragstart', (e) => { dragged = { id:t.id, bucket: taskBucket(t) }; card.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', t.id); } catch(_){} });
+      card.addEventListener('dragend', () => { card.classList.remove('dragging'); dragged = null; });
+    }
+    return card;
+  }
+
+  const kanban = el('div', { class:'kanban' });
+  TASK_COLS.forEach(col => {
+    const colTasks = sortCards(openTasks.filter(t => taskBucket(t) === col.key));
+    const body = el('div', { class:'k-col-body' });
+    if (colTasks.length) colTasks.forEach(t => body.append(taskCard(t)));
+    else body.append(el('div', { class:'muted', style:'font-size:12px;text-align:center;padding:18px 6px' }, 'Нет задач'));
+
+    const colEl = el('div', { class:'k-col', 'data-bucket': col.key }, [
+      el('div', { class:'k-col-head' }, [
+        el('span', { class:'stage-dot', style:`background:${col.color}` }),
+        el('span', { class:'stage-label' }, col.label),
+        el('span', { class:'stage-count' }, colTasks.length),
+      ]),
+      body,
+    ]);
+    if (col.drop) {
+      colEl.addEventListener('dragover', (e) => { if (!dragged) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; colEl.classList.add('drag-over'); });
+      colEl.addEventListener('dragleave', (e) => { if (e.target === colEl) colEl.classList.remove('drag-over'); });
+      colEl.addEventListener('drop', async (e) => {
+        e.preventDefault(); colEl.classList.remove('drag-over');
+        if (!dragged || dragged.bucket === col.key) return;
+        const t = byId(state.tasks, dragged.id);
+        if (!t) return;
+        const newDue = bucketTargetDue(col.key);
+        t.due = newDue;
+        navigate('tasks');
+        try { await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body:{ due: newDue } }); toast(`Срок → «${col.label}»`, 'success'); }
+        catch (err) { toast('Не удалось сохранить срок', 'error'); }
+      });
+    }
+    kanban.append(colEl);
   });
-  wrap.append(list);
+  wrap.append(kanban);
   return wrap;
 };
+
 
 // ============================================================
 // VIEW: REPORTS
