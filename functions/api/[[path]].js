@@ -106,6 +106,7 @@ export async function onRequest(context) {
       if (seg[1] === '1c' && seg[2] === 'clients' && request.method === 'POST') return syncClients(env);
       if (seg[1] === '1c' && seg[2] === 'categories' && request.method === 'POST') return syncCategories(env);
       if (seg[1] === '1c' && seg[2] === 'stock' && request.method === 'POST') return syncStock(env);
+      if (seg[1] === '1c' && seg[2] === 'receipts' && request.method === 'POST') return syncReceipts(env);
       if (seg[1] === '1c' && seg[2] === 'prices' && request.method === 'POST') {
         const mode = new URL(request.url).searchParams.get('mode');
         return syncPrices(env, mode === 'avg' ? 'avg' : 'last');
@@ -881,6 +882,79 @@ async function syncStock(env) {
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
   ).bind(`позиций с остатком ${updated}, не сопоставлено ${missing}`).run();
   return json({ rows: rows.length, updated, missing });
+}
+
+// Последние приходы из 1С (Document_ПоступлениеТоваровУслуг) -> таблица receipts.
+// Поставщик denormalized в supplier_name (имя контрагента из уже синхр. clients).
+// Снимок последних N приходов: чистим прежний импорт (ext_ref NOT NULL) и пишем заново.
+async function ensureReceiptColumns(env) {
+  for (const ddl of [
+    'ALTER TABLE receipts ADD COLUMN ext_ref TEXT',
+    'ALTER TABLE receipts ADD COLUMN supplier_name TEXT',
+  ]) {
+    try { await env.DB.prepare(ddl).run(); } catch (e) { /* колонка уже есть — ок */ }
+  }
+}
+
+async function syncReceipts(env) {
+  await ensureReceiptColumns(env);
+  const LIMIT = 200; // «последние приходы» — берём свежие по дате
+
+  // имя контрагента по Ref_Key (контрагенты лежат в clients после syncClients)
+  const cl = await env.DB.prepare('SELECT ext_ref, name FROM clients WHERE ext_ref IS NOT NULL').all();
+  const nameByRef = {};
+  for (const c of cl.results) nameByRef[c.ext_ref] = c.name;
+
+  // число позиций по документу: считаем по табличной части Товары (страницы по 10000)
+  const lineCount = {};
+  let skip = 0;
+  const lbase = 'Document_ПоступлениеТоваровУслуг_Товары?$format=json&$orderby=Ref_Key&$select=Ref_Key';
+  while (true) {
+    const data = await odataGet(env, `${lbase}&$top=10000&$skip=${skip}`);
+    const rows = data.value || [];
+    if (!rows.length) break;
+    for (const r of rows) lineCount[r.Ref_Key] = (lineCount[r.Ref_Key] || 0) + 1;
+    if (rows.length < 10000) break;
+    skip += 10000;
+  }
+
+  // свежие шапки приходов
+  const hbase = 'Document_ПоступлениеТоваровУслуг?$format=json'
+    + '&$orderby=Date desc'
+    + '&$select=Ref_Key,Number,Date,Контрагент_Key,СуммаДокумента,Posted,Комментарий';
+  const data = await odataGet(env, `${hbase}&$top=${LIMIT}`);
+  const rows = data.value || [];
+
+  // чистим прежний импорт из 1С (ручные/seed приходы с ext_ref IS NULL не трогаем)
+  await env.DB.prepare('DELETE FROM receipts WHERE ext_ref IS NOT NULL').run();
+
+  const usedNo = {};
+  const stmts = [];
+  for (const r of rows) {
+    const ref = r.Ref_Key;
+    if (!ref) continue;
+    let no = String(r.Number || '').trim() || ref.slice(0, 8);
+    if (usedNo[no]) no = no + '·' + ref.slice(0, 4); // обходим UNIQUE(no)
+    usedNo[no] = 1;
+    const date = String(r.Date || '').slice(0, 10);
+    const amount = Math.round(Number(r['СуммаДокумента'] || 0));
+    const status = r.Posted ? 'оприходовано' : 'черновик';
+    const supplierName = nameByRef[r['Контрагент_Key']] || '—';
+    const note = String(r['Комментарий'] || '').trim();
+    const items = lineCount[ref] || 0;
+    stmts.push(env.DB.prepare(
+      `INSERT INTO receipts (id, no, supplier_id, date, items, amount, status, note, ext_ref, supplier_name)
+       VALUES (?,?,NULL,?,?,?,?,?,?,?)`
+    ).bind(ref, no, date, items, amount, status, note, ref, supplierName));
+  }
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+
+  const info = `импортировано ${stmts.length} (последние по дате)`;
+  await env.DB.prepare(
+    `INSERT INTO sync_state (entity, last_at, info) VALUES ('receipts_1c', datetime('now'), ?)
+     ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+  ).bind(info).run();
+  return json({ fetched: rows.length, imported: stmts.length });
 }
 
 // Цены из приходов 1С -> закупочная цена товара (products.price_cost).
