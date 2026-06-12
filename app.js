@@ -1911,10 +1911,6 @@ VIEWS.catalog = () => {
 // ============================================================
 VIEWS.warehouse = () => {
   const wrap = el('div');
-  const totalSku = state.products.length;
-  const totalUnits = state.products.reduce((s,p)=>s+p.stock,0);
-  const reserved = state.products.reduce((s,p)=>s+p.reserved,0);
-  const valueOnHand = state.products.reduce((s,p)=>s+p.stock*p.priceCost,0);
 
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
@@ -1928,13 +1924,83 @@ VIEWS.warehouse = () => {
     ]),
   ]));
 
+  // Сводка по складу (серверный подсчёт по всем товарам)
   const stats = el('div', { class:'grid grid-4' }, [
-    statCard('SKU на складе',   totalSku,                '', '', '📦'),
-    statCard('Всего единиц',     totalUnits.toLocaleString('ru-RU'), '', '', '🧮'),
-    statCard('Зарезервировано', reserved.toLocaleString('ru-RU'),  '', '', '🔒'),
-    statCard('Стоимость склада', fmtMoneyK(valueOnHand),  '', '', '💎'),
+    statCard('SKU на складе', '…', '', '', '📦'),
+    statCard('Всего единиц', '…', '', '', '🧮'),
+    statCard('Зарезервировано', '…', '', '', '🔒'),
+    statCard('Стоимость склада', '…', '', '', '💎'),
   ]);
   wrap.append(stats);
+  window.__API__.apiFetch('warehouse/summary').then(s => {
+    const grid = el('div', { class:'grid grid-4' }, [
+      statCard('SKU на складе', (s.sku || 0).toLocaleString('ru-RU'), '', '', '📦'),
+      statCard('Всего единиц', Math.round(s.units || 0).toLocaleString('ru-RU'), '', '', '🧮'),
+      statCard('Зарезервировано', Math.round(s.reserved || 0).toLocaleString('ru-RU'), '', '', '🔒'),
+      statCard('Стоимость склада', fmtMoneyK(s.value || 0), '', '', '💎'),
+    ]);
+    stats.replaceWith(grid);
+  }).catch(() => {});
+
+  // Остатки по складу — серверная пагинация + поиск + фильтр низких остатков
+  wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Остатки по складу'));
+  const q = { q: '', low: false, page: 1, limit: 50, total: 0 };
+  const searchI = el('input', { placeholder:'Поиск по артикулу или названию…' });
+  const lowChk = el('input', { type:'checkbox' });
+  const lowLabel = el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#374151;white-space:nowrap' }, [lowChk, 'Только низкие остатки (<50)']);
+  const tw = el('div', { class: 'table-wrap' });
+  tw.append(el('div', { class: 'table-toolbar' }, [searchI, lowLabel]));
+  const tableHost = el('div');
+  tw.append(tableHost);
+  wrap.append(tw);
+  const pager = el('div', { class:'row', style:'justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px' });
+  wrap.append(pager);
+
+  let deb;
+  searchI.oninput = (e) => { clearTimeout(deb); const v = e.target.value; deb = setTimeout(() => { q.q = v; q.page = 1; loadStock(); }, 300); };
+  lowChk.onchange = (e) => { q.low = e.target.checked; q.page = 1; loadStock(); };
+
+  async function loadStock() {
+    tableHost.innerHTML = ''; tableHost.append(el('div', { class:'muted', style:'padding:14px' }, 'Загрузка…'));
+    try {
+      const qs = `q=${encodeURIComponent(q.q)}&page=${q.page}&limit=${q.limit}` + (q.low ? '&lowstock=50' : '');
+      const r = await window.__API__.apiFetch('products?' + qs);
+      q.total = r.total || 0;
+      const t = el('table', { class:'data' });
+      t.append(el('thead', {}, el('tr', {}, [
+        el('th', {}, 'Артикул'), el('th', {}, 'Товар'),
+        el('th', { class:'num' }, 'Остаток'), el('th', { class:'num' }, 'Резерв'),
+        el('th', { class:'num' }, 'Свободно'), el('th', { class:'num' }, 'Закуп'),
+      ])));
+      const rows = (r.data || []).map(row => {
+        const p = window.__API__.map.product(row);
+        const free = p.stock - p.reserved;
+        return el('tr', { onclick: () => openProductDetail(p) }, [
+          el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, p.sku),
+          el('td', { class:'strong' }, p.name),
+          el('td', { class:'num' }, p.stock),
+          el('td', { class:'num muted' }, p.reserved),
+          el('td', { class:'num' }, stockIndicator(free, p.stock)),
+          el('td', { class:'num' }, p.priceCost ? fmtMoney(p.priceCost) : '—'),
+        ]);
+      });
+      t.append(el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 6, class:'muted', style:'text-align:center;padding:24px' }, q.low ? 'Низких остатков нет' : 'Ничего не найдено'))]));
+      tableHost.innerHTML = ''; tableHost.append(t);
+      renderPager();
+    } catch (e) { tableHost.innerHTML = ''; tableHost.append(el('div', { class:'pill pill-danger' }, 'Ошибка загрузки: ' + ((e && e.message) || e))); }
+  }
+
+  function renderPager() {
+    const pages = Math.max(1, Math.ceil(q.total / q.limit));
+    pager.innerHTML = '';
+    pager.append(
+      el('div', { class:'muted', style:'font-size:12px' }, `Найдено: ${q.total} · стр. ${q.page} из ${pages}`),
+      el('div', { class:'row', style:'gap:6px' }, [
+        el('button', { class:'btn btn-sm', disabled: q.page <= 1 ? 'disabled' : null, onclick: () => { if (q.page > 1) { q.page--; loadStock(); } } }, '← Назад'),
+        el('button', { class:'btn btn-sm', disabled: q.page >= pages ? 'disabled' : null, onclick: () => { if (q.page < pages) { q.page++; loadStock(); } } }, 'Вперёд →'),
+      ]),
+    );
+  }
 
   // Последние приходы
   wrap.append(el('div', { 'data-anchor': 'receipts', style:'font-weight:600;margin:24px 0 12px' }, 'Последние приходы от поставщиков'));
@@ -1964,32 +2030,7 @@ VIEWS.warehouse = () => {
   t.append(tab);
   wrap.append(t);
 
-  // Низкие остатки
-  wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, '⚠️ Требуют дозаказа'));
-  const low = state.products
-    .map(p => ({ ...p, free: p.stock - p.reserved }))
-    .filter(p => p.free < 50)
-    .sort((a,b) => a.free - b.free);
-  const t2 = el('div', { class:'table-wrap' });
-  const tab2 = el('table', { class:'data' });
-  tab2.append(el('thead', {}, el('tr', {}, [
-    el('th', {}, 'Артикул'),
-    el('th', {}, 'Товар'),
-    el('th', { class:'num' }, 'Остаток'),
-    el('th', { class:'num' }, 'Резерв'),
-    el('th', { class:'num' }, 'Свободно'),
-    el('th', {}, ''),
-  ])));
-  tab2.append(el('tbody', {}, low.length ? low.map(p => el('tr', {}, [
-    el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, p.sku),
-    el('td', { class:'strong' }, p.name),
-    el('td', { class:'num' }, p.stock),
-    el('td', { class:'num muted' }, p.reserved),
-    el('td', { class:'num' }, stockIndicator(p.free, p.stock)),
-    el('td', { class:'num' }, el('button', { class:'btn btn-sm btn-primary', onclick: (ev) => { ev.stopPropagation(); toast(`Создан черновик заказа на ${p.sku} → EKF`, 'success'); } }, 'Заказать')),
-  ])) : [el('tr', {}, el('td', { colspan: 6, class:'empty' }, [el('div', { class:'em-icon' }, '✅'), el('div', { class:'em-text' }, 'Все остатки в норме')]))]));
-  t2.append(tab2);
-  wrap.append(t2);
+  loadStock();
   return wrap;
 };
 
