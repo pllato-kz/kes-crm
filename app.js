@@ -1746,12 +1746,13 @@ VIEWS.deals = () => {
         const cl = clientById(d.client); const m = userById(d.manager);
         const canDragThis = can('edit-deal', d);
         const card = el('div', { class: 'k-card', draggable: canDragThis ? 'true' : null, onclick: () => openDealDetail(d.id) }, [
-          el('div', { class: 'k-card-no' }, '№' + d.no + ' · до ' + fmtDate(d.target)),
           el('div', { class: 'k-card-title' }, d.title),
-          el('div', { class: 'muted', style:'font-size:11.5px' }, cl ? cl.name : '—'),
           el('div', { class: 'k-card-foot mt-12' }, [
-            el('span', { class: 'k-card-amount' }, fmtMoneyK(d.amount)),
-            el('span', { class: 'avatar', style: `background:${m.color}`, title: m.name }, m.avatar),
+            el('span', { style:'display:flex;align-items:center;gap:6px;min-width:0' }, [
+              el('span', { class: 'avatar', style: `background:${m.color};width:22px;height:22px;font-size:9px`, title: m.name }, m.avatar),
+              el('span', { class: 'muted', style:'font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, m.name),
+            ]),
+            el('span', { class: 'muted', style:'font-size:11px;flex:none' }, fmtDate(d.created)),
           ]),
         ]);
         if (canDragThis) {
@@ -1907,12 +1908,13 @@ async function openDealDetail(id) {
 
   // ----- Левая панель: форма -----
   const titleI = el('input', { value: d.title || '', placeholder:'Название сделки' });
+  const addressI = el('input', { value: d.address || '', placeholder:'Адрес объекта / доставки' });
   const amountI = el('input', { type:'number', value: Math.round(d.amount || 0), min:'0' });
   const dealItemsTotal = el('span', {}, fmtMoney(d.amount));
   recomputeAmount = (function (orig) { return function () { orig(); amountI.value = Math.round(d.amount || 0); dealItemsTotal.textContent = fmtMoney(d.amount); }; })(recomputeAmount);
   const mgrSel = el('select');
   state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.manager) o.selected = true; mgrSel.append(o); });
-  if (!canEdit) [titleI, amountI, mgrSel].forEach(i => i.disabled = true);
+  if (!canEdit) [titleI, addressI, amountI, mgrSel].forEach(i => i.disabled = true);
 
   // ----- Клиент: редактируемый, с заменой (поиск/выбор) -----
   let currentClient = clx;
@@ -1967,6 +1969,7 @@ async function openDealDetail(id) {
       el('div', { class:'section-title' }, 'О сделке'),
       fieldRow('Название', titleI),
       el('div', { class:'form-row' }, [el('label', {}, 'Клиент'), clientHost]),
+      fieldRow('Адрес', addressI),
       fieldRow('Сумма, ₸', amountI),
       fieldRow('Отв. менеджер', mgrSel),
     ]),
@@ -2077,6 +2080,7 @@ async function openDealDetail(id) {
       canEdit ? el('button', { class:'btn btn-primary', onclick: async () => {
         d.stage = chosenStage;
         d.title = titleI.value.trim() || d.title;
+        d.address = addressI.value;
         d.manager = mgrSel.value;
         d.comments = commentsTA.value;
         if (!(d.lineItems && d.lineItems.length)) d.amount = Number(amountI.value) || 0;
