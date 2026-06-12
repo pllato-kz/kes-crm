@@ -304,6 +304,11 @@ async function dataRoute({ request, env }, seg, url, auth) {
   const id = seg[1];
   const method = request.method;
 
+  // изменять роли (матрицу доступа) может только директор
+  if (resource === 'roles' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    if (!auth || auth.role !== 'director') return err(403, 'Менять доступы по ролям может только директор');
+  }
+
   // --- точечная обработка ---
   if (resource === 'products' && id && seg[2] === 'stock') return productStock(env, request, id);
   if (resource === 'products' && method === 'GET' && !id) return listProducts(env, url);

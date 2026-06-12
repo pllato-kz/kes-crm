@@ -2941,25 +2941,55 @@ VIEWS.settings = () => {
 
   // Матрица прав
   const permsCard = el('div', { class:'card mt-16' });
-  permsCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Матрица доступа по ролям')));
-  const pt = el('table', { class:'data' });
-  pt.append(el('thead', {}, el('tr', {}, [
-    el('th', {}, 'Модуль'),
-    el('th', { class:'num' }, '👔 Директор'),
-    el('th', { class:'num' }, '💼 Менеджер'),
-    el('th', { class:'num' }, '🏭 Кладовщик'),
-    el('th', { class:'num' }, '💰 Бухгалтер'),
-  ])));
   const ALL_MODULES = [
     ['dashboard','Дашборд'],['leads','Заявки'],['deals','Сделки'],['clients','Клиенты'],
     ['catalog','Каталог'],['warehouse','Склад'],['shipments','Отгрузки'],['invoices','Документы'],
     ['suppliers','Поставщики'],['tasks','Задачи'],['reports','Отчёты'],['settings','Настройки'],
   ];
+  const roleCols = [['director','👔 Директор'],['manager','💼 Менеджер'],['warehouse','🏭 Кладовщик'],['accountant','💰 Бухгалтер']]
+    .filter(([rk]) => ROLES[rk]);
+  // черновик доступов (Set модулей по роли) — редактируется только директором
+  const draft = {}; roleCols.forEach(([rk]) => { draft[rk] = new Set(ROLES[rk].modules); });
+
+  const saveRolesBtn = canEditUsers ? el('button', { class:'btn btn-sm btn-primary', onclick: async (e) => {
+    const b = e.currentTarget; b.disabled = true; const o = b.textContent; b.textContent = 'Сохранение…';
+    try {
+      for (const [rk] of roleCols) {
+        const mods = ALL_MODULES.map(([k]) => k).filter(k => draft[rk].has(k));
+        await window.__API__.apiFetch('roles/' + encodeURIComponent(rk), { method: 'PUT', body: { modules: JSON.stringify(mods) } });
+      }
+      toast('Доступы по ролям сохранены', 'success');
+      await loadData(); navigate('settings');
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = o; }
+  } }, '💾 Сохранить доступы') : null;
+
+  permsCard.append(el('div', { class:'card-head' }, [
+    el('h3', {}, 'Матрица доступа по ролям'),
+    saveRolesBtn,
+  ]));
+  if (canEditUsers) permsCard.append(el('div', { class:'muted', style:'font-size:12px;margin:-6px 4px 10px' }, 'Отметьте, какие разделы видит каждая роль, и нажмите «Сохранить доступы». Раздел «Настройки» у директора зафиксирован.'));
+
+  const pt = el('table', { class:'data' });
+  pt.append(el('thead', {}, el('tr', {}, [
+    el('th', {}, 'Модуль'),
+    ...roleCols.map(([, label]) => el('th', { class:'num' }, label)),
+  ])));
   pt.append(el('tbody', {}, ALL_MODULES.map(([k,label]) => el('tr', {}, [
     el('td', { class:'strong' }, label),
-    ...['director','manager','warehouse','accountant'].map(rk => {
-      const has = ROLES[rk].modules.includes(k);
-      return el('td', { class:'num' }, has ? el('span', { style:'color:#10B981;font-size:16px' }, '✓') : el('span', { style:'color:#9CA3AF' }, '—'));
+    ...roleCols.map(([rk]) => {
+      if (!canEditUsers) {
+        const has = draft[rk].has(k);
+        return el('td', { class:'num' }, has ? el('span', { style:'color:#10B981;font-size:16px' }, '✓') : el('span', { style:'color:#9CA3AF' }, '—'));
+      }
+      const lock = (rk === 'director' && k === 'settings'); // защита от самоблокировки
+      const cb = el('input', {
+        type:'checkbox',
+        checked: draft[rk].has(k) ? 'checked' : null,
+        disabled: lock ? 'disabled' : null,
+        title: lock ? 'Нельзя убрать у директора' : '',
+        onchange: (e) => { if (e.target.checked) draft[rk].add(k); else draft[rk].delete(k); },
+      });
+      return el('td', { class:'num' }, cb);
     }),
   ]))));
   permsCard.append(pt);
