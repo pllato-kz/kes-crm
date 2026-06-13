@@ -3006,19 +3006,37 @@ VIEWS.catalog = () => {
     ]),
   ]));
 
-  const q = { q: '', category: '', brand: '', page: 1, limit: 50, total: 0 };
+  const q = { q: '', category: '', brand: '', sort: '', page: 1, limit: 50, total: 0 };
+  const selected = new Set(); // выбранные товары для массового редактирования
 
   // Категории (серверный подсчёт)
   wrap.append(el('div', { style:'font-weight:600;margin:8px 0 12px;font-size:14px' }, 'Категории'));
   const tilesHost = el('div', { class: 'cat-grid' });
   wrap.append(tilesHost);
 
-  // Тулбар: поиск + бренд
+  // Тулбар: поиск + бренд + сортировка по цене
   const searchI = el('input', { placeholder:'Поиск по артикулу или названию…' });
   const brandSel = el('select', {},
     [el('option', { value:'' }, 'Все бренды'), el('option', { value:'EKF' }, 'EKF'), el('option', { value:'KazКабель' }, 'KazКабель'), el('option', { value:'WAGO' }, 'WAGO'), el('option', { value:'КВТ' }, 'КВТ')]);
+  const sortSel = el('select', {}, [
+    el('option', { value:'' }, 'Без сортировки'),
+    el('option', { value:'price_asc' }, 'Цена: по возрастанию'),
+    el('option', { value:'price_desc' }, 'Цена: по убыванию'),
+  ]);
+  sortSel.onchange = (e) => { q.sort = e.target.value; q.page = 1; loadProducts(); };
+
+  // Панель массового редактирования
+  const bulkCount = el('span', { class:'strong' }, '');
+  const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [
+    bulkCount,
+    el('button', { class:'btn btn-sm btn-primary', onclick: () => openProductBulkEdit([...selected], () => { selected.clear(); loadProducts(); }) }, 'Массовое редактирование'),
+    el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); loadProducts(); } }, 'Снять выбор'),
+  ]);
+  function refreshBulk() { bulkCount.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
+
   const tw = el('div', { class: 'table-wrap' });
-  tw.append(el('div', { class: 'table-toolbar' }, [searchI, brandSel]));
+  tw.append(el('div', { class: 'table-toolbar' }, [searchI, brandSel, sortSel]));
+  tw.append(bulkBar);
   const tableHost = el('div');
   tw.append(tableHost);
   wrap.append(tw);
@@ -3046,18 +3064,27 @@ VIEWS.catalog = () => {
   async function loadProducts() {
     tableHost.innerHTML = ''; tableHost.append(el('div', { class:'muted', style:'padding:14px' }, 'Загрузка…'));
     try {
-      const qs = `q=${encodeURIComponent(q.q)}&category=${encodeURIComponent(q.category)}&brand=${encodeURIComponent(q.brand)}&page=${q.page}&limit=${q.limit}`;
+      const qs = `q=${encodeURIComponent(q.q)}&category=${encodeURIComponent(q.category)}&brand=${encodeURIComponent(q.brand)}&sort=${encodeURIComponent(q.sort)}&page=${q.page}&limit=${q.limit}`;
       const r = await window.__API__.apiFetch('products?' + qs);
       q.total = r.total || 0;
       sub.textContent = `${q.total} позиций` + (q.category ? ' в категории' : '');
+      const pageProducts = (r.data || []).map(row => window.__API__.map.product(row));
+      const rowChecks = [];
+      const selAll = el('input', { type:'checkbox', title:'Выбрать товары на странице' });
+      const syncSelAll = () => { selAll.checked = pageProducts.length > 0 && pageProducts.every(p => selected.has(p.id)); };
+      selAll.onchange = () => { pageProducts.forEach((p, i) => { if (selAll.checked) selected.add(p.id); else selected.delete(p.id); if (rowChecks[i]) rowChecks[i].checked = selAll.checked; }); refreshBulk(); };
       const t = el('table', { class:'data' });
       t.append(el('thead', {}, el('tr', {}, [
+        el('th', { style:'width:34px;text-align:center' }, selAll),
         el('th', {}, 'Артикул'), el('th', {}, 'Наименование'), el('th', {}, 'Бренд'),
         el('th', { class:'num' }, 'Закуп'), el('th', { class:'num' }, 'Опт'), el('th', { class:'num' }, 'Розница'), el('th', {}, 'Остаток'),
       ])));
-      const rows = (r.data || []).map(row => {
-        const p = window.__API__.map.product(row);
+      const rows = pageProducts.map((p, i) => {
+        const cb = el('input', { type:'checkbox', checked: selected.has(p.id) ? 'checked' : null, onclick: (e) => e.stopPropagation(),
+          onchange: () => { if (cb.checked) selected.add(p.id); else selected.delete(p.id); syncSelAll(); refreshBulk(); } });
+        rowChecks[i] = cb;
         return el('tr', { onclick: () => openProductDetail(p) }, [
+          el('td', { style:'text-align:center', onclick: (e) => e.stopPropagation() }, cb),
           el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, p.sku),
           el('td', { class:'strong' }, p.image
             ? el('span', { style:'display:inline-flex;align-items:center;gap:8px' }, [el('img', { src:p.image, alt:'', style:'width:28px;height:28px;object-fit:cover;border-radius:4px;border:1px solid #E5E7EB' }), p.name])
@@ -3069,9 +3096,10 @@ VIEWS.catalog = () => {
           el('td', {}, stockIndicator(p.stock - p.reserved, p.stock)),
         ]);
       });
-      t.append(el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 7, class:'muted', style:'text-align:center;padding:24px' }, 'Ничего не найдено'))]));
+      syncSelAll();
+      t.append(el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 8, class:'muted', style:'text-align:center;padding:24px' }, 'Ничего не найдено'))]));
       tableHost.innerHTML = ''; tableHost.append(t);
-      renderPager();
+      renderPager(); refreshBulk();
     } catch (e) { tableHost.innerHTML = ''; tableHost.append(el('div', { class:'pill pill-danger' }, 'Ошибка загрузки: ' + ((e && e.message) || e))); }
   }
 
@@ -3091,6 +3119,44 @@ VIEWS.catalog = () => {
   loadProducts();
   return wrap;
 };
+
+// Массовое редактирование выбранных товаров: заполните нужные поля (пустые — не меняются)
+function openProductBulkEdit(ids, onDone) {
+  const total = ids.length;
+  if (!total) { toast('Не выбрано ни одного товара', 'warn'); return; }
+  const nameI = el('input', { placeholder:'Оставьте пустым, чтобы не менять' });
+  const priceI = el('input', { type:'number', min:'0', placeholder:'Оставьте пустым, чтобы не менять' });
+  const stockI = el('input', { type:'number', min:'0', placeholder:'Оставьте пустым, чтобы не менять' });
+
+  const applyBtn = el('button', { class:'btn btn-primary', onclick: async () => {
+    const body = {};
+    if (nameI.value.trim()) body.name = nameI.value.trim();
+    if (priceI.value !== '') body.price_wholesale = Number(priceI.value) || 0;
+    const setStock = stockI.value !== '';
+    if (!Object.keys(body).length && !setStock) { toast('Заполните хотя бы одно поле', 'warn'); return; }
+    applyBtn.disabled = true;
+    try {
+      for (let i = 0; i < ids.length; i += 6) { // батчами
+        await Promise.all(ids.slice(i, i + 6).map(async (id) => {
+          if (Object.keys(body).length) await window.__API__.apiFetch('products/' + id, { method:'PUT', body });
+          if (setStock) await window.__API__.apiFetch('products/' + id + '/stock', { method:'PUT', body: { stock: Number(stockI.value) || 0 } });
+        }));
+      }
+      closeModal(); toast(`Изменено товаров: ${ids.length}`, 'success'); if (onDone) onDone();
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); applyBtn.disabled = false; }
+  } }, `Применить к ${total}`);
+
+  openModal({
+    title: `Массовое редактирование · ${total} ${plural(total, 'товар', 'товара', 'товаров')}`,
+    body: el('div', {}, [
+      el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Заполните только те поля, которые нужно изменить. Пустые поля остаются без изменений.'),
+      el('div', { class:'form-row' }, [el('label', {}, 'Название'), nameI]),
+      el('div', { class:'form-row' }, [el('label', {}, 'Цена (опт), ₸'), priceI]),
+      el('div', { class:'form-row' }, [el('label', {}, 'Остаток на складе'), stockI]),
+    ]),
+    foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), applyBtn],
+  });
+}
 
 // ============================================================
 // VIEW: WAREHOUSE

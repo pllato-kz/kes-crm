@@ -438,7 +438,13 @@ async function productStock(env, request, productId) {
     const b = await request.json().catch(() => ({}));
     const warehouseId = b.warehouse_id || 'w1'; // мокап — один склад
     const stock = num(b.stock);
-    const reserved = num(b.reserved);
+    // reserved не передан — сохраняем текущее значение (массовое изменение остатка)
+    let reserved;
+    if (b.reserved != null) reserved = num(b.reserved);
+    else {
+      const cur = await env.DB.prepare('SELECT reserved FROM product_stock WHERE product_id=? AND warehouse_id=?').bind(productId, warehouseId).first();
+      reserved = cur ? num(cur.reserved) : 0;
+    }
     await env.DB.prepare(
       `INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?,?,?,?)
        ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock, reserved=excluded.reserved`
@@ -458,6 +464,7 @@ async function listProducts(env, url) {
   const brand = url.searchParams.get('brand');
   const lowRaw = url.searchParams.get('lowstock');
   const low = (lowRaw != null && lowRaw !== '') ? clampInt(lowRaw, 50, 0, 1e9) : null;
+  const sort = (url.searchParams.get('sort') || '').trim();
   const limit = clampInt(url.searchParams.get('limit'), 50, 1, 1000);
   const page = clampInt(url.searchParams.get('page'), 1, 1, 1e9);
   const offset = (page - 1) * limit;
@@ -479,7 +486,9 @@ async function listProducts(env, url) {
     `SELECT COUNT(*) AS n FROM products p ${low != null ? stockJoin : ''} ${ws}`
   ).bind(...args).first();
 
-  const order = low != null ? '(COALESCE(s.stock,0) - COALESCE(s.reserved,0)) ASC' : 'p.name';
+  let order = low != null ? '(COALESCE(s.stock,0) - COALESCE(s.reserved,0)) ASC' : 'p.name';
+  if (sort === 'price_asc') order = 'p.price_wholesale ASC, p.name';
+  else if (sort === 'price_desc') order = 'p.price_wholesale DESC, p.name';
   const rows = await env.DB.prepare(
     `SELECT p.*, COALESCE(s.stock,0) AS stock, COALESCE(s.reserved,0) AS reserved
        FROM products p
