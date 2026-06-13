@@ -2748,16 +2748,16 @@ VIEWS.clients = () => {
   };
 
   const tw = el('div', { class: 'table-wrap' });
-  tw.append(el('div', { class: 'table-toolbar', style:'flex-wrap:nowrap;align-items:flex-start' }, [
-    // Фильтры — слева, переносятся внутри своей колонки; «Сбросить» резервирует место
+  tw.append(el('div', { class: 'table-toolbar', style:'flex-wrap:nowrap;align-items:center' }, [
+    // Фильтры — слева, переносятся внутри своей колонки
     el('div', { style:'display:flex;flex-wrap:wrap;gap:10px;align-items:center;flex:1;min-width:0' }, [
       searchI, typeS, cityS, mgrS,
       el('span', { class:'muted', style:'font-size:12px' }, 'Послед. сделка c:'), fromI,
       el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
-      resetBtn,
     ]),
-    // Импорт/Экспорт — всегда справа на одной линии с фильтрами, не зависят от переноса
-    el('div', { style:'display:flex;gap:8px;flex:none' }, [
+    // Справа в одну строку: Сбросить (резервирует место) + Импорт + Экспорт — без переносов
+    el('div', { style:'display:flex;gap:8px;flex:none;align-items:center' }, [
+      resetBtn,
       el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
       el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
     ]),
