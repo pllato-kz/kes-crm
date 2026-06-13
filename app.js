@@ -2183,8 +2183,11 @@ VIEWS.deals = () => {
         const fromLabel = stageById(deal.stage).label;
         deal.stage = s.id;
         renderContent();
-        try { await window.__API__.apiFetch('deals/' + deal.id, { method: 'PUT', body: { stage_id: s.id } }); toast(`${deal.title.slice(0,30)}: ${fromLabel} → ${s.label}`, 'success'); }
-        catch (err) { toast('Не удалось сохранить этап', 'error'); }
+        try {
+          await window.__API__.apiFetch('deals/' + deal.id, { method: 'PUT', body: { stage_id: s.id } });
+          toast(`${deal.title.slice(0,30)}: ${fromLabel} → ${s.label}`, 'success');
+          if (/отгруж/i.test(s.label || '')) toast('Создано автосписание со склада (накладная)', 'info');
+        } catch (err) { toast('Не удалось сохранить этап', 'error'); }
       });
       kanban.append(col);
     });
@@ -2648,6 +2651,7 @@ async function openDealDetail(id) {
           if (d.lineItems && d.lineItems.length) payload.lineItems = window.__API__.toApi.dealItems(d.lineItems);
           const saved = await window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body: payload });
           Object.assign(d, window.__API__.map.deal(saved));
+          if (/отгруж/i.test((stageById(d.stage) || {}).label || '')) toast('Этап «Отгружено»: товар списан со склада', 'info');
           closeModal(); toast('Сделка сохранена', 'success'); navigate('deals');
         } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Сохранить') : null,

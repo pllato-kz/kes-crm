@@ -909,6 +909,7 @@ async function ensureMovementsSchema(env) {
       created_by TEXT, created_at TEXT, posted_at TEXT, cancelled_at TEXT
     )`).run();
   } catch (e) {}
+  try { await env.DB.prepare('ALTER TABLE stock_docs ADD COLUMN deal_id TEXT').run(); } catch (e) {}
   MOVEMENTS_SCHEMA_OK = true;
 }
 
@@ -1027,6 +1028,44 @@ async function cancelStockDoc(env, id, auth) {
   }
   await env.DB.prepare("UPDATE stock_docs SET status='cancelled', cancelled_at=? WHERE id=?").bind(now, id).run();
   return getStockDoc(env, id);
+}
+
+// Автосписание по сделке при переходе на этап «Отгружено»: создаёт проведённый
+// расходный документ (накладную) из позиций сделки и списывает остаток. Идемпотентно.
+async function autoShipDeal(env, dealId, auth) {
+  await ensureMovementsSchema(env);
+  const existing = await env.DB.prepare("SELECT id FROM stock_docs WHERE deal_id=? AND type='writeoff' AND status='posted'").bind(dealId).first();
+  if (existing) return existing.id; // уже отгружено — не дублируем
+  const itemsRows = await env.DB.prepare('SELECT product_id, qty FROM deal_items WHERE deal_id=?').bind(dealId).all();
+  const items = [];
+  for (const it of (itemsRows.results || [])) {
+    const p = await env.DB.prepare('SELECT id, name, sku FROM products WHERE id=?').bind(it.product_id).first();
+    if (p && num(it.qty) > 0) items.push({ product_id: p.id, product_name: p.name, product_sku: p.sku, qty: num(it.qty) });
+  }
+  if (!items.length) return null; // нечего списывать
+  const deal = await env.DB.prepare('SELECT no, client_id FROM deals WHERE id=?').bind(dealId).first();
+  let clientName = '';
+  if (deal && deal.client_id) { const c = await env.DB.prepare('SELECT name FROM clients WHERE id=?').bind(deal.client_id).first(); clientName = c ? c.name : ''; }
+
+  const id = genId();
+  const now = new Date().toISOString();
+  const no = await nextDocNo(env, 'writeoff');
+  const totalQty = items.reduce((s, it) => s + it.qty, 0);
+  await env.DB.prepare(
+    `INSERT INTO stock_docs (id, type, no, date, counterparty, note, status, items, total_qty, deal_id, created_by, created_at, posted_at)
+     VALUES (?,?,?,?,?,?, 'posted', ?,?,?,?,?,?)`
+  ).bind(id, 'writeoff', no, now.slice(0, 10), clientName || '', 'Отгрузка по сделке ' + (deal ? deal.no : ''), JSON.stringify(items), totalQty, dealId, auth ? auth.sub : null, now, now).run();
+
+  const wh = 'w1';
+  for (const it of items) {
+    const cur = await env.DB.prepare('SELECT stock, reserved FROM product_stock WHERE product_id=? AND warehouse_id=?').bind(it.product_id, wh).first();
+    const stock = cur ? num(cur.stock) : 0, reserved = cur ? num(cur.reserved) : 0;
+    const newStock = Math.max(0, stock - it.qty); // не уходим в минус
+    await env.DB.prepare('INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?,?,?,?) ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock').bind(it.product_id, wh, newStock, reserved).run();
+    await env.DB.prepare(`INSERT INTO stock_movements (id, product_id, direction, type, qty, date, doc_no, counterparty, note, created_by, created_at, doc_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(genId(), it.product_id, 'out', 'sale', it.qty, now.slice(0, 10), no, clientName || '', 'Отгрузка по сделке', auth ? auth.sub : null, now, id).run();
+  }
+  return id;
 }
 
 async function listMovements(env, url) {
@@ -1187,6 +1226,13 @@ async function writeDeal(env, request, method, id, auth) {
       await env.DB.prepare(`INSERT INTO deal_stage_history (deal_id, from_stage, to_stage, user_id) VALUES (?,?,?,?)`).bind(dealId, null, newStage, uid).run();
     } else if (prevStage && newStage !== prevStage) {
       await env.DB.prepare(`INSERT INTO deal_stage_history (deal_id, from_stage, to_stage, user_id) VALUES (?,?,?,?)`).bind(dealId, prevStage, newStage, uid).run();
+    }
+    // Автосписание со склада при переходе на этап «Отгружено»
+    if (newStage !== prevStage) {
+      try {
+        const st = await env.DB.prepare('SELECT label FROM deal_stages WHERE id=?').bind(newStage).first();
+        if (st && /отгруж/i.test(st.label || '')) await autoShipDeal(env, dealId, auth);
+      } catch (e) { /* не блокируем смену этапа */ }
     }
   }
   return getDeal(env, dealId);
