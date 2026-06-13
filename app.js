@@ -4046,6 +4046,27 @@ VIEWS.reports = () => {
   const monLabel = (m) => { const [y, mm] = String(m).split('-'); return (MON[(+mm) - 1] || m) + ' ' + String(y).slice(2); };
   const noData = (text) => el('div', { class:'muted', style:'padding:28px;text-align:center' }, text);
 
+  // ----- Сводные счётчики: сделки (по фильтрам) + задачи -----
+  const dealsTotalVal = el('div', { class:'stat-value' }, '—');
+  const dealsTotalCard = el('div', { class:'card stat' }, [
+    el('div', { class:'stat-icon' }, '💼'), el('div', { class:'stat-label' }, 'Всего сделок'), dealsTotalVal,
+  ]);
+  const myTasks = visibleTasks();
+  const tDone = myTasks.filter(t => t.done).length;
+  wrap.append(el('div', { class:'grid grid-4', style:'margin-bottom:16px' }, [
+    dealsTotalCard,
+    statCard('Всего задач', myTasks.length, '', '', '✅'),
+    statCard('Выполнено задач', tDone, '', '', '✓'),
+    statCard('Не выполнено', myTasks.length - tDone, '', '', '⏳'),
+  ]));
+
+  // ----- Сделки по этапам (количество, с учётом фильтров) -----
+  const stageCard = el('div', { class:'card' });
+  stageCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Сделки по этапам')));
+  const stageHost = el('div', { style:'padding:8px 4px' }, noData('Загрузка…'));
+  stageCard.append(stageHost);
+  wrap.append(stageCard);
+
   // Выручка по месяцам — line
   const card1 = el('div', { class:'card' });
   card1.append(el('div', { class:'card-head' }, el('h3', {}, 'Выручка по месяцам (млн ₸)')));
@@ -4129,6 +4150,26 @@ VIEWS.reports = () => {
       Chart.defaults.color = '#6B7280';
     }
 
+    // 0) Сводка по сделкам + разбивка по этапам (с учётом фильтров)
+    const byStage = rep.byStage || [];
+    dealsTotalVal.textContent = String(byStage.reduce((s, x) => s + (x.count || 0), 0));
+    stageHost.innerHTML = '';
+    if (!byStage.length) {
+      stageHost.append(noData('Нет сделок по выбранным фильтрам'));
+    } else {
+      const rows = byStage
+        .map(x => ({ ...x, stg: STAGES.find(s => s.id === x.stage_id) || { label: x.stage_id, color: '#9CA3AF', sort: 999 } }))
+        .sort((a, b) => (a.stg.sort || 0) - (b.stg.sort || 0));
+      const st = el('table', { class:'data' });
+      st.append(el('thead', {}, el('tr', {}, [el('th', {}, 'Этап'), el('th', { class:'num' }, 'Сделок'), el('th', { class:'num' }, 'Сумма')])));
+      st.append(el('tbody', {}, rows.map(x => el('tr', {}, [
+        el('td', {}, el('span', { class:'pill', style:`background:${x.stg.color}22;color:${x.stg.color}` }, x.stg.label)),
+        el('td', { class:'num strong' }, x.count),
+        el('td', { class:'num muted' }, fmtMoneyK(x.sum)),
+      ]))));
+      stageHost.append(st);
+    }
+
     // 1) Выручка по месяцам
     const months = rep.byMonth || [];
     host1.innerHTML = '';
@@ -4204,7 +4245,7 @@ VIEWS.reports = () => {
       mgrHost.append(mt);
     }
     }).catch(e => {
-      [host1, host2, host3, mgrHost].forEach(h => { h.innerHTML = ''; h.append(noData('Ошибка загрузки аналитики')); });
+      [host1, host2, host3, mgrHost, stageHost].forEach(h => { h.innerHTML = ''; h.append(noData('Ошибка загрузки аналитики')); });
     });
   }
   loadReports();
