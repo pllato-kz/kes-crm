@@ -1,0 +1,28 @@
+name: 1C background sync
+
+# Фоновая синхронизация с 1С 24/7 (даже когда CRM никто не держит открытой).
+# Каждые 10 минут дёргает эндпоинт /api/sync/run, который сам запускает только
+# «просроченные» синки по интервалам (клиенты 20 мин, остатки/приходы 10–20 мин и т.д.).
+#
+# Требуются секреты репозитория:
+#   CRM_URL      — базовый адрес CRM, например https://kes-crm.pages.dev
+#   CRON_SECRET  — тот же секрет, что задан в Cloudflare Pages (env CRON_SECRET)
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger due 1C syncs
+        run: |
+          if [ -z "${{ secrets.CRM_URL }}" ] || [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "CRM_URL или CRON_SECRET не заданы в секретах репозитория — пропускаю."
+            exit 0
+          fi
+          curl -fsS -X POST \
+            "${{ secrets.CRM_URL }}/api/sync/run?token=${{ secrets.CRON_SECRET }}" \
+            -H 'content-type: application/json' || echo "Запрос не удался (CRM недоступна или нет 1С) — это не критично."
