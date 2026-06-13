@@ -4658,14 +4658,14 @@ VIEWS.settings = () => {
   ]));
   if (canEditUsers) permsCard.append(el('div', { class:'muted', style:'font-size:12px;margin:-6px 4px 10px' }, 'Отметьте, какие разделы видит каждая роль, и нажмите «Сохранить доступы». Раздел «Настройки» у директора зафиксирован.'));
 
-  const pt = el('table', { class:'data' });
+  const pt = el('table', { class:'data role-matrix' });
   pt.append(el('thead', {}, el('tr', {}, [
     el('th', {}, 'Модуль'),
     ...roleCols.map(([rk, label]) => el('th', { class:'num' },
       (canEditUsers && !CORE_ROLES.includes(rk))
-        ? el('span', { style:'display:inline-flex;align-items:center;gap:5px;justify-content:flex-end' }, [
-            label,
-            el('button', { class:'x-btn', title:'Удалить роль', onclick: async () => {
+        ? el('span', { class:'role-head' }, [
+            el('span', {}, label),
+            el('button', { class:'role-del', title:'Удалить роль', onclick: async () => {
               if (!confirm(`Удалить роль «${label}»?`)) return;
               try { await window.__API__.apiFetch('roles/' + encodeURIComponent(rk), { method:'DELETE' }); await loadData(); navigate('settings'); toast('Роль удалена', 'success'); }
               catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
@@ -4691,7 +4691,7 @@ VIEWS.settings = () => {
       return el('td', { class:'num' }, cb);
     }),
   ]))));
-  permsCard.append(pt);
+  permsCard.append(el('div', { style:'overflow-x:auto' }, pt));
   wrap.append(permsCard);
 
   // Прочее
