@@ -1318,6 +1318,17 @@ function openInvoiceDetail(id) {
     try {
       const saved = await window.__API__.apiFetch('invoices/' + iv.id, { method: 'PUT', body: { status_id: status } });
       if (saved) Object.assign(iv, window.__API__.map.invoice(saved)); // синхронизируем объект из state с сервером
+      // согласуем этап связанной сделки: оплачено → этап «Оплачено»; ожидает → предыдущий этап
+      if (d) {
+        const dStages = pipelineStages(stagePipeline(d.stage)).length ? pipelineStages(stagePipeline(d.stage)) : STAGES;
+        const paidStage = dStages.find(s => /оплач/i.test(s.label || ''));
+        if (paidStage && status === 'paid' && d.stage !== paidStage.id) {
+          try { await window.__API__.apiFetch('deals/' + d.id, { method: 'PUT', body: { stage_id: paidStage.id } }); d.stage = paidStage.id; } catch (e) {}
+        } else if (paidStage && status === 'pending' && d.stage === paidStage.id) {
+          const i = dStages.indexOf(paidStage); const prevS = i > 0 ? dStages[i - 1] : null;
+          if (prevS) { try { await window.__API__.apiFetch('deals/' + d.id, { method: 'PUT', body: { stage_id: prevS.id } }); d.stage = prevS.id; } catch (e) {} }
+        }
+      }
       closeModal(); toast(msg, 'success');
       if (CURRENT_VIEW === 'invoices') navigate('invoices'); // если открыт раздел «Документы» — перерисовать
     } catch (err) { iv.status = prev; toast('Не удалось сохранить', 'error'); }

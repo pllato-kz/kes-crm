@@ -380,6 +380,9 @@ async function dataRoute({ request, env }, seg, url, auth) {
     if (method === 'DELETE' && id) return deletePipeline(env, id);
   }
 
+  // согласование статуса счетов с этапом сделки «Оплачено» (правит уже рассинхрон. данные)
+  if (resource === 'invoices' && method === 'GET' && !id) { try { await reconcilePaidInvoices(env); } catch (e) {} }
+
   // --- точечная обработка ---
   if (resource === 'products' && id && seg[2] === 'stock') return productStock(env, request, id);
   if (resource === 'products' && method === 'GET' && !id) return listProducts(env, url);
@@ -1331,15 +1334,31 @@ async function writeDeal(env, request, method, id, auth) {
     } else if (prevStage && newStage !== prevStage) {
       await env.DB.prepare(`INSERT INTO deal_stage_history (deal_id, from_stage, to_stage, user_id) VALUES (?,?,?,?)`).bind(dealId, prevStage, newStage, uid).run();
     }
-    // Автосписание со склада при переходе на этап «Отгружено»
+    // Реакция на смену этапа: автосписание (Отгружено) и синхронизация счёта (Оплачено)
     if (newStage !== prevStage) {
       try {
         const st = await env.DB.prepare('SELECT label FROM deal_stages WHERE id=?').bind(newStage).first();
-        if (st && /отгруж/i.test(st.label || '')) await autoShipDeal(env, dealId, auth);
+        const stLabel = (st && st.label) || '';
+        if (/отгруж/i.test(stLabel)) await autoShipDeal(env, dealId, auth);
+        // этап «Оплачено» ↔ статус счёта (paid/pending)
+        const prevSt = prevStage ? await env.DB.prepare('SELECT label FROM deal_stages WHERE id=?').bind(prevStage).first() : null;
+        const nowPaid = /оплач/i.test(stLabel);
+        const wasPaid = prevSt ? /оплач/i.test(prevSt.label || '') : false;
+        if (nowPaid && !wasPaid) await env.DB.prepare("UPDATE invoices SET status_id='paid' WHERE deal_id=?").bind(dealId).run();
+        else if (wasPaid && !nowPaid) await env.DB.prepare("UPDATE invoices SET status_id='pending' WHERE deal_id=? AND status_id='paid'").bind(dealId).run();
       } catch (e) { /* не блокируем смену этапа */ }
     }
   }
   return getDeal(env, dealId);
+}
+
+// Счета сделок, стоящих на этапе «Оплачено», должны иметь статус paid.
+async function reconcilePaidInvoices(env) {
+  await env.DB.prepare(
+    `UPDATE invoices SET status_id='paid'
+       WHERE status_id <> 'paid'
+         AND deal_id IN (SELECT d.id FROM deals d JOIN deal_stages s ON s.id = d.stage_id WHERE s.label LIKE '%плач%')`
+  ).run();
 }
 
 // История смены этапов сделки
