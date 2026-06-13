@@ -3180,63 +3180,106 @@ function openProductBulkEdit(ids, onDone) {
   });
 }
 
-// Приход (in) / Расход (out) со склада — корректирует остаток и пишет движение
-function openStockMovement(direction, onDone) {
-  const isIn = direction === 'in';
-  let selected = null;
-  const search = el('input', { placeholder:'Поиск товара по артикулу/названию…' });
-  const list = el('div', { class:'product-picker', style:'margin-top:6px' });
-  const chosen = el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, 'Товар не выбран');
-  let seq = 0;
-  async function fill(q = '') {
-    const my = ++seq; const ql = q.trim();
-    list.innerHTML = ''; list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Поиск…'));
-    let rows;
-    try { const resp = await window.__API__.apiFetch('products?limit=20' + (ql ? '&q=' + encodeURIComponent(ql) : '')); rows = (resp.data || []).map(window.__API__.map.product); }
-    catch (e) { rows = []; }
-    if (my !== seq) return;
-    list.innerHTML = '';
-    rows.forEach(p => list.append(el('div', { class:'pp-item', onclick: () => {
-      selected = p; list.style.display = 'none'; search.value = p.name;
-      chosen.innerHTML = ''; chosen.append(el('span', { class:'strong' }, p.name), ' · текущий остаток: ' + p.stock);
-    } }, [
-      el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku + (p.brand ? ' · ' + p.brand : ''))]),
-      el('span', { class:'pp-price' }, 'ост. ' + p.stock),
-    ])));
-    if (!rows.length) list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено'));
+// Документ прихода/расхода со статусами (черновик → проведён → отменён)
+async function openStockDoc(type, docId, onDone) {
+  let doc = null;
+  if (docId) {
+    try { doc = await window.__API__.apiFetch('stock-docs/' + docId); } catch (e) { toast('Документ не найден', 'error'); return; }
+    type = doc.type;
   }
-  let dt; search.oninput = (e) => { list.style.display = ''; selected = null; const v = e.target.value; clearTimeout(dt); dt = setTimeout(() => fill(v), 250); };
-  fill();
+  const isIn = type === 'receipt';
+  const status = doc ? doc.status : 'draft';
+  const editable = status === 'draft';
+  const items = doc ? (doc.items || []).map(it => ({ ...it })) : [];
 
-  const qtyI = el('input', { type:'number', min:'1', placeholder:'0' });
-  const partyI = el('input', { placeholder: isIn ? 'Поставщик' : 'Получатель / причина' });
-  const dateI = el('input', { type:'date', value: new Date().toISOString().slice(0, 10) });
-  const noteI = el('input', { placeholder:'Примечание (необязательно)' });
+  const partyI = el('input', { value: doc ? (doc.counterparty || '') : '', placeholder: isIn ? 'Поставщик' : 'Получатель / причина' });
+  const dateI = el('input', { type:'date', value: doc ? String(doc.date || '').slice(0, 10) : new Date().toISOString().slice(0, 10) });
+  const noteI = el('input', { value: doc ? (doc.note || '') : '', placeholder:'Примечание' });
+  if (!editable) [partyI, dateI, noteI].forEach(i => i.disabled = true);
 
-  const submit = el('button', { class:'btn btn-primary', onclick: async () => {
-    if (!selected) { toast('Выберите товар', 'warn'); return; }
-    const qty = Number(qtyI.value) || 0;
-    if (qty <= 0) { toast('Укажите количество', 'warn'); return; }
-    submit.disabled = true;
-    try {
-      await window.__API__.apiFetch('stock-movements', { method:'POST', body: {
-        product_id: selected.id, direction, qty, date: dateI.value,
-        counterparty: partyI.value.trim(), note: noteI.value.trim(),
-      } });
-      closeModal(); toast(isIn ? 'Приход оформлен' : 'Расход оформлен', 'success'); if (onDone) onDone();
-    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); submit.disabled = false; }
-  } }, isIn ? 'Оприходовать' : 'Списать');
+  const itemsHost = el('div', { style:'margin-top:6px' });
+  function renderItems() {
+    itemsHost.innerHTML = '';
+    const t = el('table', { class:'data' });
+    t.append(el('thead', {}, el('tr', {}, [el('th', {}, 'Товар'), el('th', { class:'num', style:'width:90px' }, 'Кол-во'), editable ? el('th', { style:'width:26px' }, '') : null])));
+    const tb = el('tbody');
+    if (!items.length) tb.append(el('tr', {}, el('td', { colspan: editable ? 3 : 2, class:'muted', style:'text-align:center;padding:12px' }, 'Позиций нет')));
+    else items.forEach((it, idx) => tb.append(el('tr', {}, [
+      el('td', {}, [el('div', { class:'strong' }, it.product_name || '—'), el('div', { class:'muted', style:'font-size:11px' }, it.product_sku || '')]),
+      el('td', { class:'num' }, editable ? el('input', { class:'qty', type:'number', min:'1', value: it.qty, oninput: (e) => { it.qty = Math.max(1, +e.target.value || 1); } }) : String(it.qty)),
+      editable ? el('td', {}, el('button', { class:'x-btn', title:'Удалить', onclick: () => { items.splice(idx, 1); renderItems(); } }, '×')) : null,
+    ])));
+    t.append(tb); itemsHost.append(t);
+  }
+  renderItems();
 
+  const pickerHost = el('div');
+  if (editable) {
+    const search = el('input', { placeholder:'Добавить товар: поиск по артикулу/названию…', style:'width:100%' });
+    const list = el('div', { class:'product-picker', style:'margin-top:6px' });
+    let seq = 0;
+    async function fill(q = '') {
+      const my = ++seq; const ql = q.trim();
+      list.innerHTML = ''; list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Поиск…'));
+      let rows; try { const resp = await window.__API__.apiFetch('products?limit=20' + (ql ? '&q=' + encodeURIComponent(ql) : '')); rows = (resp.data || []).map(window.__API__.map.product); } catch (e) { rows = []; }
+      if (my !== seq) return;
+      list.innerHTML = '';
+      rows.forEach(p => list.append(el('div', { class:'pp-item', onclick: () => {
+        const ex = items.find(x => x.product_id === p.id); if (ex) ex.qty += 1; else items.push({ product_id: p.id, product_name: p.name, product_sku: p.sku, qty: 1 });
+        renderItems(); search.value = ''; list.innerHTML = '';
+      } }, [el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku)]), el('span', { class:'pp-price' }, 'ост. ' + p.stock)])));
+      if (!rows.length) list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено'));
+    }
+    let dt; search.oninput = (e) => { const v = e.target.value; clearTimeout(dt); if (!v.trim()) { list.innerHTML = ''; return; } dt = setTimeout(() => fill(v), 250); };
+    pickerHost.append(search, list);
+  }
+
+  async function saveDraft() {
+    const body = { type, counterparty: partyI.value.trim(), date: dateI.value, note: noteI.value.trim(), items: items.map(it => ({ product_id: it.product_id, qty: it.qty })) };
+    doc = doc ? await window.__API__.apiFetch('stock-docs/' + doc.id, { method:'PUT', body }) : await window.__API__.apiFetch('stock-docs', { method:'POST', body });
+    return doc;
+  }
+
+  const foot = [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')];
+  if (editable) {
+    if (doc) foot.push(el('button', { class:'btn btn-danger', onclick: async () => {
+      if (!confirm('Удалить черновик?')) return;
+      try { await window.__API__.apiFetch('stock-docs/' + doc.id, { method:'DELETE' }); closeModal(); toast('Черновик удалён', 'success'); if (onDone) onDone(); }
+      catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+    } }, 'Удалить'));
+    foot.push(el('button', { class:'btn', onclick: async (e) => {
+      const b = e.currentTarget; b.disabled = true;
+      try { await saveDraft(); closeModal(); toast('Черновик сохранён', 'success'); if (onDone) onDone(); }
+      catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; }
+    } }, 'Сохранить черновик'));
+    foot.push(el('button', { class:'btn btn-primary', onclick: async (e) => {
+      if (!items.length) { toast('Добавьте позиции', 'warn'); return; }
+      const b = e.currentTarget; b.disabled = true;
+      try { const saved = await saveDraft(); await window.__API__.apiFetch('stock-docs/' + saved.id + '/post', { method:'POST' }); closeModal(); toast('Проведено, остаток обновлён', 'success'); if (onDone) onDone(); }
+      catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; }
+    } }, isIn ? 'Провести (оприходовать)' : 'Провести (списать)'));
+  } else if (status === 'posted') {
+    foot.push(el('button', { class:'btn btn-danger', onclick: async (e) => {
+      if (!confirm('Отменить проведённый документ? Остаток будет восстановлен.')) return;
+      const b = e.currentTarget; b.disabled = true;
+      try { await window.__API__.apiFetch('stock-docs/' + doc.id + '/cancel', { method:'POST' }); closeModal(); toast('Документ отменён', 'success'); if (onDone) onDone(); }
+      catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; }
+    } }, 'Отменить документ'));
+  }
+
+  const sp = { draft: ['pill-muted', 'Черновик'], posted: ['pill-success', 'Проведён'], cancelled: ['pill-danger', 'Отменён'] }[status] || ['pill-muted', status];
   openModal({
-    title: isIn ? '📥 Приход на склад' : '📤 Расход со склада',
+    title: (isIn ? '📥 Приход' : '📤 Расход') + (doc ? ' · ' + doc.no : ''),
     body: el('div', {}, [
-      el('div', { class:'form-row' }, [el('label', {}, 'Товар'), search, list, chosen]),
-      el('div', { class:'form-row' }, [el('label', {}, 'Количество'), qtyI]),
+      el('div', { style:'margin-bottom:8px' }, el('span', { class:'pill ' + sp[0] }, sp[1])),
       el('div', { class:'form-row' }, [el('label', {}, isIn ? 'Поставщик' : 'Получатель / причина'), partyI]),
       el('div', { class:'form-row' }, [el('label', {}, 'Дата'), dateI]),
       el('div', { class:'form-row' }, [el('label', {}, 'Примечание'), noteI]),
+      el('div', { style:'font-weight:600;margin:12px 0 4px' }, 'Позиции'),
+      itemsHost,
+      pickerHost,
     ]),
-    foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), submit],
+    foot,
   });
 }
 
@@ -3252,8 +3295,8 @@ VIEWS.warehouse = () => {
       el('div', { class: 'sub' }, 'Карагандинский склад · ул. Бытовая, 13/1'),
     ]),
     el('div', { class: 'actions' }, [
-      can('edit-stock') ? el('button', { class: 'btn btn-primary', onclick: () => openStockMovement('in', () => navigate('warehouse')) }, '📥 Приход') : null,
-      can('edit-stock') ? el('button', { class: 'btn', onclick: () => openStockMovement('out', () => navigate('warehouse')) }, '📤 Расход') : null,
+      can('edit-stock') ? el('button', { class: 'btn btn-primary', onclick: () => openStockDoc('receipt', null, () => navigate('warehouse')) }, '📥 Приход') : null,
+      can('edit-stock') ? el('button', { class: 'btn', onclick: () => openStockDoc('writeoff', null, () => navigate('warehouse')) }, '📤 Расход') : null,
       can('edit-stock') ? el('button', { class: 'btn', onclick: () => openInventoryCreate() }, '+ Инвентаризация') : null,
     ]),
   ]));
@@ -3344,8 +3387,37 @@ VIEWS.warehouse = () => {
     );
   }
 
+  // Документы склада (приход/расход) со статусами
+  wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Документы склада (приход / расход)'));
+  const docsHost = el('div', { class:'table-wrap' }, el('div', { class:'muted', style:'padding:12px' }, 'Загрузка…'));
+  wrap.append(docsHost);
+  function loadDocs() {
+    window.__API__.apiFetch('stock-docs?limit=50').then(rows => {
+      docsHost.innerHTML = '';
+      const dt = el('table', { class:'data' });
+      dt.append(el('thead', {}, el('tr', {}, [
+        el('th', {}, '№'), el('th', {}, 'Дата'), el('th', {}, 'Тип'), el('th', {}, 'Контрагент'),
+        el('th', { class:'num' }, 'Позиций'), el('th', {}, 'Статус'),
+      ])));
+      const stMap = { draft: ['pill-muted', 'Черновик'], posted: ['pill-success', 'Проведён'], cancelled: ['pill-danger', 'Отменён'] };
+      dt.append(el('tbody', {}, (rows && rows.length) ? rows.map(d => {
+        const sp = stMap[d.status] || ['pill-muted', d.status];
+        return el('tr', { style:'cursor:pointer', onclick: () => openStockDoc(d.type, d.id, () => navigate('warehouse')) }, [
+          el('td', { class:'strong' }, d.no),
+          el('td', { class:'muted' }, d.date ? fmtDate(d.date) : '—'),
+          el('td', {}, d.type === 'receipt' ? 'Приход' : 'Расход'),
+          el('td', {}, d.counterparty || '—'),
+          el('td', { class:'num' }, Math.round(d.total_qty || 0)),
+          el('td', {}, el('span', { class:'pill ' + sp[0] }, sp[1])),
+        ]);
+      }) : [el('tr', {}, el('td', { colspan:6, class:'muted', style:'text-align:center;padding:16px' }, 'Документов пока нет. Создайте приход или расход.'))]));
+      docsHost.append(dt);
+    }).catch(() => { docsHost.innerHTML = ''; docsHost.append(el('div', { class:'muted', style:'padding:12px' }, 'Не удалось загрузить документы')); });
+  }
+  loadDocs();
+
   // Движения склада (приход/расход) — журнал
-  wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Движения склада (приход / расход)'));
+  wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Журнал движений склада'));
   const movHost = el('div', { class:'table-wrap' }, el('div', { class:'muted', style:'padding:12px' }, 'Загрузка…'));
   wrap.append(movHost);
   window.__API__.apiFetch('stock-movements?limit=50').then(rows => {
