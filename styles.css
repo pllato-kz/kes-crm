@@ -432,6 +432,7 @@ table.data .muted { color: var(--muted); font-size: 12px; }
   font-size: 13px;
 }
 .bulk-bar > span { margin-right: auto; }
+.bulk-head { font-size: 14px; margin: 0 0 12px; padding: 9px 12px; background: #E6F6FD; border-radius: 8px; color: #0C5A8A; }
 .k-col-body {
   padding: 8px;
   display: flex; flex-direction: column; gap: 8px;

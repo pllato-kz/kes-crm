@@ -1667,7 +1667,6 @@ VIEWS.deals = () => {
     el('div', {}, [el('h1', {}, 'Сделки'), subEl]),
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn', onclick: () => { DEALS_VIEW = isList ? 'kanban' : 'list'; navigate('deals'); } }, isList ? '🗂 Канбан' : '📋 Список'),
-      (currentUser && currentUser.roleKey === 'director') ? el('button', { class: 'btn', onclick: openStageManager }, '⚙ Этапы') : null,
       el('button', { class: 'btn btn-primary', onclick: () => openNewDeal() }, '+ Сделка'),
     ]),
   ]));
@@ -1886,24 +1885,21 @@ VIEWS.deals = () => {
   return wrap;
 };
 
-// Массовое редактирование выбранных сделок: менеджер / этап / название
+// Массовое редактирование выбранных сделок: заполните нужные поля (пустые — не меняются)
 function openBulkEdit(ids) {
   const total = ids.length;
   if (!total) { toast('Не выбрано ни одной сделки', 'warn'); return; }
-  const useMgr = el('input', { type:'checkbox' });
-  const mgrSel = el('select', {}, state.users.filter(u => u.active !== false).map(u => el('option', { value:u.id }, u.name)));
-  const useStage = el('input', { type:'checkbox' });
-  const stageSel = el('select', {}, STAGES.map(s => el('option', { value:s.id }, s.label)));
-  const useTitle = el('input', { type:'checkbox' });
-  const titleI = el('input', { placeholder:'Новое название' });
-  const fr = (chk, label, ctrl) => el('div', { class:'row', style:'gap:10px;align-items:center;margin-bottom:10px' }, [chk, el('span', { style:'flex:none;width:96px;font-size:13px' }, label), ctrl]);
+  const mgrSel = el('select', {}, [el('option', { value:'' }, 'Не менять'), ...state.users.filter(u => u.active !== false).map(u => el('option', { value:u.id }, u.name))]);
+  const stageSel = el('select', {}, [el('option', { value:'' }, 'Не менять'), ...STAGES.map(s => el('option', { value:s.id }, s.label))]);
+  const titleI = el('input', { placeholder:'Оставьте пустым, чтобы не менять' });
+  const fieldRow = (label, ctrl) => el('div', { class:'form-row' }, [el('label', {}, label), ctrl]);
 
   const applyBtn = el('button', { class:'btn btn-primary', onclick: async () => {
     const body = {};
-    if (useMgr.checked) body.manager_id = mgrSel.value;
-    if (useStage.checked) body.stage_id = stageSel.value;
-    if (useTitle.checked) { if (!titleI.value.trim()) { toast('Введите название', 'warn'); return; } body.title = titleI.value.trim(); }
-    if (!Object.keys(body).length) { toast('Отметьте хотя бы одно поле для изменения', 'warn'); return; }
+    if (mgrSel.value) body.manager_id = mgrSel.value;
+    if (stageSel.value) body.stage_id = stageSel.value;
+    if (titleI.value.trim()) body.title = titleI.value.trim();
+    if (!Object.keys(body).length) { toast('Заполните хотя бы одно поле', 'warn'); return; }
     if (!confirm(`Применить изменения к ${total} ${plural(total, 'сделке', 'сделкам', 'сделкам')}?`)) return;
     applyBtn.disabled = true; applyBtn.textContent = 'Применение…';
     let ok = 0, fail = 0;
@@ -1925,11 +1921,11 @@ function openBulkEdit(ids) {
   openModal({
     title: 'Массовое редактирование',
     body: el('div', {}, [
-      el('p', { style:'font-size:13px;margin:0 0 4px' }, ['Будет изменено: ', el('b', {}, String(total)), ' ' + plural(total, 'сделка', 'сделки', 'сделок')]),
-      el('p', { class:'muted', style:'font-size:11.5px;margin:0 0 14px' }, 'Отметьте поля — изменения применятся ко всем выбранным сделкам одновременно.'),
-      fr(useMgr, 'Менеджер', mgrSel),
-      fr(useStage, 'Этап', stageSel),
-      fr(useTitle, 'Название', titleI),
+      el('div', { class:'bulk-head' }, ['Выбрано сделок: ', el('b', {}, String(total))]),
+      el('p', { class:'muted', style:'font-size:12px;margin:0 0 14px' }, 'Заполните только те поля, которые нужно изменить. Пустые поля останутся без изменений.'),
+      fieldRow('Менеджер', mgrSel),
+      fieldRow('Этап', stageSel),
+      fieldRow('Название', titleI),
     ]),
     foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), applyBtn],
   });
