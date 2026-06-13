@@ -250,6 +250,7 @@ function navigate(view, params = {}) {
   const main = $('#main');
   main.innerHTML = '';
   const renderer = VIEWS[view] || VIEWS.dashboard;
+  updateHash(view, false); // синхронизируем URL (#view?...состояние) до рендера
   main.append(renderer(params));
 }
 
@@ -262,6 +263,93 @@ document.addEventListener('click', (e) => {
     navigate(navLink.dataset.nav, JSON.parse(navLink.dataset.params || '{}'));
     document.body.classList.remove('nav-open');
   }
+});
+
+// ============================================================
+// URL-роутинг (hash): #deals, #catalog?... — прямые ссылки, состояние в URL
+// ============================================================
+const ROUTE_STATE = {
+  deals: {
+    serialize: () => {
+      const p = {};
+      if (DEALS_VIEW === 'list') p.view = 'list';
+      if (DEALS_Q) p.q = DEALS_Q;
+      if (DEALS_STAGE) p.stage = DEALS_STAGE;
+      if (DEALS_MGR) p.mgr = DEALS_MGR;
+      if (DEALS_FROM) p.from = DEALS_FROM;
+      if (DEALS_TO) p.to = DEALS_TO;
+      return p;
+    },
+    apply: (p) => {
+      DEALS_VIEW = p.view === 'list' ? 'list' : 'kanban';
+      DEALS_Q = p.q || ''; DEALS_STAGE = p.stage || ''; DEALS_MGR = p.mgr || '';
+      DEALS_FROM = p.from || ''; DEALS_TO = p.to || '';
+    },
+  },
+  tasks: {
+    serialize: () => {
+      const p = {};
+      if (TASKS_OWNER) p.owner = TASKS_OWNER;
+      if (TASKS_FROM) p.from = TASKS_FROM;
+      if (TASKS_TO) p.to = TASKS_TO;
+      if (TASKS_SHOWDONE) p.done = '1';
+      return p;
+    },
+    apply: (p) => {
+      TASKS_OWNER = p.owner || ''; TASKS_FROM = p.from || ''; TASKS_TO = p.to || '';
+      TASKS_SHOWDONE = p.done === '1';
+    },
+  },
+};
+let __routingSuppress = false;
+
+function buildHash(view) {
+  let h = view;
+  const reg = ROUTE_STATE[view];
+  if (reg) {
+    const p = reg.serialize();
+    const qs = Object.keys(p).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(p[k])).join('&');
+    if (qs) h += '?' + qs;
+  }
+  return h;
+}
+function parseHash() {
+  const raw = String(location.hash || '').replace(/^#\/?/, '');
+  const qi = raw.indexOf('?');
+  const view = (qi >= 0 ? raw.slice(0, qi) : raw).trim();
+  const params = {};
+  if (qi >= 0) raw.slice(qi + 1).split('&').forEach(kv => {
+    if (!kv) return;
+    const i = kv.indexOf('=');
+    const k = decodeURIComponent(i >= 0 ? kv.slice(0, i) : kv);
+    const v = i >= 0 ? decodeURIComponent(kv.slice(i + 1)) : '';
+    if (k) params[k] = v;
+  });
+  return { view, params };
+}
+function updateHash(view, replace) {
+  const target = buildHash(view);
+  if (String(location.hash || '').replace(/^#\/?/, '') === target) return;
+  if (replace && history.replaceState) {
+    history.replaceState(null, '', '#' + target);   // без события hashchange и без записи в историю
+  } else {
+    __routingSuppress = true;
+    location.hash = target;
+  }
+}
+function routeFromHash() {
+  const { view, params } = parseHash();
+  if (view && ROUTES.includes(view) && currentUser && can('see-module', view)) {
+    if (ROUTE_STATE[view]) { try { ROUTE_STATE[view].apply(params); } catch (e) {} }
+    navigate(view, params);
+  } else {
+    navigate((currentUser && role().modules[0]) || 'dashboard');
+  }
+}
+window.addEventListener('hashchange', () => {
+  if (__routingSuppress) { __routingSuppress = false; return; } // мы сами поменяли hash — не перерисовываем повторно
+  if (!currentUser) return;                                     // до логина не роутим
+  routeFromHash();
 });
 
 // ---------- Toast ----------
@@ -1718,6 +1806,7 @@ VIEWS.deals = () => {
 
   function renderContent() {
     selected.clear(); // при перестроении списка выбор сбрасывается
+    updateHash('deals', true); // отражаем фильтры в URL (без записи в историю)
     const deals = filtered();
     subEl.textContent = `${deals.length} ${role().seeAllData ? 'сделок' : 'ваших сделок'} · сумма ${fmtMoneyK(deals.reduce((s, d) => s + d.amount, 0))}`;
     content.innerHTML = '';
@@ -4076,9 +4165,8 @@ function renderShell() {
   $('#menuToggle') && $('#menuToggle').addEventListener('click', () => document.body.classList.toggle('nav-open'));
   $('#navBackdrop') && $('#navBackdrop').addEventListener('click', () => document.body.classList.remove('nav-open'));
 
-  // Первая страница — первая доступная роли
-  const firstView = r.modules[0] || 'dashboard';
-  navigate(firstView);
+  // Первая страница — из URL (#view) либо первая доступная роли
+  routeFromHash();
 
   // Напоминания по задачам: индикатор на колокольчике + тост о просроченных
   const dot = $('#notif-btn .dot');
