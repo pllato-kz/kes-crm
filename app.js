@@ -3466,7 +3466,7 @@ VIEWS.warehouse = () => {
   wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Остатки по складу'));
   const q = { q: '', low: false, page: 1, limit: 50, total: 0 };
   const searchI = el('input', { placeholder:'Поиск по артикулу или названию…' });
-  const lowChk = el('input', { type:'checkbox' });
+  const lowChk = el('input', { type:'checkbox', style:'min-width:0;width:16px;height:16px;padding:0;margin:0;flex:none' });
   const lowLabel = el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#374151;white-space:nowrap' }, [lowChk, 'Только низкие остатки (<50)']);
   const tw = el('div', { class: 'table-wrap' });
   tw.append(el('div', { class: 'table-toolbar' }, [searchI, lowLabel]));
