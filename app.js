@@ -420,6 +420,7 @@ const ROUTE_STATE = {
   tasks: {
     serialize: () => {
       const p = {};
+      if (TASKS_VIEW === 'list') p.view = 'list';
       if (TASKS_OWNER) p.owner = TASKS_OWNER;
       if (TASKS_FROM) p.from = TASKS_FROM;
       if (TASKS_TO) p.to = TASKS_TO;
@@ -427,6 +428,7 @@ const ROUTE_STATE = {
       return p;
     },
     apply: (p) => {
+      TASKS_VIEW = p.view === 'list' ? 'list' : 'kanban';
       TASKS_OWNER = p.owner || ''; TASKS_FROM = p.from || ''; TASKS_TO = p.to || '';
       TASKS_SHOWDONE = p.done === '1';
     },
@@ -3563,6 +3565,7 @@ let TASKS_OWNER = '';      // фильтр по ответственному (id
 let TASKS_FROM = '';       // фильтр по диапазону срока: с (YYYY-MM-DD)
 let TASKS_TO = '';         // фильтр по диапазону срока: по (YYYY-MM-DD)
 let TASKS_SHOWDONE = false; // показывать выполненные
+let TASKS_VIEW = 'kanban'; // 'kanban' | 'list'
 
 function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function parseDue(due) { return new Date(String(due || '').replace(' ', 'T')); }
@@ -3597,8 +3600,8 @@ function bucketTargetDue(key) {
 VIEWS.tasks = () => {
   const wrap = el('div');
   const base = visibleTasks(); // с учётом роли (менеджер — только свои)
-  const selected = new Set();   // выбранные задачи для массового редактирования
-  const checks = new Map();     // id -> чекбокс карточки (для «выбрать все»/«снять выбор»)
+  const isList = TASKS_VIEW === 'list';
+  const selected = new Set();   // выбранные задачи (режим списка) для массового редактирования
   const doneCount = base.filter(t => t.done).length;
   const inRange = (t) => {
     if (!TASKS_FROM && !TASKS_TO) return true;
@@ -3619,7 +3622,10 @@ VIEWS.tasks = () => {
 
   wrap.append(el('div', { class:'page-head' }, [
     el('div', {}, [el('h1', {}, 'Задачи'), el('div', { class:'sub' }, subParts.join(' · '))]),
-    el('div', { class:'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewTask }, '+ Задача')]),
+    el('div', { class:'actions' }, [
+      el('button', { class:'btn', onclick: () => { TASKS_VIEW = isList ? 'kanban' : 'list'; navigate('tasks'); } }, isList ? '🗂 Канбан' : '📋 Список'),
+      el('button', { class:'btn btn-primary', onclick: openNewTask }, '+ Задача'),
+    ]),
   ]));
 
   // Тулбар: фильтр по сотруднику + диапазон срока + показывать выполненные
@@ -3640,25 +3646,7 @@ VIEWS.tasks = () => {
   const doneChk = el('input', { type:'checkbox', checked: TASKS_SHOWDONE ? 'checked' : null });
   doneChk.onchange = () => { TASKS_SHOWDONE = doneChk.checked; navigate('tasks'); };
   toolbarKids.push(el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#374151;margin-left:10px' }, [doneChk, 'Показывать выполненные']));
-
-  // Массовое редактирование: панель действий + кнопка «выбрать все по фильтру»
-  const bulkCount = el('span', { class:'strong' }, '');
-  const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [
-    bulkCount,
-    el('button', { class:'btn btn-sm btn-primary', onclick: () => openTaskBulkEdit([...selected]) }, 'Массовое редактирование'),
-    el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); checks.forEach(c => { c.checked = false; }); refreshBulk(); } }, 'Снять выбор'),
-  ]);
-  function refreshBulk() { bulkCount.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
-  const bulkPool = () => openFiltered.concat(TASKS_SHOWDONE ? doneFiltered : []); // задачи под текущим фильтром
-  toolbarKids.push(el('button', { class:'btn btn-sm', onclick: () => {
-    const pool = bulkPool();
-    const allSel = pool.length > 0 && pool.every(t => selected.has(t.id));
-    pool.forEach(t => { if (allSel) selected.delete(t.id); else selected.add(t.id); const c = checks.get(t.id); if (c) c.checked = !allSel; });
-    refreshBulk();
-  } }, 'Выбрать все'));
-
   wrap.append(el('div', { class:'row', style:'gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px' }, toolbarKids));
-  wrap.append(bulkBar);
 
   const byDue = (a, b) => String(a.due || '').localeCompare(String(b.due || ''));
 
@@ -3669,16 +3657,11 @@ VIEWS.tasks = () => {
     const dateStr = t.due ? fmtDate(String(t.due).split(' ')[0]) : '—';
     const timeStr = String(t.due || '').slice(11, 16);
     const od = !t.done && taskDue(t).kind === 'overdue';
-    const cb = el('input', { type:'checkbox', checked: selected.has(t.id) ? 'checked' : null,
-      onclick: (e) => e.stopPropagation(),
-      onchange: () => { if (cb.checked) selected.add(t.id); else selected.delete(t.id); refreshBulk(); } });
-    checks.set(t.id, cb);
     return el('div', { class:'k-card', style:'cursor:pointer' + (od ? ';border-left:3px solid #EF4444' : ''), onclick: () => openTaskDetail(t.id) }, [
-      // приоритет + чекбокс выбора — сверху
+      // приоритет — сверху
       el('div', { style:'display:flex;align-items:center;gap:6px;margin-bottom:6px' }, [
         el('span', { class:'pill ' + prCls, style:'font-size:10px' }, prLabel[t.priority] || t.priority),
         od ? el('span', { class:'pill pill-danger', style:'font-size:10px' }, 'просрочено') : null,
-        el('label', { style:'margin-left:auto;display:flex;align-items:center', title:'Выбрать для массового редактирования', onclick: (e) => e.stopPropagation() }, cb),
       ]),
       // название
       el('div', { class:'k-card-title', style:'margin:0' + (t.done ? ';text-decoration:line-through;color:#9CA3AF' : '') }, t.title),
@@ -3715,10 +3698,60 @@ VIEWS.tasks = () => {
     ]);
   }
 
-  const kanban = el('div', { class:'kanban' });
-  TASK_COLS.forEach(col => kanban.append(column(col.label, col.color, openFiltered.filter(t => taskBucket(t) === col.key).sort(byDue))));
-  if (TASKS_SHOWDONE) kanban.append(column('Выполнено', '#9CA3AF', doneFiltered.slice().sort(byDue).reverse()));
-  wrap.append(kanban);
+  // Режим списка: таблица с основными полями + массовое редактирование (как в «Сделках»)
+  function buildTasksList() {
+    const rows = openFiltered.concat(TASKS_SHOWDONE ? doneFiltered : []).slice().sort(byDue);
+    const tw = el('div', { class:'table-wrap' });
+    const countSpan = el('span', { class:'strong' }, '');
+    const rowChecks = [];
+    const selAll = el('input', { type:'checkbox', title:'Выбрать все' });
+    const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [
+      countSpan,
+      el('button', { class:'btn btn-sm btn-primary', onclick: () => openTaskBulkEdit([...selected]) }, 'Массовое редактирование'),
+      el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); rowChecks.forEach(c => { c.checked = false; }); selAll.checked = false; refreshBulk(); } }, 'Снять выбор'),
+    ]);
+    function refreshBulk() { countSpan.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
+    selAll.onchange = () => { rows.forEach((t, i) => { if (selAll.checked) selected.add(t.id); else selected.delete(t.id); if (rowChecks[i]) rowChecks[i].checked = selAll.checked; }); refreshBulk(); };
+
+    const tbl = el('table', { class:'data' });
+    tbl.append(el('thead', {}, el('tr', {}, [
+      el('th', { style:'width:34px;text-align:center' }, selAll),
+      el('th', {}, 'Задача'), el('th', {}, 'Ответственный'), el('th', {}, 'Приоритет'),
+      el('th', {}, 'Срок'), el('th', {}, 'Статус'), el('th', {}, 'Сделка'),
+    ])));
+    tbl.append(el('tbody', {}, rows.length ? rows.map((t, i) => {
+      const u = userById(t.owner);
+      const prCls = t.priority === 'high' ? 'pill-danger' : t.priority === 'medium' ? 'pill-warn' : 'pill-muted';
+      const od = !t.done && taskDue(t).kind === 'overdue';
+      const dl = t.deal ? byId(state.deals, t.deal) : null;
+      const dStr = String(t.due || ''); const dueStr = dStr ? fmtDate(dStr.split(' ')[0]) + (dStr.slice(11, 16) ? ' ' + dStr.slice(11, 16) : '') : '—';
+      const statusPill = t.done ? el('span', { class:'pill pill-success' }, 'Выполнена')
+        : (od ? el('span', { class:'pill pill-danger' }, 'Просрочена') : el('span', { class:'pill pill-muted' }, 'Открыта'));
+      const cb = el('input', { type:'checkbox', onclick: (e) => e.stopPropagation(), onchange: () => { if (cb.checked) selected.add(t.id); else selected.delete(t.id); selAll.checked = rows.length > 0 && rows.every(x => selected.has(x.id)); refreshBulk(); } });
+      rowChecks[i] = cb;
+      return el('tr', { style:'cursor:pointer', onclick: () => openTaskDetail(t.id) }, [
+        el('td', { style:'text-align:center', onclick: (e) => e.stopPropagation() }, cb),
+        el('td', { class:'strong', style: t.done ? 'text-decoration:line-through;color:#9CA3AF' : '' }, t.title),
+        el('td', {}, el('span', { class:'avatar', style:`background:${u.color};width:26px;height:26px;font-size:11px`, title:u.name }, u.avatar)),
+        el('td', {}, el('span', { class:'pill ' + prCls }, prLabel[t.priority] || t.priority)),
+        el('td', { class:'muted' }, dueStr),
+        el('td', {}, statusPill),
+        el('td', { class:'muted' }, dl ? dl.title : '—'),
+      ]);
+    }) : [el('tr', {}, el('td', { colspan:7, class:'muted', style:'text-align:center;padding:24px' }, 'Задач не найдено'))]));
+    tw.append(bulkBar, tbl);
+    refreshBulk();
+    return tw;
+  }
+
+  if (isList) {
+    wrap.append(buildTasksList());
+  } else {
+    const kanban = el('div', { class:'kanban' });
+    TASK_COLS.forEach(col => kanban.append(column(col.label, col.color, openFiltered.filter(t => taskBucket(t) === col.key).sort(byDue))));
+    if (TASKS_SHOWDONE) kanban.append(column('Выполнено', '#9CA3AF', doneFiltered.slice().sort(byDue).reverse()));
+    wrap.append(kanban);
+  }
   return wrap;
 };
 
