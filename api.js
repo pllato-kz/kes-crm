@@ -155,7 +155,9 @@
     return out;
   }
   const buildStages = (rows) => rows.slice().sort((a, b) => (a.sort || 0) - (b.sort || 0))
-    .map((s) => ({ id: s.id, label: s.label, color: s.color, sort: s.sort }));
+    .map((s) => ({ id: s.id, label: s.label, color: s.color, sort: s.sort, pipelineId: s.pipeline_id || 'default' }));
+  const buildPipelines = (rows) => (rows || []).slice().sort((a, b) => (a.sort || 0) - (b.sort || 0))
+    .map((p) => ({ id: p.id, name: p.name, sort: p.sort }));
   function buildClientTypes(rows) {
     const out = {}; for (const t of rows) out[t.key] = { label: t.label, color: t.color }; return out;
   }
@@ -167,11 +169,11 @@
     // отметить просроченные задачи и разослать уведомления (директор + ответственный)
     try { await apiFetch('notifications/scan-overdue', { method: 'POST' }); } catch (e) {}
     const [
-      company, rolesRows, stagesRows, typesRows, cats, leadSources, leadStatuses,
+      company, rolesRows, stagesRows, pipelinesRows, typesRows, cats, leadSources, leadStatuses,
       warehouses, shipStatuses, invStatuses, taskPrios,
       usersRows, suppliers, productsResp, clients, deals, leads, tasks, invoices, shipments, receipts, notifications,
     ] = await Promise.all([
-      apiFetch('company'), apiFetch('roles'), apiFetch('deal_stages'), apiFetch('client_types'),
+      apiFetch('company'), apiFetch('roles'), apiFetch('deal_stages'), apiFetch('pipelines'), apiFetch('client_types'),
       apiFetch('product_categories'), apiFetch('lead_sources'), apiFetch('lead_statuses'),
       apiFetch('warehouses'), apiFetch('shipment_statuses'), apiFetch('invoice_statuses'), apiFetch('task_priorities'),
       apiFetch('users'), apiFetch('suppliers'), apiFetch('products?limit=1000'), apiFetch('clients?limit=1000'),
@@ -207,6 +209,7 @@
     // справочники, которыми пользуется app.js напрямую
     const dict = {
       STAGES: buildStages(stagesRows),
+      PIPELINES: buildPipelines(pipelinesRows),
       ROLES: rolesByKey,
       CLIENT_TYPES: buildClientTypes(typesRows),
     };

@@ -20,6 +20,7 @@ const TABLES = {
   // справочники
   roles:              { pk: 'key' },
   deal_stages:        { pk: 'id' },
+  pipelines:          { pk: 'id' },
   client_types:       { pk: 'key' },
   product_categories: { pk: 'id' },
   lead_sources:       { pk: 'id' },
@@ -315,6 +316,7 @@ async function dataRoute({ request, env }, seg, url, auth) {
   // задачи: расширенные поля (описание/дата начала/статус/комментарии) — добавляем на лету
   if (resource === 'tasks') await ensureTaskColumns(env);
   if (resource === 'deals') await ensureDealColumns(env);
+  if (['pipelines', 'deal_stages', 'deals'].includes(resource)) await ensurePipelineSchema(env);
 
   // изменять роли (матрицу доступа) может только директор
   if (resource === 'roles' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
@@ -327,6 +329,12 @@ async function dataRoute({ request, env }, seg, url, auth) {
       return err(403, 'Этот этап нельзя изменять или удалять');
     }
     if (method === 'DELETE' && id) return deleteStage(env, id);
+  }
+  // управлять воронками может только директор
+  if (resource === 'pipelines' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    if (!auth || auth.role !== 'director') return err(403, 'Только директор может управлять воронками');
+    if (method === 'POST' && !id) return createPipeline(env, request);
+    if (method === 'DELETE' && id) return deletePipeline(env, id);
   }
 
   // --- точечная обработка ---
@@ -506,6 +514,56 @@ async function ensureDealColumns(env) {
     'ALTER TABLE deals ADD COLUMN address TEXT',
   ]) { try { await env.DB.prepare(ddl).run(); } catch (e) { /* уже есть */ } }
   DEALS_SCHEMA_OK = true;
+}
+
+// Воронки продаж: таблица pipelines + колонка pipeline_id у этапов.
+// Создаётся на лету (wrangler-миграции в этом окружении недоступны).
+let PIPELINES_SCHEMA_OK = false;
+async function ensurePipelineSchema(env) {
+  if (PIPELINES_SCHEMA_OK) return;
+  try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS pipelines (id TEXT PRIMARY KEY, name TEXT, sort INTEGER)').run(); } catch (e) {}
+  try { await env.DB.prepare('ALTER TABLE deal_stages ADD COLUMN pipeline_id TEXT').run(); } catch (e) { /* уже есть */ }
+  // дефолтная воронка, если ни одной нет — в неё попадают существующие этапы
+  try {
+    const cnt = (await env.DB.prepare('SELECT COUNT(*) AS n FROM pipelines').first()).n;
+    if (!cnt) await env.DB.prepare("INSERT INTO pipelines (id, name, sort) VALUES ('default', 'Основная воронка', 0)").run();
+  } catch (e) {}
+  // привязываем «бесхозные» этапы к дефолтной воронке
+  try { await env.DB.prepare("UPDATE deal_stages SET pipeline_id='default' WHERE pipeline_id IS NULL OR pipeline_id=''").run(); } catch (e) {}
+  PIPELINES_SCHEMA_OK = true;
+}
+
+// Создание воронки + стартовый набор этапов
+async function createPipeline(env, request) {
+  const body = await request.json().catch(() => ({}));
+  const id = genId();
+  const name = String(body.name || 'Новая воронка').trim() || 'Новая воронка';
+  const row = await env.DB.prepare('SELECT MAX(sort) AS m FROM pipelines').first();
+  const sort = (row && row.m != null ? row.m : 0) + 1;
+  await env.DB.prepare('INSERT INTO pipelines (id, name, sort) VALUES (?,?,?)').bind(id, name, sort).run();
+  const starter = [['Новая', '#3B82F6'], ['В работе', '#F59E0B'], ['Оплачено', '#10B981']];
+  let i = 0;
+  for (const [label, color] of starter) {
+    await env.DB.prepare('INSERT INTO deal_stages (id, label, color, sort, pipeline_id) VALUES (?,?,?,?,?)')
+      .bind(genId(), label, color, i++, id).run();
+  }
+  return json({ id, name, sort }, 201);
+}
+
+// Удаление воронки: её сделки переносятся на первый этап другой воронки, этапы удаляются
+async function deletePipeline(env, id) {
+  const total = (await env.DB.prepare('SELECT COUNT(*) AS n FROM pipelines').first()).n;
+  if (total <= 1) return err(400, 'Нельзя удалить единственную воронку');
+  const fallback = await env.DB.prepare('SELECT id FROM pipelines WHERE id<>? ORDER BY sort, id LIMIT 1').bind(id).first();
+  if (!fallback) return err(400, 'Нет запасной воронки для переноса сделок');
+  const fstage = await env.DB.prepare('SELECT id FROM deal_stages WHERE pipeline_id=? ORDER BY sort, id LIMIT 1').bind(fallback.id).first();
+  if (fstage) {
+    await env.DB.prepare('UPDATE deals SET stage_id=? WHERE stage_id IN (SELECT id FROM deal_stages WHERE pipeline_id=?)')
+      .bind(fstage.id, id).run();
+  }
+  await env.DB.prepare('DELETE FROM deal_stages WHERE pipeline_id=?').bind(id).run();
+  await env.DB.prepare('DELETE FROM pipelines WHERE id=?').bind(id).run();
+  return json({ deleted: 1, reassignedTo: fallback.id });
 }
 
 // Уведомления — адресные (user_id) + широковещательные (user_id IS NULL).
@@ -731,7 +789,10 @@ async function deleteDeal(env, id, auth) {
 
 // Удаление этапа воронки: сделки этого этапа переносим на другой этап (по сортировке).
 async function deleteStage(env, id) {
-  const fallback = await env.DB.prepare('SELECT id FROM deal_stages WHERE id<>? ORDER BY sort, id LIMIT 1').bind(id).first();
+  const cur = await env.DB.prepare('SELECT pipeline_id FROM deal_stages WHERE id=?').bind(id).first();
+  const pid = cur ? (cur.pipeline_id || 'default') : 'default';
+  // запасной этап — из той же воронки
+  const fallback = await env.DB.prepare('SELECT id FROM deal_stages WHERE id<>? AND pipeline_id=? ORDER BY sort, id LIMIT 1').bind(id, pid).first();
   if (!fallback) return err(400, 'Нельзя удалить последний этап воронки');
   await env.DB.prepare('UPDATE deals SET stage_id=? WHERE stage_id=?').bind(fallback.id, id).run();
   await env.DB.prepare('DELETE FROM deal_stages WHERE id=?').bind(id).run();
