@@ -2326,15 +2326,18 @@ async function openDealDetail(id) {
   const totalHost = el('span', { style:'font-size:20px;font-weight:700' });
   const pickerHost = el('div');
 
+  // Сумма позиций (товаров)
+  const lineItemsSum = () => d.lineItems.reduce((s, it) => {
+    const p = byId(state.products, it.product);
+    const price = it.priceUsed != null ? it.priceUsed : (p ? p.priceWholesale : 0);
+    return s + it.qty * price;
+  }, 0);
+  // База — часть суммы сделки, не относящаяся к позициям (ручная сумма).
+  // Итоговая сумма сделки = база + позиции, поэтому добавление товара ПРИБАВЛЯЕТСЯ к сумме.
+  let baseAmount = Math.max(0, (Number(d.amount) || 0) - lineItemsSum());
   function recomputeAmount() {
-    // Сумма из позиций — только если они есть; иначе сохраняем введённую вручную сумму
-    if (d.lineItems.length) {
-      d.amount = d.lineItems.reduce((s, it) => {
-        const p = byId(state.products, it.product);
-        return s + (p ? it.qty * (it.priceUsed || p.priceWholesale) : 0);
-      }, 0);
-      d.items = d.lineItems.reduce((s, it) => s + it.qty, 0);
-    }
+    d.amount = baseAmount + lineItemsSum();
+    d.items = d.lineItems.reduce((s, it) => s + it.qty, 0);
     totalHost.textContent = fmtMoney(d.amount);
   }
 
@@ -2444,8 +2447,8 @@ async function openDealDetail(id) {
   const amountI = el('input', { type:'number', value: Math.round(d.amount || 0), min:'0' });
   const dealItemsTotal = el('span', {}, fmtMoney(d.amount));
   recomputeAmount = (function (orig) { return function () { orig(); amountI.value = Math.round(d.amount || 0); dealItemsTotal.textContent = fmtMoney(d.amount); }; })(recomputeAmount);
-  // Ручной ввод суммы (когда нет позиций) сразу отражается в итогах
-  amountI.oninput = () => { if (!d.lineItems.length) { d.amount = Number(amountI.value) || 0; totalHost.textContent = fmtMoney(d.amount); dealItemsTotal.textContent = fmtMoney(d.amount); } };
+  // Ручной ввод суммы задаёт «базу»; общий итог = база + позиции
+  amountI.oninput = () => { const v = Number(amountI.value) || 0; baseAmount = Math.max(0, v - lineItemsSum()); d.amount = v; totalHost.textContent = fmtMoney(d.amount); dealItemsTotal.textContent = fmtMoney(d.amount); };
   const mgrSel = el('select');
   state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.manager) o.selected = true; mgrSel.append(o); });
   if (!canEdit) [titleI, addressI, amountI, mgrSel].forEach(i => i.disabled = true);
@@ -2617,7 +2620,7 @@ async function openDealDetail(id) {
         d.address = addressI.value;
         d.manager = mgrSel.value;
         d.comments = commentsTA.value;
-        if (!(d.lineItems && d.lineItems.length)) d.amount = Number(amountI.value) || 0;
+        d.amount = baseAmount + lineItemsSum(); // итог = ручная база + сумма позиций
         try {
           const payload = { ...window.__API__.toApi.deal(d) };
           if (d.lineItems && d.lineItems.length) payload.lineItems = window.__API__.toApi.dealItems(d.lineItems);
