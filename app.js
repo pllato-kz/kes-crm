@@ -1621,6 +1621,94 @@ function printShipment(sh) {
   })();
 }
 
+// Печать накладной по складскому документу (приход/расход)
+function printStockDoc(docId) {
+  const w = window.open('', '_blank', 'width=900,height=1100');
+  if (!w) { toast('Браузер заблокировал окно печати — разрешите popup', 'error'); return; }
+  w.document.write('<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px;color:#666">Готовлю накладную…</body>');
+  (async () => {
+    let doc; try { doc = await window.__API__.apiFetch('stock-docs/' + docId); } catch (e) { w.document.body.innerHTML = 'Документ не найден'; return; }
+    const isIn = doc.type === 'receipt';
+    const m = state.meta || {};
+    const company = m.legalName || m.tenant || 'ТОО «KazEnergoSnab»';
+    const dateStr = doc.date ? fmtDate(doc.date) : '';
+    const items = doc.items || [];
+    const totalQty = items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
+    const statusRu = { draft:'черновик', posted:'проведён', cancelled:'отменён' }[doc.status] || doc.status;
+    const rows = items.length
+      ? items.map((it, i) => `<tr><td>${i+1}</td><td>${it.product_name||''}</td><td style="font-family:monospace;font-size:11px">${it.product_sku||''}</td><td class="num">${it.qty}</td></tr>`).join('')
+      : `<tr><td colspan="4" style="text-align:center;color:#999;padding:14px">Нет позиций</td></tr>`;
+    const title = (isIn ? 'ПРИХОДНАЯ НАКЛАДНАЯ' : 'РАСХОДНАЯ НАКЛАДНАЯ') + ' ' + doc.no;
+    const inner = `
+      <div class="pr-head">
+        <div class="pr-logo">${PRINT_LOGO}<div><h2>${title}</h2><div style="color:#666;font-size:12px;margin-top:4px">от ${dateStr} · статус: ${statusRu}</div></div></div>
+        <div class="pr-meta"><div>${company}</div>${m.bin ? `<div>БИН: ${m.bin}</div>` : ''}<div style="margin-top:6px;color:#888">Образец — не имеет юридической силы</div></div>
+      </div>
+      <div class="pr-parties">
+        <div><div class="party-title">${isIn ? 'Поставщик' : 'Отправитель'}</div><div class="party-name">${isIn ? (doc.counterparty || '—') : company}</div>${isIn ? '' : `<div class="party-line">${m.address || ''}</div>`}</div>
+        <div><div class="party-title">${isIn ? 'Склад / получатель' : 'Получатель'}</div><div class="party-name">${isIn ? company : (doc.counterparty || '—')}</div>${isIn ? `<div class="party-line">${m.address || ''}</div>` : ''}</div>
+      </div>
+      <table class="pr-table"><thead><tr><th style="width:32px">#</th><th>Наименование</th><th style="width:130px">Артикул</th><th class="num" style="width:80px">Кол-во</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="pr-totals"><div class="total-line grand"><span>Всего единиц:</span> <span>${totalQty}</span></div></div>
+      ${doc.note ? `<div style="margin-top:8px;color:#555">Примечание: ${doc.note}</div>` : ''}
+      <div class="pr-foot">
+        <div><div>Отпустил: ____________________</div><div style="margin-top:12px">Принял: ____________________</div><div style="margin-top:4px;color:#aaa">М.П.</div></div>
+        <div class="pr-stamp">место<br>печати</div>
+      </div>`;
+    w.document.open(); w.document.write(buildPrintDoc(title, inner)); w.document.close();
+  })();
+}
+
+// Отчёт «Движение приход-расход» за период (печать)
+function printMovementsReport(from, to) {
+  const w = window.open('', '_blank', 'width=1000,height=1100');
+  if (!w) { toast('Браузер заблокировал окно — разрешите popup', 'error'); return; }
+  w.document.write('<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px;color:#666">Готовлю отчёт…</body>');
+  (async () => {
+    const qp = new URLSearchParams({ limit: '1000' });
+    if (from) qp.set('from', from); if (to) qp.set('to', to);
+    let rows; try { rows = await window.__API__.apiFetch('stock-movements?' + qp.toString()); } catch (e) { w.document.body.innerHTML = 'Ошибка загрузки'; return; }
+    rows = rows || [];
+    const inSum = rows.filter(m => m.direction === 'in').reduce((s, m) => s + (Number(m.qty) || 0), 0);
+    const outSum = rows.filter(m => m.direction === 'out').reduce((s, m) => s + (Number(m.qty) || 0), 0);
+    const period = (from ? fmtDate(from) : '…') + ' — ' + (to ? fmtDate(to) : '…');
+    const m = state.meta || {};
+    const body = rows.length
+      ? rows.map((mv, i) => `<tr><td>${i+1}</td><td>${mv.date ? fmtDate(mv.date) : ''}</td><td>${mv.direction === 'in' ? 'Приход' : 'Расход'}</td><td>${mv.product_name || mv.product_sku || ''}</td><td class="num">${mv.direction === 'in' ? '+' : '−'}${mv.qty}</td><td>${mv.counterparty || ''}</td><td>${mv.doc_no || ''}</td></tr>`).join('')
+      : `<tr><td colspan="7" style="text-align:center;color:#999;padding:14px">Движений за период нет</td></tr>`;
+    const inner = `
+      <div class="pr-head">
+        <div class="pr-logo">${PRINT_LOGO}<div><h2>ОТЧЁТ: ДВИЖЕНИЕ ПРИХОД-РАСХОД</h2><div style="color:#666;font-size:12px;margin-top:4px">за период ${period}</div></div></div>
+        <div class="pr-meta"><div>${m.legalName || m.tenant || 'ТОО «KazEnergoSnab»'}</div><div style="margin-top:6px;color:#888">Сформировано в CRM</div></div>
+      </div>
+      <table class="pr-table"><thead><tr><th style="width:32px">#</th><th style="width:90px">Дата</th><th style="width:80px">Тип</th><th>Товар</th><th class="num" style="width:80px">Кол-во</th><th style="width:160px">Контрагент</th><th style="width:90px">Документ</th></tr></thead><tbody>${body}</tbody></table>
+      <div class="pr-totals">
+        <div class="total-line"><span>Итого приход:</span> <span>+${inSum}</span></div>
+        <div class="total-line"><span>Итого расход:</span> <span>−${outSum}</span></div>
+        <div class="total-line grand"><span>Сальдо (приход − расход):</span> <span>${inSum - outSum}</span></div>
+      </div>`;
+    w.document.open(); w.document.write(buildPrintDoc('Движение приход-расход', inner)); w.document.close();
+  })();
+}
+
+// Модалка выбора периода для отчёта движения
+function openMovementsReport() {
+  const fromI = el('input', { type:'date' });
+  const toI = el('input', { type:'date', value: new Date().toISOString().slice(0, 10) });
+  openModal({
+    title: 'Отчёт: движение приход-расход',
+    body: el('div', {}, [
+      el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Укажите период (пусто = без ограничения).'),
+      el('div', { class:'form-row' }, [el('label', {}, 'Период с'), fromI]),
+      el('div', { class:'form-row' }, [el('label', {}, 'по'), toI]),
+    ]),
+    foot: [
+      el('button', { class:'btn', onclick: closeModal }, 'Отмена'),
+      el('button', { class:'btn btn-primary', onclick: () => { closeModal(); printMovementsReport(fromI.value, toI.value); } }, '🖨 Сформировать'),
+    ],
+  });
+}
+
 // Экспорт сводного отчёта в PDF (по данным state)
 function exportReportPDF() {
   const deals = state.deals;
@@ -3246,6 +3334,7 @@ async function openStockDoc(type, docId, onDone) {
   }
 
   const foot = [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')];
+  if (doc) foot.push(el('button', { class:'btn', onclick: () => printStockDoc(doc.id) }, '🖨 Печать накладной'));
   if (editable) {
     if (doc) foot.push(el('button', { class:'btn btn-danger', onclick: async () => {
       if (!confirm('Удалить черновик?')) return;
@@ -3310,6 +3399,7 @@ VIEWS.warehouse = () => {
     el('div', { class: 'actions' }, [
       can('edit-stock') ? el('button', { class: 'btn btn-primary', onclick: () => openStockDoc('receipt', null, () => navigate('warehouse')) }, '📥 Приход') : null,
       can('edit-stock') ? el('button', { class: 'btn', onclick: () => openStockDoc('writeoff', null, () => navigate('warehouse')) }, '📤 Расход') : null,
+      el('button', { class: 'btn', onclick: () => openMovementsReport() }, '📊 Отчёт движения'),
       can('edit-stock') ? el('button', { class: 'btn', onclick: () => openInventoryCreate() }, '+ Инвентаризация') : null,
     ]),
   ]));
