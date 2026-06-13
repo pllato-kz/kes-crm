@@ -121,6 +121,44 @@ a:hover { text-decoration: underline; }
 }
 .sidebar-nav button.active .badge { background: rgba(0,0,0,.25); }
 
+/* ----- Группа «Сделки» с раскрывающимся списком воронок ----- */
+.nav-group { margin: 1px 0; }
+.nav-group-row { display: flex; align-items: center; gap: 2px; }
+.nav-group-main { flex: 1; }
+.sidebar-nav .nav-group-toggle {
+  width: 26px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 0; cursor: pointer;
+  color: rgba(255,255,255,.6); font-size: 11px;
+  padding: 9px 0; margin: 0;
+  border-radius: var(--radius-sm);
+  transition: transform .15s, color .15s, background .15s;
+}
+.sidebar-nav .nav-group-toggle:hover { background: rgba(255,255,255,.08); color: #fff; }
+.nav-group.open .nav-group-toggle { transform: rotate(90deg); }
+.nav-sub { display: none; flex-direction: column; margin: 2px 0 4px 14px; padding-left: 8px; border-left: 1px solid rgba(255,255,255,.12); }
+.nav-group.open .nav-sub { display: flex; }
+.pipe-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px; border-radius: var(--radius-sm); cursor: pointer;
+  color: rgba(255,255,255,.7); font-size: 12.5px;
+  transition: background .15s, color .15s;
+}
+.pipe-item:hover { background: rgba(255,255,255,.06); color: #fff; }
+.pipe-item.active { background: rgba(0,166,226,.22); color: #fff; font-weight: 600; }
+.pipe-item .pipe-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; opacity: .6; }
+.pipe-item .pipe-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipe-item .pipe-actions { display: none; gap: 4px; flex: none; }
+.pipe-item:hover .pipe-actions { display: flex; }
+.pipe-actions span { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; font-size: 12px; color: rgba(255,255,255,.6); }
+.pipe-actions span:hover { background: rgba(255,255,255,.16); color: #fff; }
+.sidebar-nav .pipe-add {
+  width: 100%; text-align: left; margin-top: 2px;
+  padding: 7px 9px; background: transparent; border: 0; cursor: pointer;
+  color: rgba(255,255,255,.55); font-size: 12.5px; border-radius: var(--radius-sm);
+}
+.sidebar-nav .pipe-add:hover { background: rgba(255,255,255,.06); color: #fff; }
+
 .sidebar-foot {
   padding: 10px 14px;
   border-top: 1px solid rgba(255,255,255,.08);
