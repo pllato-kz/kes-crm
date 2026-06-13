@@ -514,6 +514,10 @@ async function listProducts(env, url) {
   const limit = clampInt(url.searchParams.get('limit'), 50, 1, 1000);
   const page = clampInt(url.searchParams.get('page'), 1, 1, 1e9);
   const offset = (page - 1) * limit;
+  // числовой параметр диапазона (null, если не задан)
+  const numP = (k) => { const v = url.searchParams.get(k); if (v == null || v === '') return null; const n = Number(v); return isNaN(n) ? null : n; };
+  const stockMin = numP('stock_min'), stockMax = numP('stock_max');
+  const costMin = numP('cost_min'), costMax = numP('cost_max');
 
   const stockJoin =
     `LEFT JOIN (SELECT product_id, SUM(stock) AS stock, SUM(reserved) AS reserved
@@ -525,11 +529,16 @@ async function listProducts(env, url) {
   if (cat) { where.push('p.category_id = ?'); args.push(cat); }
   if (brand) { where.push('p.brand = ?'); args.push(brand); }
   if (low != null) { where.push('(COALESCE(s.stock,0) - COALESCE(s.reserved,0)) < ?'); args.push(low); }
+  if (stockMin != null) { where.push('COALESCE(s.stock,0) >= ?'); args.push(stockMin); }
+  if (stockMax != null) { where.push('COALESCE(s.stock,0) <= ?'); args.push(stockMax); }
+  if (costMin != null) { where.push('COALESCE(p.price_cost,0) >= ?'); args.push(costMin); }
+  if (costMax != null) { where.push('COALESCE(p.price_cost,0) <= ?'); args.push(costMax); }
   const ws = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const needStockJoin = low != null || stockMin != null || stockMax != null;
 
   // join в COUNT нужен только когда фильтруем по остатку
   const total = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM products p ${low != null ? stockJoin : ''} ${ws}`
+    `SELECT COUNT(*) AS n FROM products p ${needStockJoin ? stockJoin : ''} ${ws}`
   ).bind(...args).first();
 
   let order = low != null ? '(COALESCE(s.stock,0) - COALESCE(s.reserved,0)) ASC' : 'p.name';
