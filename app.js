@@ -1653,6 +1653,7 @@ function stockIndicator(free, total) {
 // ============================================================
 let DEALS_VIEW = 'kanban'; // 'kanban' | 'list'
 let DEALS_Q = '', DEALS_STAGE = '', DEALS_MGR = '', DEALS_FROM = '', DEALS_TO = '';
+let FOCUS_STAGE = null; // id этапа, чьё поле названия фокусируем после ре-рендера
 
 VIEWS.deals = () => {
   const wrap = el('div');
@@ -1768,7 +1769,8 @@ VIEWS.deals = () => {
       else if (!hDir && !vDir) stopAuto();
     });
 
-    STAGES.forEach(s => {
+    const canStages = currentUser && currentUser.roleKey === 'director';
+    STAGES.forEach((s, idx) => {
       const dealsOnStage = deals.filter(d => d.stage === s.id);
       const body = el('div', { class: 'k-col-body' });
       dealsOnStage.forEach(d => {
@@ -1790,12 +1792,37 @@ VIEWS.deals = () => {
         }
         body.appendChild(card);
       });
+      // Заголовок этапа: для директора — редактируемое название + «+» (добавить после)
+      let labelEl;
+      if (canStages) {
+        labelEl = el('input', { class:'stage-label-input', value: s.label, title:'Кликните, чтобы изменить название' });
+        const saveLabel = () => {
+          const v = labelEl.value.trim();
+          if (!v || v === s.label) { labelEl.value = s.label; return; }
+          s.label = v;
+          window.__API__.apiFetch('deal_stages/' + encodeURIComponent(s.id), { method:'PUT', body:{ label: v } }).catch(() => toast('Название не сохранено', 'error'));
+        };
+        let lt; labelEl.oninput = () => { clearTimeout(lt); lt = setTimeout(saveLabel, 600); };
+        labelEl.onblur = () => { clearTimeout(lt); saveLabel(); };
+        labelEl.onkeydown = (e) => { if (e.key === 'Enter') labelEl.blur(); };
+      } else {
+        labelEl = el('span', { class: 'stage-label' }, s.label);
+      }
+      const headKids = [el('span', { class: 'stage-dot', style: `background:${s.color}` }), labelEl, el('span', { class: 'stage-count' }, dealsOnStage.length)];
+      if (canStages) {
+        headKids.push(el('button', { class:'stage-add', title:'Добавить этап после этого', onclick: async (e) => {
+          e.stopPropagation();
+          const cur = STAGES[idx], next = STAGES[idx + 1];
+          const sort = next ? ((Number(cur.sort) || 0) + (Number(next.sort) || 0)) / 2 : (Number(cur.sort) || 0) + 1;
+          try {
+            const saved = await window.__API__.apiFetch('deal_stages', { method:'POST', body:{ label:'Новый этап', color:'#9CA3AF', sort } });
+            FOCUS_STAGE = saved.id;
+            await loadData(); navigate('deals');
+          } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+        } }, '+'));
+      }
       const col = el('div', { class: 'k-col', 'data-stage': s.id }, [
-        el('div', { class: 'k-col-head' }, [
-          el('span', { class: 'stage-dot', style: `background:${s.color}` }),
-          el('span', { class: 'stage-label' }, s.label),
-          el('span', { class: 'stage-count' }, dealsOnStage.length),
-        ]),
+        el('div', { class: 'k-col-head' }, headKids),
         body,
       ]);
       col.addEventListener('dragover', (e) => { if (!dragged) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('drag-over'); });
@@ -1813,6 +1840,10 @@ VIEWS.deals = () => {
       });
       kanban.append(col);
     });
+    if (FOCUS_STAGE) {
+      const fid = FOCUS_STAGE; FOCUS_STAGE = null;
+      setTimeout(() => { const inp = kanban.querySelector(`.k-col[data-stage="${fid}"] .stage-label-input`); if (inp) { inp.focus(); inp.select(); } }, 40);
+    }
     return kanban;
   }
 
