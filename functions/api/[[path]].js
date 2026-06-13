@@ -99,8 +99,15 @@ export async function onRequest(context) {
     // токен (если есть и валиден) -> payload, иначе null
     const auth = await authenticate(request, env);
 
-    // синхронизация с 1С — только директор
+    // синхронизация с 1С
     if (seg[0] === 'sync') {
+      // авто-запуск по расписанию: токен внешнего планировщика ИЛИ директор
+      if (seg[1] === 'run' && request.method === 'POST') {
+        const token = url.searchParams.get('token');
+        const ok = (token && env.CRON_SECRET && token === env.CRON_SECRET) || (auth && auth.role === 'director');
+        if (!ok) return err(403, 'Нет доступа к авто-синхронизации');
+        return json(await runDueSyncs(env));
+      }
       if (!auth) return err(401, 'Требуется авторизация');
       if (auth.role !== 'director') return err(403, 'Только директор может запускать синхронизацию');
       if (seg[1] === 'status' && request.method === 'GET') return syncStatus(env);
@@ -1504,6 +1511,43 @@ async function odataGet(env, path) {
 async function syncStatus(env) {
   const r = await env.DB.prepare('SELECT entity, last_at, info FROM sync_state').all();
   return json(r.results);
+}
+
+// Интервалы фоновой синхронизации (минуты), по требованиям заказчика
+const SYNC_INTERVALS = {
+  clients_1c: 20,     // контрагенты — каждые 20 мин
+  products_1c: 45,    // номенклатура — 20–60 мин
+  categories_1c: 360, // категории — редко
+  stock_1c: 15,       // остатки — 10–20 мин
+  receipts_1c: 15,    // приходы — 10–20 мин
+  prices_1c: 30,      // цены/средняя закупка — периодически 20–60 мин (и сразу после прихода)
+};
+// Запускает только «просроченные» синхронизации (по last_at в sync_state).
+async function runDueSyncs(env) {
+  const ran = [], errors = [];
+  const stRows = await env.DB.prepare('SELECT entity, last_at FROM sync_state').all();
+  const lastAt = {};
+  for (const r of stRows.results) lastAt[r.entity] = r.last_at;
+  const now = Date.now();
+  const due = (entity) => {
+    const raw = lastAt[entity];
+    const t = raw ? Date.parse(String(raw).replace(' ', 'T') + 'Z') : 0;
+    return (now - (Number.isFinite(t) ? t : 0)) >= (SYNC_INTERVALS[entity] || 60) * 60 * 1000;
+  };
+  const run = async (name, fn) => { try { await fn(); ran.push(name); } catch (e) { errors.push(name + ': ' + ((e && e.message) || e)); } };
+
+  if (due('clients_1c')) await run('clients', () => syncClients(env));
+  if (due('categories_1c')) await run('categories', () => syncCategories(env));
+  if (due('products_1c')) await run('products', () => syncProducts(env, 1000, 0));
+  if (due('stock_1c')) await run('stock', () => syncStock(env));
+  let receiptsRan = false;
+  if (due('receipts_1c')) { await run('receipts', () => syncReceipts(env)); receiptsRan = true; }
+  // цены закупа + средняя закупочная: сразу после прихода ИЛИ периодически
+  if (receiptsRan || due('prices_1c')) {
+    await run('prices_last', () => syncPrices(env, 'last'));
+    await run('prices_avg', () => syncPrices(env, 'avg'));
+  }
+  return { ran, errors, at: new Date().toISOString() };
 }
 
 // Контрагенты 1С -> клиенты CRM. Идемпотентно по ext_ref (Ref_Key) и БИН.
