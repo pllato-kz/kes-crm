@@ -1406,6 +1406,23 @@ function openEditStock(p) {
   });
 }
 
+// Автосоздание отгрузки из сделки — данные заполняются из сделки/клиента.
+async function autoCreateShipmentForDeal(d) {
+  const cl = clientById(d.client);
+  const sh = {
+    no: 'ТТН-0' + (515 + state.shipments.length),
+    deal: d.id, client: d.client,
+    date: new Date().toISOString().slice(0, 10),
+    items: d.items || (d.lineItems ? d.lineItems.length : 0) || 0,
+    weight: 0, transport: 'Газель собственная', driver: '',
+    status: 'planned', destination: d.address || (cl && cl.address) || '',
+  };
+  const saved = await window.__API__.apiFetch('shipments', { method: 'POST', body: window.__API__.toApi.shipment(sh) });
+  const mapped = window.__API__.map.shipment(saved);
+  state.shipments.unshift(mapped);
+  return mapped;
+}
+
 // Двусторонняя синхронизация: статус отгрузки → этап связанной сделки.
 // (обратное направление — этап сделки → статус отгрузки — делает бэкенд writeDeal)
 async function setShipmentStatus(s, status) {
@@ -2881,7 +2898,11 @@ async function openDealDetail(id) {
     shipList.innerHTML = '';
     if (!ships.length) {
       shipList.append(el('div', { class:'muted', style:'font-size:12px;padding:8px 0' }, 'Отгрузка по сделке не создана'));
-      shipList.append(el('button', { class:'btn btn-sm btn-primary', style:'margin-top:8px', onclick: () => { closeModal(); openNewShipment(); } }, '+ Создать отгрузку'));
+      shipList.append(el('button', { class:'btn btn-sm btn-primary', style:'margin-top:8px', onclick: async (e) => {
+        e.currentTarget.disabled = true;
+        try { await autoCreateShipmentForDeal(d); renderShip(); toast('Отгрузка создана из сделки', 'success'); }
+        catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); e.currentTarget.disabled = false; }
+      } }, '+ Создать отгрузку из сделки'));
       return;
     }
     const stMap = { delivered:['pill-success','✓ Доставлена'], planned:['pill-info','⏱ Запланирована'], shipped:['pill-warn','🚚 В пути'] };
@@ -2903,6 +2924,10 @@ async function openDealDetail(id) {
           el('span', { class:'pill ' + sp[0] }, sp[1]),
         ]),
         el('dl', { class:'kv', style:'margin:0' }, [
+          el('dt', {}, 'Сделка'), el('dd', {}, d.title || '—'),
+          el('dt', {}, 'Клиент'), el('dd', {}, (clientById(d.client) || {}).name || '—'),
+          el('dt', {}, 'Менеджер'), el('dd', {}, (userById(d.manager) || {}).name || '—'),
+          el('dt', {}, 'Сумма'), el('dd', {}, d.amount ? fmtMoney(d.amount) : '—'),
           el('dt', {}, 'Дата'), el('dd', {}, s.date ? fmtDate(s.date) : '—'),
           el('dt', {}, 'Адрес'), el('dd', {}, s.destination || '—'),
           el('dt', {}, 'Транспорт'), el('dd', {}, s.transport || '—'),
