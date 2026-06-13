@@ -4243,7 +4243,13 @@ VIEWS.reports = () => {
       new Chart(cv3.getContext('2d'), {
         type: 'bar',
         data: { labels: mgr.map(m => (m.user ? m.user.name.split(' ')[0] : '—')), datasets: [{ label: 'Факт', data: mgr.map(m => Math.round(m.sum / 1e6 * 10) / 10), backgroundColor: brand, borderRadius: 6 }] },
-        options: { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.parsed.y + ' млн ₸' } } }, scales: { y: { beginAtZero: true, title: { display: true, text: 'млн ₸' } } } },
+        options: { responsive: true,
+          onHover: (e, els) => { e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+          onClick: (e, els) => { if (!els.length) return; const m = mgr[els[0].index]; if (!m || !m.manager_id) return;
+            if (f.pipeline) setDealsPipeline(f.pipeline);
+            DEALS_MGR = m.manager_id; DEALS_STAGE = ''; DEALS_FROM = f.from; DEALS_TO = f.to; DEALS_Q = '';
+            DEALS_VIEW = 'list'; navigate('deals'); },
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.parsed.y + ' млн ₸' } } }, scales: { y: { beginAtZero: true, title: { display: true, text: 'млн ₸' } } } },
       });
     }
 
@@ -4260,7 +4266,15 @@ VIEWS.reports = () => {
       mt.append(el('tbody', {}, mgr.map(m => {
         const u = m.user || { name: '—', avatar: '?', color: '#9CA3AF' };
         const pct = totalFact > 0 ? Math.round(m.sum / totalFact * 100) : 0;
-        return el('tr', {}, [
+        const rowAttrs = m.manager_id
+          ? { style:'cursor:pointer', title:`Открыть сделки менеджера ${u.name}`, onclick: () => {
+              if (f.pipeline) setDealsPipeline(f.pipeline);     // переносим воронку, если выбрана
+              DEALS_MGR = m.manager_id; DEALS_STAGE = ''; DEALS_FROM = f.from; DEALS_TO = f.to; DEALS_Q = '';
+              DEALS_VIEW = 'list';
+              navigate('deals');
+            } }
+          : {};
+        return el('tr', rowAttrs, [
           el('td', {}, el('div', { class:'row' }, [
             el('span', { class:'avatar', style:`width:24px;height:24px;font-size:10px;background:${u.color}` }, u.avatar),
             el('span', {}, u.name),
