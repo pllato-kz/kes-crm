@@ -320,9 +320,12 @@ async function dataRoute({ request, env }, seg, url, auth) {
   if (resource === 'roles' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     if (!auth || auth.role !== 'director') return err(403, 'Менять доступы по ролям может только директор');
   }
-  // управлять этапами воронки может только директор
+  // управлять этапами воронки может только директор; paid/shipped/lost защищены
   if (resource === 'deal_stages' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     if (!auth || auth.role !== 'director') return err(403, 'Только директор может управлять этапами');
+    if (['PUT', 'PATCH', 'DELETE'].includes(method) && ['paid', 'shipped', 'lost'].includes(id)) {
+      return err(403, 'Этот этап нельзя изменять или удалять');
+    }
     if (method === 'DELETE' && id) return deleteStage(env, id);
   }
 

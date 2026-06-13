@@ -1654,6 +1654,7 @@ function stockIndicator(free, total) {
 let DEALS_VIEW = 'kanban'; // 'kanban' | 'list'
 let DEALS_Q = '', DEALS_STAGE = '', DEALS_MGR = '', DEALS_FROM = '', DEALS_TO = '';
 let FOCUS_STAGE = null; // id этапа, чьё поле названия фокусируем после ре-рендера
+const STAGE_PROTECTED = new Set(['paid', 'shipped', 'lost']); // нельзя переименовывать/удалять
 
 VIEWS.deals = () => {
   const wrap = el('div');
@@ -1792,9 +1793,11 @@ VIEWS.deals = () => {
         }
         body.appendChild(card);
       });
-      // Заголовок этапа: для директора — редактируемое название + «+» (добавить после)
+      // Заголовок этапа. paid/shipped/lost защищены: без правки, удаления и «+».
+      const protectedStage = STAGE_PROTECTED.has(s.id);
+      const canManageThis = canStages && !protectedStage;
       let labelEl;
-      if (canStages) {
+      if (canManageThis) {
         labelEl = el('input', { class:'stage-label-input', value: s.label, title:'Кликните, чтобы изменить название' });
         const saveLabel = () => {
           const v = labelEl.value.trim();
@@ -1809,16 +1812,28 @@ VIEWS.deals = () => {
         labelEl = el('span', { class: 'stage-label' }, s.label);
       }
       const headKids = [el('span', { class: 'stage-dot', style: `background:${s.color}` }), labelEl, el('span', { class: 'stage-count' }, dealsOnStage.length)];
-      if (canStages) {
+      if (canManageThis) {
+        headKids.push(el('button', { class:'stage-del', title:'Удалить этап', onclick: async (e) => {
+          e.stopPropagation();
+          if (!confirm(`Удалить этап «${s.label}»? Его сделки перейдут на другой этап.`)) return;
+          try {
+            const res = await window.__API__.apiFetch('deal_stages/' + encodeURIComponent(s.id), { method:'DELETE' });
+            if (res && res.reassignedTo) state.deals.forEach(d => { if (d.stage === s.id) d.stage = res.reassignedTo; });
+            const i = STAGES.findIndex(x => x.id === s.id); if (i >= 0) STAGES.splice(i, 1);
+            renderContent(); toast('Этап удалён', 'success');
+          } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+        } }, '×'));
         headKids.push(el('button', { class:'stage-add', title:'Добавить этап после этого', onclick: async (e) => {
           e.stopPropagation();
+          const btn = e.currentTarget; btn.disabled = true;
           const cur = STAGES[idx], next = STAGES[idx + 1];
           const sort = next ? ((Number(cur.sort) || 0) + (Number(next.sort) || 0)) / 2 : (Number(cur.sort) || 0) + 1;
           try {
             const saved = await window.__API__.apiFetch('deal_stages', { method:'POST', body:{ label:'Новый этап', color:'#9CA3AF', sort } });
+            STAGES.splice(idx + 1, 0, { id: saved.id, label: saved.label, color: saved.color, sort: saved.sort != null ? saved.sort : sort });
             FOCUS_STAGE = saved.id;
-            await loadData(); navigate('deals');
-          } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+            renderContent();
+          } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); btn.disabled = false; }
         } }, '+'));
       }
       const col = el('div', { class: 'k-col', 'data-stage': s.id }, [
