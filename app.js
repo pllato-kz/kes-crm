@@ -1820,53 +1820,64 @@ VIEWS.deals = () => {
   return wrap;
 };
 
-// Управление этапами воронки (директор): добавление / переименование / цвет / удаление
+// Управление этапами воронки (директор): «+» создаёт этап, имя сохраняется автоматически
 function openStageManager() {
-  const working = STAGES.map(s => ({ id: s.id, label: s.label, color: s.color || '#00A6E2' }));
-  const origIds = new Set(STAGES.map(s => s.id));
   const listHost = el('div');
+  const debouncers = new Map();
+  let changed = false;
 
-  function renderRows() {
-    listHost.innerHTML = '';
-    if (!working.length) listHost.append(el('div', { class:'muted', style:'font-size:12px;padding:6px 0' }, 'Нет этапов — добавьте хотя бы один.'));
-    working.forEach((s, idx) => {
-      const colorI = el('input', { type:'color', value: s.color, title:'Цвет', style:'width:38px;height:34px;padding:2px;flex:none' });
-      colorI.oninput = () => { s.color = colorI.value; };
-      const labelI = el('input', { value: s.label, placeholder:'Название этапа', style:'flex:1;min-width:120px' });
-      labelI.oninput = () => { s.label = labelI.value; };
-      const delB = el('button', { class:'btn btn-sm btn-danger', title:'Удалить этап', onclick: () => { working.splice(idx, 1); renderRows(); } }, '×');
-      listHost.append(el('div', { class:'row', style:'gap:8px;align-items:center;margin-bottom:8px' }, [colorI, labelI, delB]));
-    });
+  async function putStage(id, body) {
+    try { await window.__API__.apiFetch('deal_stages/' + encodeURIComponent(id), { method:'PUT', body }); changed = true; }
+    catch (e) { toast('Не удалось сохранить: ' + ((e && e.message) || e), 'error'); }
   }
-  renderRows();
 
-  const addBtn = el('button', { class:'btn btn-sm', style:'margin-top:4px', onclick: () => { working.push({ id:null, label:'', color:'#9CA3AF' }); renderRows(); } }, '+ Добавить этап');
-  const saveBtn = el('button', { class:'btn btn-primary', onclick: async () => {
-    if (!working.length) { toast('Должен остаться хотя бы один этап', 'warn'); return; }
-    if (working.some(s => !s.label.trim())) { toast('У всех этапов должно быть название', 'warn'); return; }
-    saveBtn.disabled = true; const o = saveBtn.textContent; saveBtn.textContent = 'Сохранение…';
+  function rowFor(stage) {
+    const colorI = el('input', { type:'color', value: stage.color || '#00A6E2', title:'Цвет', style:'width:38px;height:34px;padding:2px;flex:none' });
+    colorI.onchange = () => { stage.color = colorI.value; putStage(stage.id, { color: colorI.value }); };
+    const labelI = el('input', { value: stage.label || '', placeholder:'Название этапа', style:'flex:1;min-width:140px' });
+    const saved = el('span', { class:'muted', style:'font-size:10px;width:54px;flex:none;text-align:right' }, '');
+    const doSave = () => {
+      const v = labelI.value.trim();
+      if (!v || v === stage.label) return;
+      stage.label = v; saved.textContent = '…';
+      putStage(stage.id, { label: v }).then(() => { saved.textContent = '✓ сохр.'; setTimeout(() => { saved.textContent = ''; }, 1500); });
+    };
+    labelI.oninput = () => { clearTimeout(debouncers.get(stage.id)); debouncers.set(stage.id, setTimeout(doSave, 600)); };
+    labelI.onblur = () => { clearTimeout(debouncers.get(stage.id)); doSave(); };
+    const delB = el('button', { class:'btn btn-sm btn-danger', title:'Удалить этап', onclick: async () => {
+      if (!confirm(`Удалить этап «${stage.label}»? Его сделки перейдут на другой этап.`)) return;
+      try { await window.__API__.apiFetch('deal_stages/' + encodeURIComponent(stage.id), { method:'DELETE' }); changed = true; row.remove(); }
+      catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
+    } }, '×');
+    const row = el('div', { class:'row', style:'gap:8px;align-items:center;margin-bottom:8px' }, [colorI, labelI, saved, delB]);
+    return row;
+  }
+
+  STAGES.forEach(s => listHost.append(rowFor({ id: s.id, label: s.label, color: s.color })));
+
+  const addBtn = el('button', { class:'btn btn-sm btn-primary', title:'Добавить этап', onclick: async () => {
+    addBtn.disabled = true;
     try {
-      const keepIds = new Set(working.filter(s => s.id).map(s => s.id));
-      for (const id of origIds) if (!keepIds.has(id)) await window.__API__.apiFetch('deal_stages/' + encodeURIComponent(id), { method:'DELETE' });
-      let sort = 0;
-      for (const s of working) {
-        const body = { label: s.label.trim(), color: s.color, sort: sort++ };
-        if (s.id && origIds.has(s.id)) await window.__API__.apiFetch('deal_stages/' + encodeURIComponent(s.id), { method:'PUT', body });
-        else await window.__API__.apiFetch('deal_stages', { method:'POST', body });
-      }
-      toast('Этапы сохранены', 'success');
-      closeModal(); await loadData(); navigate('deals');
-    } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); saveBtn.disabled = false; saveBtn.textContent = o; }
-  } }, 'Сохранить');
+      const sort = 1000 + listHost.children.length;
+      const saved = await window.__API__.apiFetch('deal_stages', { method:'POST', body:{ label:'Новый этап', color:'#9CA3AF', sort } });
+      changed = true;
+      const r = rowFor({ id: saved.id, label: saved.label, color: saved.color });
+      listHost.append(r);
+      const inp = r.querySelector('input[type=text]'); if (inp) { inp.focus(); inp.select(); }
+    } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
+    addBtn.disabled = false;
+  } }, '+');
 
   openModal({
     title: 'Этапы воронки',
     body: el('div', {}, [
-      el('p', { class:'muted', style:'font-size:12px;margin:0 0 12px' }, 'Цвет, название, добавление и удаление этапов. Сделки удалённого этапа автоматически переносятся на первый этап.'),
+      el('div', { class:'row', style:'justify-content:space-between;align-items:center;margin-bottom:10px' }, [
+        el('span', { class:'muted', style:'font-size:12px' }, 'Название сохраняется автоматически'),
+        addBtn,
+      ]),
       listHost,
-      addBtn,
     ]),
-    foot: [el('button', { class:'btn', onclick: closeModal }, 'Закрыть'), saveBtn],
+    foot: [el('button', { class:'btn btn-primary', onclick: async () => { closeModal(); if (changed) { await loadData(); navigate('deals'); } } }, 'Готово')],
   });
 }
 
