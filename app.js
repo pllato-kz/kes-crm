@@ -3981,6 +3981,26 @@ VIEWS.reports = () => {
     el('div', { class:'actions' }, [el('button', { class:'btn', onclick: () => exportReportPDF() }, '📥 Экспорт PDF')]),
   ]));
 
+  // ----- Блок фильтров: менеджер + диапазон дат + этап воронки (комбинируются) -----
+  const f = { manager: '', from: '', to: '', stage: '' };
+  const mgrSel = el('select', { onchange: e => { f.manager = e.target.value; loadReports(); } },
+    [el('option', { value:'' }, 'Все менеджеры')].concat(state.users.filter(u => u.active !== false).map(u => el('option', { value: u.id }, u.name))));
+  const stageSel = el('select', { onchange: e => { f.stage = e.target.value; loadReports(); } },
+    [el('option', { value:'' }, 'Все этапы')].concat(STAGES.map(s => el('option', { value: s.id }, s.label))));
+  const fromI = el('input', { type:'date', title:'Сделка создана с', style:'padding:6px', onchange: e => { f.from = e.target.value; loadReports(); } });
+  const toI = el('input', { type:'date', title:'Сделка создана по', style:'padding:6px', onchange: e => { f.to = e.target.value; loadReports(); } });
+  const resetBtn = el('button', { class:'btn btn-sm', style:'display:none', onclick: () => {
+    f.manager = ''; f.from = ''; f.to = ''; f.stage = '';
+    mgrSel.value = ''; stageSel.value = ''; fromI.value = ''; toI.value = '';
+    loadReports();
+  } }, 'Сбросить');
+  wrap.append(el('div', { class:'table-toolbar', style:'border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px' }, [
+    mgrSel, stageSel,
+    el('span', { class:'muted', style:'font-size:12px' }, 'Период c:'), fromI,
+    el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
+    resetBtn,
+  ]));
+
   // helper: «YYYY-MM» -> «мес ГГ»
   const MON = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
   const monLabel = (m) => { const [y, mm] = String(m).split('-'); return (MON[(+mm) - 1] || m) + ' ' + String(y).slice(2); };
@@ -4045,8 +4065,18 @@ VIEWS.reports = () => {
   row.append(abc);
   wrap.append(row);
 
-  // Загрузка реальных агрегатов и отрисовка
-  window.__API__.apiFetch('reports/summary').then(rep => {
+  // Загрузка реальных агрегатов и отрисовка (перезапрашивается при смене фильтров)
+  function loadReports() {
+    const anyActive = !!(f.manager || f.from || f.to || f.stage);
+    resetBtn.style.display = anyActive ? '' : 'none';
+    const qp = new URLSearchParams();
+    if (f.manager) qp.set('manager', f.manager);
+    if (f.from) qp.set('from', f.from);
+    if (f.to) qp.set('to', f.to);
+    if (f.stage) qp.set('stages', f.stage);
+    const qs = qp.toString();
+    [host1, host2, host3, mgrHost].forEach(h => { h.innerHTML = ''; h.append(noData('Загрузка…')); });
+    window.__API__.apiFetch('reports/summary' + (qs ? '?' + qs : '')).then(rep => {
     const brand = '#00A6E2';
     const palette = ['#00A6E2','#7B61FF','#FF9F43','#28C76F','#EF4444','#06B6D4'];
     if (window.Chart) {
@@ -4129,9 +4159,11 @@ VIEWS.reports = () => {
       })));
       mgrHost.append(mt);
     }
-  }).catch(e => {
-    [host1, host2, host3, mgrHost].forEach(h => { h.innerHTML = ''; h.append(noData('Ошибка загрузки аналитики')); });
-  });
+    }).catch(e => {
+      [host1, host2, host3, mgrHost].forEach(h => { h.innerHTML = ''; h.append(noData('Ошибка загрузки аналитики')); });
+    });
+  }
+  loadReports();
 
   return wrap;
 };

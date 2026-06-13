@@ -142,7 +142,7 @@ export async function onRequest(context) {
     if (seg[0] === 'warehouse' && seg[1] === 'summary' && request.method === 'GET') return warehouseSummary(env);
 
     // агрегаты для раздела «Отчёты» (всё из данных CRM)
-    if (seg[0] === 'reports' && seg[1] === 'summary' && request.method === 'GET') return reportsSummary(env);
+    if (seg[0] === 'reports' && seg[1] === 'summary' && request.method === 'GET') return reportsSummary(env, url);
 
     // интеграция WhatsApp через Green API (сообщения по сделке/клиенту)
     if (seg[0] === 'greenapi') {
@@ -733,29 +733,65 @@ async function greenapiSend(env, request, auth) {
 
 // Агрегаты раздела «Отчёты» — считаются в SQL по данным CRM (сделки/позиции).
 // «Выигранные» сделки: этапы paid/shipped/closed.
-async function reportsSummary(env) {
+async function reportsSummary(env, url) {
   const WON = "('paid','shipped','closed')";
+  const p = (url && url.searchParams) || new URLSearchParams();
+  const manager = (p.get('manager') || '').trim();
+  const from = (p.get('from') || '').trim();
+  const to = (p.get('to') || '').trim();
+  const stages = (p.get('stages') || '').split(',').map((s) => s.trim()).filter(Boolean);
+
+  // Конструктор условий WHERE с учётом фильтров (менеджер, диапазон дат, этапы).
+  //   alias — префикс таблицы deals ('' или 'd'); mode 'won' добавляет фильтр выигранных,
+  //   если этапы не выбраны; mode 'all' — без этого ограничения.
+  const condsFor = (alias, mode) => {
+    const col = (c) => (alias ? `${alias}.${c}` : c);
+    const conds = [];
+    const args = [];
+    if (manager) { conds.push(`${col('manager_id')} = ?`); args.push(manager); }
+    if (from) { conds.push(`substr(${col('created')},1,10) >= ?`); args.push(from); }
+    if (to) { conds.push(`substr(${col('created')},1,10) <= ?`); args.push(to); }
+    if (stages.length) {
+      conds.push(`${col('stage_id')} IN (${stages.map(() => '?').join(',')})`);
+      args.push(...stages);
+    } else if (mode === 'won') {
+      conds.push(`${col('stage_id')} IN ${WON}`);
+    }
+    return { where: conds.length ? 'WHERE ' + conds.join(' AND ') : '', args };
+  };
+
+  const cStage = condsFor('', 'all');
   const byStage = await env.DB.prepare(
-    `SELECT stage_id, COUNT(*) AS count, COALESCE(SUM(amount),0) AS sum FROM deals GROUP BY stage_id`
-  ).all();
+    `SELECT stage_id, COUNT(*) AS count, COALESCE(SUM(amount),0) AS sum FROM deals ${cStage.where} GROUP BY stage_id`
+  ).bind(...cStage.args).all();
+
+  const cMgr = condsFor('', 'won');
   const byManager = await env.DB.prepare(
     `SELECT manager_id, COUNT(*) AS count, COALESCE(SUM(amount),0) AS sum
-       FROM deals WHERE stage_id IN ${WON} GROUP BY manager_id`
-  ).all();
+       FROM deals ${cMgr.where} GROUP BY manager_id`
+  ).bind(...cMgr.args).all();
+
+  const cCat = condsFor('d', 'won');
   const byCategory = await env.DB.prepare(
     `SELECT COALESCE(c.name,'Без категории') AS category, COALESCE(SUM(di.qty * di.price_used),0) AS sum
        FROM deal_items di
        JOIN deals d ON d.id = di.deal_id
        LEFT JOIN products p ON p.id = di.product_id
        LEFT JOIN product_categories c ON c.id = p.category_id
-      WHERE d.stage_id IN ${WON}
+      ${cCat.where}
       GROUP BY c.name HAVING sum > 0 ORDER BY sum DESC`
-  ).all();
+  ).bind(...cCat.args).all();
+
+  const cMon = condsFor('', 'won');
+  const monWhere = cMon.where
+    ? `${cMon.where} AND created IS NOT NULL AND created <> ''`
+    : `WHERE created IS NOT NULL AND created <> ''`;
   const byMonth = await env.DB.prepare(
     `SELECT substr(created,1,7) AS month, COALESCE(SUM(amount),0) AS sum
-       FROM deals WHERE stage_id IN ${WON} AND created IS NOT NULL AND created <> ''
+       FROM deals ${monWhere}
       GROUP BY month ORDER BY month DESC LIMIT 6`
-  ).all();
+  ).bind(...cMon.args).all();
+
   return json({
     byStage: byStage.results,
     byManager: byManager.results,
