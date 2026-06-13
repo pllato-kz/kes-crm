@@ -1288,22 +1288,56 @@ function openNewShipment() {
 
 // ---------- New Invoice (document) ----------
 function openNewInvoice() {
-  const deal = fSelect('По сделке',
-    state.deals.map(d => ({ value: d.id, label: d.title + ' · ' + clientById(d.client).name })),
-    state.deals[0]?.id);
-  const amount = fInput('Сумма, ₸', '', { type: 'number' });
+  // Поле «Сделка»: поиск + список (как в окне отгрузки)
+  let selectedDealId = null;
+  const dealSearch = el('input', { placeholder:'Поиск сделки по названию/клиенту…', style:'width:100%;padding:8px 10px;border:1px solid #E5E7EB;border-radius:6px;font-size:13px;outline:none' });
+  const dealListEl = el('div', { class:'product-picker' });
+  const selectedLabel = el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, 'Сделка не выбрана');
+  const dealRow = el('div', { class:'form-row' }, [el('label', {}, 'По сделке'), el('div', {}, [dealSearch, dealListEl, selectedLabel])]);
+
+  const amountInput = el('input', { type:'number', placeholder:'Сумма, ₸' });
+  const amountRow = el('div', { class:'form-row' }, [el('label', {}, 'Сумма, ₸'), amountInput]);
   const due = fInput('Срок оплаты', '', { type: 'date' });
+
+  function selectDeal(d) {
+    selectedDealId = d.id;
+    const cl = clientById(d.client);
+    selectedLabel.textContent = '✓ Выбрана: ' + (d.title || '—') + (cl && cl.name ? ' · ' + cl.name : '');
+    selectedLabel.style.cssText = 'font-size:12px;margin-top:6px;color:#10B981;font-weight:600';
+    if (!amountInput.value && d.amount) amountInput.value = Math.round(d.amount); // подставляем сумму сделки
+    fillDeals(dealSearch.value);
+  }
+  function fillDeals(q = '') {
+    const ql = String(q || '').trim().toLowerCase();
+    dealListEl.innerHTML = '';
+    const rows = state.deals.filter(d => {
+      const cl = clientById(d.client);
+      return !ql || String(d.title || '').toLowerCase().includes(ql) || String(cl && cl.name || '').toLowerCase().includes(ql);
+    }).slice(0, 50);
+    if (!rows.length) { dealListEl.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Сделки не найдены')); return; }
+    rows.forEach(d => {
+      const cl = clientById(d.client); const active = d.id === selectedDealId;
+      dealListEl.append(el('div', { class:'pp-item', style: active ? 'background:var(--brand-soft)' : '', onclick: () => selectDeal(d) }, [
+        el('div', {}, [el('div', {}, d.title || '—'), el('div', { class:'pp-sku' }, cl ? cl.name : '—')]),
+        el('span', { class:'pp-price' }, fmtMoneyK(d.amount || 0)),
+      ]));
+    });
+  }
+  let dt; dealSearch.oninput = (e) => { const v = e.target.value; clearTimeout(dt); dt = setTimeout(() => fillDeals(v), 200); };
+  fillDeals();
+
   openModal({
     title: 'Новый счёт',
-    body: el('div', {}, [deal.row, amount.row, due.row]),
+    body: el('div', {}, [dealRow, amountRow, due.row]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
       el('button', { class: 'btn btn-primary', onclick: async () => {
-        const d = byId(state.deals, deal.get());
+        if (!selectedDealId) { toast('Выберите сделку из списка', 'warn'); dealSearch.focus(); return; }
+        const d = byId(state.deals, selectedDealId);
         const iv = {
           no: 'СФ-2026-0' + (240 + state.invoices.length),
-          deal: deal.get(), client: d && d.client, date: new Date().toISOString().slice(0,10),
-          amount: +amount.get() || 0, status: 'pending', due: due.get(),
+          deal: selectedDealId, client: d && d.client, date: new Date().toISOString().slice(0,10),
+          amount: +amountInput.value || 0, status: 'pending', due: due.get(),
         };
         try {
           const saved = await window.__API__.apiFetch('invoices', { method: 'POST', body: window.__API__.toApi.invoice(iv) });
