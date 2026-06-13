@@ -3983,11 +3983,28 @@ VIEWS.reports = () => {
   ]));
 
   // ----- Кнопка «Фильтр» (слева) + боковая панель фильтров -----
-  const f = { manager: '', from: '', to: '', stage: '', minSum: '', maxSum: '' };
+  const f = { manager: '', from: '', to: '', stage: '', minSum: '', maxSum: '', pipeline: '' };
   const mgrSel = el('select', { onchange: e => { f.manager = e.target.value; loadReports(); } },
     [el('option', { value:'' }, 'Все менеджеры')].concat(state.users.filter(u => u.active !== false).map(u => el('option', { value: u.id }, u.name))));
-  const stageSel = el('select', { onchange: e => { f.stage = e.target.value; loadReports(); } },
-    [el('option', { value:'' }, 'Все этапы')].concat(STAGES.map(s => el('option', { value: s.id }, s.label))));
+  // Воронка: при выборе список этапов зависит от неё
+  const pipeSel = el('select', { onchange: e => { f.pipeline = e.target.value; f.stage = ''; rebuildStages(); loadReports(); } },
+    [el('option', { value:'' }, 'Все воронки')].concat(PIPELINES.map(pp => el('option', { value: pp.id }, pp.name))));
+  const stageSel = el('select', { onchange: e => { f.stage = e.target.value; loadReports(); } });
+  // Этапы из актуальных воронок (синхронно со «Сделками»): по выбранной воронке — её этапы;
+  // без воронки — уникальные названия (без дублей), значение = все id этапов с этим названием.
+  function stageOptions() {
+    if (f.pipeline) return pipelineStages(f.pipeline).map(s => ({ value: s.id, label: s.label }));
+    const byLabel = new Map();
+    STAGES.forEach(s => { const a = byLabel.get(s.label) || []; a.push(s.id); byLabel.set(s.label, a); });
+    return [...byLabel.entries()].map(([label, ids]) => ({ value: ids.join(','), label }));
+  }
+  function rebuildStages() {
+    stageSel.innerHTML = '';
+    stageSel.append(el('option', { value:'' }, 'Все этапы'));
+    stageOptions().forEach(o => stageSel.append(el('option', { value: o.value }, o.label)));
+    stageSel.value = f.stage;
+  }
+  rebuildStages();
   const fromI = el('input', { type:'date', onchange: e => { f.from = e.target.value; loadReports(); } });
   const toI = el('input', { type:'date', onchange: e => { f.to = e.target.value; loadReports(); } });
   const minI = el('input', { type:'number', placeholder:'от', onchange: e => { f.minSum = e.target.value; loadReports(); } });
@@ -4004,6 +4021,7 @@ VIEWS.reports = () => {
     el('div', { class:'fd-body' }, [
       el('div', { class:'filter-group' }, [el('label', {}, 'Период (создание сделки)'), el('div', { class:'row2' }, [fromI, toI])]),
       el('div', { class:'filter-group' }, [el('label', {}, 'Менеджер'), mgrSel]),
+      el('div', { class:'filter-group' }, [el('label', {}, 'Воронка'), pipeSel]),
       el('div', { class:'filter-group' }, [el('label', {}, 'Этап воронки'), stageSel]),
       el('div', { class:'filter-group' }, [el('label', {}, 'Сумма сделки, ₸'), el('div', { class:'row2' }, [minI, maxI])]),
     ]),
@@ -4015,8 +4033,9 @@ VIEWS.reports = () => {
   function openDrawer() { backdrop.classList.add('open'); drawer.classList.add('open'); }
   function closeDrawer() { backdrop.classList.remove('open'); drawer.classList.remove('open'); }
   function resetFilters() {
-    f.manager = ''; f.from = ''; f.to = ''; f.stage = ''; f.minSum = ''; f.maxSum = '';
-    mgrSel.value = ''; stageSel.value = ''; fromI.value = ''; toI.value = ''; minI.value = ''; maxI.value = '';
+    f.manager = ''; f.from = ''; f.to = ''; f.stage = ''; f.minSum = ''; f.maxSum = ''; f.pipeline = '';
+    mgrSel.value = ''; pipeSel.value = ''; fromI.value = ''; toI.value = ''; minI.value = ''; maxI.value = '';
+    rebuildStages();
     loadReports();
   }
   wrap.append(el('div', { style:'margin-bottom:16px' }, [filterBtn]));
@@ -4088,13 +4107,14 @@ VIEWS.reports = () => {
 
   // Загрузка реальных агрегатов и отрисовка (перезапрашивается при смене фильтров)
   function loadReports() {
-    const activeCount = [f.manager, f.from, f.to, f.stage, f.minSum, f.maxSum].filter(v => v !== '' && v != null).length;
+    const activeCount = [f.manager, f.from, f.to, f.stage, f.minSum, f.maxSum, f.pipeline].filter(v => v !== '' && v != null).length;
     filterBadge.style.display = activeCount ? '' : 'none';
     filterBadge.textContent = String(activeCount);
     const qp = new URLSearchParams();
     if (f.manager) qp.set('manager', f.manager);
     if (f.from) qp.set('from', f.from);
     if (f.to) qp.set('to', f.to);
+    if (f.pipeline) qp.set('pipeline', f.pipeline);
     if (f.stage) qp.set('stages', f.stage);
     if (f.minSum !== '') qp.set('minSum', f.minSum);
     if (f.maxSum !== '') qp.set('maxSum', f.maxSum);

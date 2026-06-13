@@ -741,10 +741,11 @@ async function reportsSummary(env, url) {
   const stages = (p.get('stages') || '').split(',').map((s) => s.trim()).filter(Boolean);
   const minSum = (p.get('minSum') || '').trim();
   const maxSum = (p.get('maxSum') || '').trim();
+  const pipeline = (p.get('pipeline') || '').trim();
 
-  // Конструктор условий WHERE с учётом фильтров (менеджер, диапазон дат, этапы, сумма).
+  // Конструктор условий WHERE с учётом фильтров (менеджер, диапазон дат, этапы, сумма, воронка).
   //   alias — префикс таблицы deals ('' или 'd'). Без выбранных этапов берём ВСЕ сделки
-  //   (реальные данные CRM); этап-фильтр сужает выборку до выбранных этапов.
+  //   (реальные данные CRM); этап/воронка сужают выборку.
   const condsFor = (alias) => {
     const col = (c) => (alias ? `${alias}.${c}` : c);
     const conds = [];
@@ -754,6 +755,7 @@ async function reportsSummary(env, url) {
     if (to) { conds.push(`substr(${col('created')},1,10) <= ?`); args.push(to); }
     if (minSum !== '') { conds.push(`${col('amount')} >= ?`); args.push(Number(minSum) || 0); }
     if (maxSum !== '') { conds.push(`${col('amount')} <= ?`); args.push(Number(maxSum) || 0); }
+    if (pipeline) { conds.push(`${col('stage_id')} IN (SELECT id FROM deal_stages WHERE pipeline_id = ?)`); args.push(pipeline); }
     if (stages.length) {
       conds.push(`${col('stage_id')} IN (${stages.map(() => '?').join(',')})`);
       args.push(...stages);
