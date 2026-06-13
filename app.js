@@ -3029,13 +3029,13 @@ VIEWS.clients = () => {
   };
 
   const tw = el('div', { class: 'table-wrap' });
-  // Поиск виден всегда, остальные фильтры — за кнопкой «Фильтры»
-  tw.append(el('div', { class: 'table-toolbar' }, [ searchI, el('div', { style:'margin-left:auto' }, drawer.btn) ]));
-  // Импорт/Экспорт
-  tw.append(el('div', { style:'display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--border);background:#FAFBFC' }, [
+  // Поиск виден всегда; справа в одном ряду — «Фильтры», Импорт и Экспорт
+  tw.append(el('div', { class: 'table-toolbar' }, [
+    searchI,
     el('div', { style:'display:flex;gap:8px;margin-left:auto' }, [
-      el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
-      el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
+      drawer.btn,
+      el('button', { class: 'btn', onclick: () => openImport('clients') }, '📥 Импорт'),
+      el('button', { class: 'btn', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
     ]),
   ]));
   tw.append(bulkBar);
