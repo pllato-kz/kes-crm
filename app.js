@@ -2666,15 +2666,37 @@ async function openDealDetail(id) {
   } else histList.append(el('div', { class:'muted', style:'font-size:12px' }, 'История пуста'));
   const paneHist = el('div', { class:'chat-pane', 'data-pane':'history' }, [histList]);
 
+  // ----- Документы: счета клиента (синхронно с разделом «Документы») -----
+  const docsList = el('div', { style:'padding:0 14px 14px;overflow-y:auto' });
+  (function renderDocs() {
+    const invs = state.invoices.filter(iv => iv.client === d.client || iv.deal === d.id);
+    docsList.innerHTML = '';
+    if (!invs.length) { docsList.append(el('div', { class:'muted', style:'font-size:12px;padding:8px 0' }, 'Счетов по клиенту нет')); return; }
+    const stMap = { paid:['pill-success','Оплачено'], pending:['pill-warn','Ожидает'], overdue:['pill-danger','Просрочка'] };
+    const t = el('table', { class:'data' });
+    t.append(el('thead', {}, el('tr', {}, [el('th', {}, '№ счёта'), el('th', {}, 'Дата'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Статус')])));
+    t.append(el('tbody', {}, invs.map(iv => {
+      const sp = stMap[iv.status] || ['pill-muted', iv.status || '—'];
+      return el('tr', { style:'cursor:pointer', onclick: () => { closeModal(); openInvoiceDetail(iv.id); } }, [
+        el('td', { class:'strong' }, iv.no),
+        el('td', { class:'muted' }, iv.date ? fmtDate(iv.date) : '—'),
+        el('td', { class:'num strong' }, fmtMoneyK(iv.amount)),
+        el('td', {}, el('span', { class:'pill ' + sp[0] }, sp[1])),
+      ]);
+    })));
+    docsList.append(t);
+  })();
+  const paneDocs = el('div', { class:'chat-pane', 'data-pane':'docs' }, [el('div', { class:'section-title', style:'padding:12px 14px 6px' }, 'Счета клиента'), docsList]);
+
   const tabs = el('div', { class:'chat-tabs' });
   function switchTab(key) {
     tabs.querySelectorAll('.chat-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === key));
-    [paneItems, paneWhats, paneComments, paneHist].forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
+    [paneItems, paneWhats, paneComments, paneDocs, paneHist].forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
   }
-  [['items','Товары'],['whatsapp','WhatsApp'],['comments','Комментарии'],['history','История']].forEach(([k, label]) =>
+  [['items','Товары'],['whatsapp','WhatsApp'],['comments','Комментарии'],['docs','Документы'],['history','История']].forEach(([k, label]) =>
     tabs.append(el('div', { class:'chat-tab' + (k === 'whatsapp' ? ' active' : ''), 'data-tab':k, onclick: () => switchTab(k) }, label)));
 
-  const right = el('div', { class:'deal-right' }, [tabs, paneItems, paneWhats, paneComments, paneHist]);
+  const right = el('div', { class:'deal-right' }, [tabs, paneItems, paneWhats, paneComments, paneDocs, paneHist]);
 
   // ----- Чат (Green API) -----
   function bubble(mm) {
