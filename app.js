@@ -1121,7 +1121,7 @@ function openNewSupplier() {
 // ---------- New Shipment ----------
 function openNewShipment() {
   const deal = fSelect('Сделка',
-    state.deals.filter(d => ['paid','agreed','invoice'].includes(d.stage)).map(d => ({ value: d.id, label: '№' + d.no + ' · ' + d.title })),
+    state.deals.filter(d => ['paid','agreed','invoice'].includes(d.stage)).map(d => ({ value: d.id, label: d.title })),
     null);
   const date = fInput('Дата', new Date().toISOString().slice(0,10), { type: 'date' });
   const transport = fSelect('Транспорт',
@@ -1155,7 +1155,7 @@ function openNewShipment() {
 // ---------- New Invoice (document) ----------
 function openNewInvoice() {
   const deal = fSelect('По сделке',
-    state.deals.map(d => ({ value: d.id, label: '№' + d.no + ' · ' + clientById(d.client).name })),
+    state.deals.map(d => ({ value: d.id, label: d.title + ' · ' + clientById(d.client).name })),
     state.deals[0]?.id);
   const amount = fInput('Сумма, ₸', '', { type: 'number' });
   const due = fInput('Срок оплаты', '', { type: 'date' });
@@ -1281,7 +1281,7 @@ function openShipmentDetail(id) {
     title: 'Отгрузка ' + s.no,
     body: el('div', {}, [
       el('dl', { class:'kv' }, [
-        el('dt', {}, 'Сделка'),    el('dd', {}, d ? `№${d.no} · ${d.title}` : '—'),
+        el('dt', {}, 'Сделка'),    el('dd', {}, d ? d.title : '—'),
         el('dt', {}, 'Клиент'),     el('dd', {}, cl.name),
         el('dt', {}, 'Адрес'),      el('dd', {}, s.destination),
         el('dt', {}, 'Дата'),       el('dd', {}, fmtDate(s.date)),
@@ -1309,7 +1309,7 @@ function openInvoiceDetail(id) {
     body: el('div', {}, [
       el('dl', { class:'kv' }, [
         el('dt', {}, 'Клиент'),  el('dd', { class:'strong' }, cl.name + ' · БИН ' + cl.bin),
-        el('dt', {}, 'Сделка'),  el('dd', {}, d ? `№${d.no} · ${d.title}` : '—'),
+        el('dt', {}, 'Сделка'),  el('dd', {}, d ? d.title : '—'),
         el('dt', {}, 'Дата'),    el('dd', {}, fmtDate(iv.date)),
         el('dt', {}, 'Сумма'),    el('dd', { class:'strong', style:'font-size:18px' }, fmtMoney(iv.amount)),
         el('dt', {}, 'Срок'),    el('dd', {}, fmtDate(iv.due)),
@@ -1455,7 +1455,7 @@ function printInvoice(deal) {
           </div>
         </div>
         <div class="pr-meta">
-          <div>По сделке № <b>${deal.no}</b></div>
+          <div>По сделке: <b>${deal.title}</b></div>
           <div>Срок оплаты: 5 раб. дней</div>
           <div style="margin-top:6px;color:#888">Образец — не имеет юридической силы</div>
         </div>
@@ -1567,7 +1567,7 @@ function printShipment(sh) {
     const inner = `
       <div class="pr-head">
         <div class="pr-logo">${PRINT_LOGO}<div><h2>ТОВАРНО-ТРАНСПОРТНАЯ НАКЛАДНАЯ ${sh.no}</h2><div style="color:#666;font-size:12px;margin-top:4px">от ${dateStr}</div></div></div>
-        <div class="pr-meta">${deal ? `<div>По сделке № <b>${deal.no}</b></div>` : ''}<div style="margin-top:6px;color:#888">Образец — не имеет юридической силы</div></div>
+        <div class="pr-meta">${deal ? `<div>По сделке: <b>${deal.title}</b></div>` : ''}<div style="margin-top:6px;color:#888">Образец — не имеет юридической силы</div></div>
       </div>
       <div class="pr-parties">
         <div><div class="party-title">Грузоотправитель</div><div class="party-name">ТОО «KazEnergoSnab»</div><div class="party-line">г. Караганда, ул. Бытовая, 13/1</div><div class="party-line">Тел: +7 (7212) 98-04-41</div></div>
@@ -1753,7 +1753,7 @@ function runSearch(q) {
     body.append(el('div', { style:'font-weight:600;font-size:12px;color:#6B7280;margin:12px 0 4px;text-transform:uppercase;letter-spacing:.5px' }, `Сделки (${hits.deals.length})`));
     hits.deals.forEach(d => body.append(el('div', { class:'dropdown-item', style:'border-radius:6px;border:0', onclick: () => { closeModal(); openDealDetail(d.id); } }, [
       el('span', { class:'di-icon' }, '💼'),
-      el('div', { class:'di-body' }, [el('div', { class:'strong' }, d.title), el('div', { class:'di-time' }, '№' + d.no + ' · ' + fmtMoneyK(d.amount))]),
+      el('div', { class:'di-body' }, [el('div', { class:'strong' }, d.title), el('div', { class:'di-time' }, clientById(d.client).name + ' · ' + fmtMoneyK(d.amount))]),
     ])));
   }
   if (hits.products.length) {
@@ -1894,7 +1894,7 @@ VIEWS.dashboard = () => {
     return el('tr', { onclick: () => openDealDetail(d.id) }, [
       el('td', {}, [
         el('div', { class: 'strong' }, d.title),
-        el('div', { class: 'muted' }, '№' + d.no + ' · ' + clientById(d.client).name),
+        el('div', { class: 'muted' }, clientById(d.client).name),
       ]),
       el('td', { class: 'num' }, el('span', { class: 'pill', style: `background:${s.color}22;color:${s.color}` }, s.label)),
       el('td', { class: 'num strong' }, fmtMoneyK(d.amount)),
@@ -1953,7 +1953,7 @@ VIEWS.deals = () => {
   ]));
 
   // Тулбар: поиск + этап + менеджер + диапазон дат создания
-  const searchI = el('input', { placeholder:'Поиск по №, названию, клиенту…', value: DEALS_Q, style:'flex:1;min-width:160px' });
+  const searchI = el('input', { placeholder:'Поиск по названию, клиенту…', value: DEALS_Q, style:'flex:1;min-width:160px' });
   const stageSel = el('select', {}, [el('option', { value:'' }, 'Все этапы'), ...activeStages().map(s => el('option', { value:s.id }, s.label))]);
   stageSel.value = DEALS_STAGE;
   const toolbarKids = [searchI, stageSel];
@@ -2026,7 +2026,7 @@ VIEWS.deals = () => {
     const t = el('table', { class:'data' });
     t.append(el('thead', {}, el('tr', {}, [
       el('th', { style:'width:34px;text-align:center' }, selAll),
-      el('th', {}, '№'), el('th', {}, 'Сделка'), el('th', {}, 'Клиент'), el('th', {}, 'Менеджер'),
+      el('th', {}, 'Сделка'), el('th', {}, 'Клиент'), el('th', {}, 'Менеджер'),
       el('th', {}, 'Этап'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Создана'), el('th', {}, 'Срок'),
     ])));
     t.append(el('tbody', {}, deals.length ? deals.map((d, i) => {
@@ -2035,7 +2035,6 @@ VIEWS.deals = () => {
       rowChecks[i] = cb;
       return el('tr', { style:'cursor:pointer', onclick: () => openDealDetail(d.id) }, [
         el('td', { style:'text-align:center', onclick: (e) => e.stopPropagation() }, cb),
-        el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, '№' + d.no),
         el('td', { class:'strong' }, d.title),
         el('td', {}, cl ? cl.name : '—'),
         el('td', {}, el('span', { class:'avatar', style:`background:${m.color};width:26px;height:26px;font-size:11px`, title:m.name }, m.avatar)),
@@ -2044,7 +2043,7 @@ VIEWS.deals = () => {
         el('td', { class:'muted' }, d.created ? fmtDate(d.created) : '—'),
         el('td', { class:'muted' }, d.target ? fmtDate(d.target) : '—'),
       ]);
-    }) : [el('tr', {}, el('td', { colspan:9, class:'muted', style:'text-align:center;padding:24px' }, 'Сделок не найдено'))]));
+    }) : [el('tr', {}, el('td', { colspan:8, class:'muted', style:'text-align:center;padding:24px' }, 'Сделок не найдено'))]));
     tw.append(bulkBar, t);
     refreshBulk();
     return tw;
@@ -2456,7 +2455,7 @@ async function openDealDetail(id) {
   const fieldRow = (label, input) => el('div', { class:'form-row' }, [el('label', {}, label), input]);
   const printBtn = el('button', { class:'btn btn-sm', onclick: () => printInvoice(d) }, '🖨 Печать СФ');
   const delBtn = (currentUser && currentUser.roleKey === 'director') ? el('button', { class:'btn btn-sm btn-danger', onclick: async () => {
-    if (!confirm(`Удалить сделку «${d.title}» (№${d.no})? Действие необратимо.`)) return;
+    if (!confirm(`Удалить сделку «${d.title}»? Действие необратимо.`)) return;
     try {
       await window.__API__.apiFetch('deals/' + d.id, { method:'DELETE' });
       const i = state.deals.findIndex(x => x.id === d.id); if (i >= 0) state.deals.splice(i, 1);
@@ -2538,7 +2537,7 @@ async function openDealDetail(id) {
       el('div', { class:'msg in' }, [
         el('div', { class:'msg-file' }, [
           el('span', { class:'fi' }, '📄'),
-          el('div', {}, [el('div', { class:'fn' }, 'Счёт №' + d.no + '.pdf'), el('div', { class:'fd' }, 'PDF · 142 КБ · коммерческое предложение')]),
+          el('div', {}, [el('div', { class:'fn' }, 'Счёт.pdf'), el('div', { class:'fd' }, 'PDF · 142 КБ · коммерческое предложение')]),
         ]),
         el('div', { class:'time' }, '09:14'),
       ]),
@@ -2573,7 +2572,7 @@ async function openDealDetail(id) {
 
   openModal({
     wide: true,
-    title: 'Сделка №' + d.no + ' · ' + d.title,
+    title: d.title,
     body: el('div', { class:'deal-modal' }, [funnel, el('div', { class:'deal-split' }, [left, right])]),
     foot: [
       el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
@@ -2602,7 +2601,7 @@ function openWhatsApp(deal) {
   const phone = (cl && cl.phone) || '';
   const status = el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Проверка Green API…');
   const ta = el('textarea', { rows:4, style:'width:100%' });
-  ta.value = `Здравствуйте${cl && cl.contact ? ', ' + cl.contact : ''}! Пишем по сделке №${deal.no} «${deal.title}».`;
+  ta.value = `Здравствуйте${cl && cl.contact ? ', ' + cl.contact : ''}! Пишем по сделке «${deal.title}».`;
   const histHost = el('div', { style:'margin-top:12px' }, el('div', { class:'muted', style:'font-size:12px' }, 'История сообщений…'));
 
   function loadHistory() {
@@ -2807,7 +2806,6 @@ async function openClientDetail(id) {
       ? dealsOf.map(d => {
           const s = stageById(d.stage);
           return el('tr', { onclick: () => { closeModal(); openDealDetail(d.id); } }, [
-            el('td', {}, '№' + d.no),
             el('td', {}, d.title),
             el('td', {}, el('span', { class:'pill', style:`background:${s.color}22;color:${s.color}` }, s.label)),
             el('td', { class:'num strong' }, fmtMoneyK(d.amount)),
@@ -3465,7 +3463,7 @@ VIEWS.invoices = () => {
         el('td', { class:'strong' }, iv.no),
         el('td', {}, fmtDate(iv.date)),
         el('td', {}, cl.name),
-        el('td', { class:'muted' }, dl ? '№' + dl.no : '—'),
+        el('td', { class:'muted' }, dl ? dl.title : '—'),
         el('td', { class:'num strong' }, fmtMoneyK(iv.amount)),
         el('td', {}, fmtDate(iv.due)),
         el('td', {}, stMap[iv.status] || '—'),
@@ -3714,7 +3712,7 @@ function openTaskDetail(id) {
 
   const linkedDeal = t.deal ? byId(state.deals, t.deal) : null;
   const meta = el('div', { class:'muted', style:'font-size:12px;margin-top:8px' },
-    linkedDeal ? `Связана со сделкой: №${linkedDeal.no} — ${linkedDeal.title}` : 'Не связана со сделкой');
+    linkedDeal ? `Связана со сделкой: ${linkedDeal.title}` : 'Не связана со сделкой');
 
   const fields = [title, desc, owner, prio, due, time];
   if (!canEdit) fields.forEach(f => f.row.querySelectorAll('input,select,textarea').forEach(i => i.disabled = true));
