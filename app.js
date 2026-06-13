@@ -4407,7 +4407,7 @@ VIEWS.invoices = () => {
   function computeDocs() {
     const paid = visibleDeals().filter(d => isPaidStage(d.stage) && !state.invoices.some(iv => iv.deal === d.id));
     return [
-      ...state.invoices.map(iv => ({ invId: iv.id, no: iv.no, date: iv.date, client: iv.client, deal: iv.deal, amount: iv.amount, due: iv.due, status: iv.status, onopen: () => openInvoiceDetail(iv.id) })),
+      ...state.invoices.map(iv => ({ invId: iv.id, no: iv.no, date: iv.date, client: iv.client, deal: iv.deal, amount: iv.amount, due: iv.due, status: iv.status, onopen: () => { const dl = byId(state.deals, iv.deal); if (dl) openDealDetail(dl.id); else openInvoiceDetail(iv.id); } })),
       ...paid.map(d => ({ invId: null, no: 'по сделке', date: d.created, client: d.client, deal: d.id, amount: d.amount, due: '', status: 'paid', onopen: () => openDealDetail(d.id) })),
     ];
   }
