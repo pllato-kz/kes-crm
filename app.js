@@ -4921,80 +4921,13 @@ VIEWS.settings = () => {
   card.append(tab);
   wrap.append(card);
 
-  // Синхронизация с 1С (только директор)
+  // Статус синхронизации с 1С (выполняется автоматически в фоне)
   if (can('edit-users')) {
     const syncCard = el('div', { class:'card mt-16' });
     syncCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Синхронизация с 1С')));
-    const statusHost = el('div', { class:'muted', style:'font-size:12px;margin-bottom:12px' }, 'Статус: загрузка…');
-    const syncBtn = (label, path, confirmMsg) => el('button', { class:'btn btn-primary', onclick: async (e) => {
-      const b = e.currentTarget;
-      if (!confirm(confirmMsg)) return;
-      b.disabled = true; const old = b.textContent; b.textContent = 'Синхронизация…';
-      toast('Синхронизация с 1С…', 'info');
-      try {
-        const r = await window.__API__.apiFetch(path, { method: 'POST' });
-        toast(`1С: получено ${r.fetched}, новых ${r.created}, обновлено ${r.updated}`, 'success');
-        await loadData(); navigate('settings');
-      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
-    } }, label);
-    const productsFullBtn = el('button', { class:'btn btn-primary', onclick: async (e) => {
-      const b = e.currentTarget;
-      if (!confirm('Полный импорт всех товаров (без услуг) из 1С? Может занять несколько минут.')) return;
-      b.disabled = true; const old = b.textContent;
-      let skip = 0, created = 0, updated = 0, fetched = 0, page = 0;
-      try {
-        b.textContent = 'Категории…';
-        await window.__API__.apiFetch('sync/1c/categories', { method: 'POST' });
-        while (true) {
-          page++;
-          b.textContent = `Импорт… ${fetched}`;
-          const r = await window.__API__.apiFetch(`sync/1c/products?limit=1000&skip=${skip}`, { method: 'POST' });
-          created += r.created; updated += r.updated; fetched += r.fetched; skip = r.next;
-          if (r.done || r.fetched === 0 || page > 80) break;
-        }
-        toast(`Номенклатура: получено ${fetched}, новых ${created}, обновлено ${updated}`, 'success');
-        await loadData(); navigate('settings');
-      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
-    } }, '🔄 Номенклатура → Товары (всё)');
-    const stockBtn = el('button', { class:'btn btn-primary', onclick: async (e) => {
-      const b = e.currentTarget;
-      if (!confirm('Загрузить остатки из 1С на склад?')) return;
-      b.disabled = true; const old = b.textContent; b.textContent = 'Остатки…';
-      try {
-        const r = await window.__API__.apiFetch('sync/1c/stock', { method: 'POST' });
-        toast(`Остатки: обновлено ${r.updated}${r.missing ? ', без сопоставления ' + r.missing : ''}`, 'success');
-        await loadData(); navigate('settings');
-      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
-    } }, '🔄 Остатки → Склад');
-    const pricesBtn = (mode, label) => el('button', { class:'btn btn-primary', onclick: async (e) => {
-      const b = e.currentTarget;
-      const m = mode === 'avg' ? 'средней цены' : 'последней цены';
-      if (!confirm(`Пересчитать закупочную цену по ${m} из приходов 1С? Может занять до минуты.`)) return;
-      b.disabled = true; const old = b.textContent; b.textContent = 'Цены…';
-      try {
-        const r = await window.__API__.apiFetch(`sync/1c/prices?mode=${mode}`, { method: 'POST' });
-        toast(`Цены: обновлено ${r.updated} из ${r.priced}${r.missing ? ', без сопоставления ' + r.missing : ''}`, 'success');
-        await loadData(); navigate('settings');
-      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
-    } }, label);
-    const receiptsBtn = el('button', { class:'btn btn-primary', onclick: async (e) => {
-      const b = e.currentTarget;
-      if (!confirm('Загрузить последние приходы из 1С? Импортируются свежие документы поступления.')) return;
-      b.disabled = true; const old = b.textContent; b.textContent = 'Приходы…';
-      try {
-        const r = await window.__API__.apiFetch('sync/1c/receipts', { method: 'POST' });
-        toast(`Приходы: импортировано ${r.imported}`, 'success');
-        await loadData(); navigate('settings');
-      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; b.textContent = old; }
-    } }, '🔄 Приходы → Склад');
-    syncCard.append(statusHost, el('div', { class:'row', style:'flex-wrap:wrap;gap:8px' }, [
-      syncBtn('🔄 Контрагенты → Клиенты', 'sync/1c/clients', 'Загрузить контрагентов из 1С в «Клиенты»? Может занять до минуты.'),
-      productsFullBtn,
-      stockBtn,
-      pricesBtn('last', '🔄 Цены из приходов → Закуп'),
-      pricesBtn('avg', '🔄 Закуп (средняя)'),
-      receiptsBtn,
-    ]));
+    syncCard.append(el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Данные подтягиваются из 1С автоматически в фоне: контрагенты ~20 мин, остатки/приходы ~10–20 мин, номенклатура и цены ~20–60 мин. Ручной запуск не требуется.'));
+    const statusHost = el('div', { class:'muted', style:'font-size:12px' }, 'Статус: загрузка…');
+    syncCard.append(statusHost);
     wrap.append(syncCard);
     window.__API__.apiFetch('sync/status').then(rows => {
       rows = rows || [];
