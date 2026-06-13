@@ -141,6 +141,14 @@ export async function onRequest(context) {
     // сводка по складу (для карточек: SKU, единиц, резерв, стоимость)
     if (seg[0] === 'warehouse' && seg[1] === 'summary' && request.method === 'GET') return warehouseSummary(env);
 
+    // движения склада: приход/расход (корректируют остаток product_stock)
+    if (seg[0] === 'stock-movements') {
+      await ensureMovementsSchema(env);
+      if (request.method === 'GET') return listMovements(env, url);
+      if (request.method === 'POST') return createMovement(env, request, auth);
+      return err(405, 'Метод не поддерживается');
+    }
+
     // агрегаты для раздела «Отчёты» (всё из данных CRM)
     if (seg[0] === 'reports' && seg[1] === 'summary' && request.method === 'GET') return reportsSummary(env, url);
 
@@ -866,6 +874,69 @@ async function warehouseSummary(env) {
                     FROM product_stock GROUP BY product_id) s ON s.product_id = p.id`
   ).first();
   return json(r || { sku: 0, units: 0, reserved: 0, value: 0 });
+}
+
+// --------------------------------------------------------------------------
+// Движения склада (приход/расход) — журнал + корректировка остатка product_stock.
+// --------------------------------------------------------------------------
+let MOVEMENTS_SCHEMA_OK = false;
+async function ensureMovementsSchema(env) {
+  if (MOVEMENTS_SCHEMA_OK) return;
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS stock_movements (
+      id TEXT PRIMARY KEY, product_id TEXT, direction TEXT, type TEXT, qty REAL,
+      date TEXT, doc_no TEXT, counterparty TEXT, note TEXT, created_by TEXT, created_at TEXT
+    )`).run();
+  } catch (e) {}
+  MOVEMENTS_SCHEMA_OK = true;
+}
+
+async function listMovements(env, url) {
+  const product = (url.searchParams.get('product') || '').trim();
+  const limit = clampInt(url.searchParams.get('limit'), 50, 1, 500);
+  const where = product ? 'WHERE m.product_id = ?' : '';
+  const args = product ? [product] : [];
+  const r = await env.DB.prepare(
+    `SELECT m.*, p.name AS product_name, p.sku AS product_sku
+       FROM stock_movements m LEFT JOIN products p ON p.id = m.product_id
+      ${where} ORDER BY m.created_at DESC LIMIT ?`
+  ).bind(...args, limit).all();
+  return json(r.results);
+}
+
+// Приход (direction=in) увеличивает остаток, расход (out) — уменьшает (не ниже 0).
+async function createMovement(env, request, auth) {
+  const b = await request.json().catch(() => ({}));
+  const productId = b.product_id || b.productId;
+  const direction = b.direction === 'out' ? 'out' : 'in';
+  const qty = num(b.qty);
+  if (!productId) return err(400, 'Не указан товар');
+  if (qty <= 0) return err(400, 'Количество должно быть больше 0');
+  const prod = await env.DB.prepare('SELECT id FROM products WHERE id=?').bind(productId).first();
+  if (!prod) return err(404, 'Товар не найден');
+
+  const warehouseId = 'w1'; // один склад
+  const cur = await env.DB.prepare('SELECT stock, reserved FROM product_stock WHERE product_id=? AND warehouse_id=?').bind(productId, warehouseId).first();
+  const stock = cur ? num(cur.stock) : 0;
+  const reserved = cur ? num(cur.reserved) : 0;
+  if (direction === 'out' && qty > stock) return err(400, `Недостаточно остатка: на складе ${stock}`);
+  const newStock = direction === 'in' ? stock + qty : stock - qty;
+
+  await env.DB.prepare(
+    `INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?,?,?,?)
+     ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock`
+  ).bind(productId, warehouseId, newStock, reserved).run();
+
+  const id = genId();
+  const now = new Date().toISOString();
+  const date = (b.date || now.slice(0, 10));
+  const type = b.type || (direction === 'in' ? 'receipt' : 'writeoff');
+  await env.DB.prepare(
+    `INSERT INTO stock_movements (id, product_id, direction, type, qty, date, doc_no, counterparty, note, created_by, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(id, productId, direction, type, qty, date, b.doc_no || '', b.counterparty || '', b.note || '', auth ? auth.sub : null, now).run();
+
+  return json({ id, product_id: productId, direction, type, qty, stock: newStock, balanceAfter: newStock }, 201);
 }
 
 // --------------------------------------------------------------------------

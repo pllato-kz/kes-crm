@@ -3180,6 +3180,66 @@ function openProductBulkEdit(ids, onDone) {
   });
 }
 
+// Приход (in) / Расход (out) со склада — корректирует остаток и пишет движение
+function openStockMovement(direction, onDone) {
+  const isIn = direction === 'in';
+  let selected = null;
+  const search = el('input', { placeholder:'Поиск товара по артикулу/названию…' });
+  const list = el('div', { class:'product-picker', style:'margin-top:6px' });
+  const chosen = el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, 'Товар не выбран');
+  let seq = 0;
+  async function fill(q = '') {
+    const my = ++seq; const ql = q.trim();
+    list.innerHTML = ''; list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Поиск…'));
+    let rows;
+    try { const resp = await window.__API__.apiFetch('products?limit=20' + (ql ? '&q=' + encodeURIComponent(ql) : '')); rows = (resp.data || []).map(window.__API__.map.product); }
+    catch (e) { rows = []; }
+    if (my !== seq) return;
+    list.innerHTML = '';
+    rows.forEach(p => list.append(el('div', { class:'pp-item', onclick: () => {
+      selected = p; list.style.display = 'none'; search.value = p.name;
+      chosen.innerHTML = ''; chosen.append(el('span', { class:'strong' }, p.name), ' · текущий остаток: ' + p.stock);
+    } }, [
+      el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku + (p.brand ? ' · ' + p.brand : ''))]),
+      el('span', { class:'pp-price' }, 'ост. ' + p.stock),
+    ])));
+    if (!rows.length) list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено'));
+  }
+  let dt; search.oninput = (e) => { list.style.display = ''; selected = null; const v = e.target.value; clearTimeout(dt); dt = setTimeout(() => fill(v), 250); };
+  fill();
+
+  const qtyI = el('input', { type:'number', min:'1', placeholder:'0' });
+  const partyI = el('input', { placeholder: isIn ? 'Поставщик' : 'Получатель / причина' });
+  const dateI = el('input', { type:'date', value: new Date().toISOString().slice(0, 10) });
+  const noteI = el('input', { placeholder:'Примечание (необязательно)' });
+
+  const submit = el('button', { class:'btn btn-primary', onclick: async () => {
+    if (!selected) { toast('Выберите товар', 'warn'); return; }
+    const qty = Number(qtyI.value) || 0;
+    if (qty <= 0) { toast('Укажите количество', 'warn'); return; }
+    submit.disabled = true;
+    try {
+      await window.__API__.apiFetch('stock-movements', { method:'POST', body: {
+        product_id: selected.id, direction, qty, date: dateI.value,
+        counterparty: partyI.value.trim(), note: noteI.value.trim(),
+      } });
+      closeModal(); toast(isIn ? 'Приход оформлен' : 'Расход оформлен', 'success'); if (onDone) onDone();
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); submit.disabled = false; }
+  } }, isIn ? 'Оприходовать' : 'Списать');
+
+  openModal({
+    title: isIn ? '📥 Приход на склад' : '📤 Расход со склада',
+    body: el('div', {}, [
+      el('div', { class:'form-row' }, [el('label', {}, 'Товар'), search, list, chosen]),
+      el('div', { class:'form-row' }, [el('label', {}, 'Количество'), qtyI]),
+      el('div', { class:'form-row' }, [el('label', {}, isIn ? 'Поставщик' : 'Получатель / причина'), partyI]),
+      el('div', { class:'form-row' }, [el('label', {}, 'Дата'), dateI]),
+      el('div', { class:'form-row' }, [el('label', {}, 'Примечание'), noteI]),
+    ]),
+    foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), submit],
+  });
+}
+
 // ============================================================
 // VIEW: WAREHOUSE
 // ============================================================
@@ -3192,9 +3252,9 @@ VIEWS.warehouse = () => {
       el('div', { class: 'sub' }, 'Карагандинский склад · ул. Бытовая, 13/1'),
     ]),
     el('div', { class: 'actions' }, [
-      el('button', { class: 'btn', onclick: () => { wrap.querySelector('[data-anchor="receipts"]')?.scrollIntoView({ behavior:'smooth' }); toast('Скроллю к приходам', 'info'); } }, '📦 Приходы'),
-      el('button', { class: 'btn', onclick: () => stub('Перемещения между складами', 'У KES пока один склад в Караганде. При расширении: складки в Астане, Алматы, Темиртау — перемещения с актами М-11.') }, '🔄 Перемещения'),
-      can('edit-stock') ? el('button', { class: 'btn btn-primary', onclick: () => openInventoryCreate() }, '+ Инвентаризация') : null,
+      can('edit-stock') ? el('button', { class: 'btn btn-primary', onclick: () => openStockMovement('in', () => navigate('warehouse')) }, '📥 Приход') : null,
+      can('edit-stock') ? el('button', { class: 'btn', onclick: () => openStockMovement('out', () => navigate('warehouse')) }, '📤 Расход') : null,
+      can('edit-stock') ? el('button', { class: 'btn', onclick: () => openInventoryCreate() }, '+ Инвентаризация') : null,
     ]),
   ]));
 
@@ -3283,6 +3343,28 @@ VIEWS.warehouse = () => {
       ]),
     );
   }
+
+  // Движения склада (приход/расход) — журнал
+  wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Движения склада (приход / расход)'));
+  const movHost = el('div', { class:'table-wrap' }, el('div', { class:'muted', style:'padding:12px' }, 'Загрузка…'));
+  wrap.append(movHost);
+  window.__API__.apiFetch('stock-movements?limit=50').then(rows => {
+    movHost.innerHTML = '';
+    const mt = el('table', { class:'data' });
+    mt.append(el('thead', {}, el('tr', {}, [
+      el('th', {}, 'Дата'), el('th', {}, 'Товар'), el('th', {}, 'Тип'),
+      el('th', { class:'num' }, 'Кол-во'), el('th', {}, 'Контрагент'), el('th', {}, 'Примечание'),
+    ])));
+    mt.append(el('tbody', {}, (rows && rows.length) ? rows.map(m => el('tr', {}, [
+      el('td', { class:'muted' }, m.date ? fmtDate(m.date) : '—'),
+      el('td', { class:'strong' }, m.product_name || m.product_sku || '—'),
+      el('td', {}, el('span', { class:'pill ' + (m.direction === 'in' ? 'pill-success' : 'pill-warn') }, m.direction === 'in' ? 'Приход' : 'Расход')),
+      el('td', { class:'num strong' }, (m.direction === 'in' ? '+' : '−') + m.qty),
+      el('td', {}, m.counterparty || '—'),
+      el('td', { class:'muted' }, m.note || ''),
+    ])) : [el('tr', {}, el('td', { colspan:6, class:'muted', style:'text-align:center;padding:16px' }, 'Движений пока нет. Оформите приход или расход.'))]));
+    movHost.append(mt);
+  }).catch(() => { movHost.innerHTML = ''; movHost.append(el('div', { class:'muted', style:'padding:12px' }, 'Не удалось загрузить движения')); });
 
   // Последние приходы
   wrap.append(el('div', { 'data-anchor': 'receipts', style:'font-weight:600;margin:24px 0 12px' }, 'Последние приходы от поставщиков'));
