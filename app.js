@@ -324,7 +324,7 @@ async function deletePipelineUI(p) {
   const msg = inPipe
     ? `В воронке «${p.name}» есть сделки (${inPipe}). При удалении они будут перенесены в другую воронку. Удалить?`
     : `Удалить воронку «${p.name}»?`;
-  if (!confirm(msg)) return;
+  if (!(await confirmModal({ title:'Удаление воронки', message: msg, confirmText:'Удалить', danger:true }))) return;
   try {
     await window.__API__.apiFetch('pipelines/' + encodeURIComponent(p.id), { method: 'DELETE' });
     await loadData();
@@ -601,6 +601,64 @@ document.addEventListener('click', (e) => {
   if (e.target.id === 'modal-close') closeModal();
   if (e.target.id === 'modal') closeModal();
 });
+
+// ---------- Единая система модальных диалогов (замена native alert/confirm/prompt) ----------
+// Отдельный оверлей #cmodal стекается поверх обычного #modal, поэтому подтверждения
+// можно показывать даже когда открыта карточка сущности. Фон затемнён, клик вне окна
+// или «Отмена»/Esc — закрывают, взаимодействие с остальным UI заблокировано.
+function _cmodalRender({ title, message, icon, foot, onDismiss }) {
+  const overlay = $('#cmodal');
+  $('#cmodal-title').textContent = title;
+  const body = $('#cmodal-body'); body.innerHTML = '';
+  body.append(el('div', { style:'display:flex;gap:12px;align-items:flex-start' }, [
+    icon ? el('div', { style:'font-size:24px;line-height:1.1' }, icon) : null,
+    el('div', { style:'white-space:pre-line;font-size:14px;line-height:1.55' }, message || ''),
+  ]));
+  const footEl = $('#cmodal-foot'); footEl.innerHTML = '';
+  foot.forEach(b => footEl.append(b));
+  let settled = false;
+  const finish = (cb, val) => { if (settled) return; settled = true; cleanup(); cb(val); };
+  function onKey(e) { if (e.key === 'Escape') onDismiss.fn(); }
+  function onBackdrop(e) { if (e.target === overlay || e.target.id === 'cmodal-close') onDismiss.fn(); }
+  function cleanup() {
+    overlay.classList.remove('show');
+    document.removeEventListener('keydown', onKey);
+    overlay.removeEventListener('click', onBackdrop);
+  }
+  overlay.addEventListener('click', onBackdrop);
+  document.addEventListener('keydown', onKey);
+  overlay.classList.add('show');
+  return finish;
+}
+// Подтверждение действия (удаление, смена статуса, архивирование и т.п.) → Promise<boolean>
+function confirmModal(opts = {}) {
+  if (typeof opts === 'string') opts = { message: opts };
+  const { title = 'Подтверждение', message = '', confirmText = 'Подтвердить', cancelText = 'Отмена', danger = false, icon = '' } = opts;
+  return new Promise((resolve) => {
+    const onDismiss = {};
+    const cancelBtn = el('button', { class:'btn' }, cancelText);
+    const okBtn = el('button', { class:'btn ' + (danger ? 'btn-danger' : 'btn-primary') }, confirmText);
+    const finish = _cmodalRender({ title, message, icon: icon || (danger ? '⚠️' : ''), foot: [cancelBtn, okBtn], onDismiss });
+    onDismiss.fn = () => finish(resolve, false);
+    cancelBtn.onclick = () => finish(resolve, false);
+    okBtn.onclick = () => finish(resolve, true);
+    setTimeout(() => okBtn.focus(), 30);
+  });
+}
+// Информационное сообщение (успех/ошибка/предупреждение/инфо) → Promise<void>
+function messageModal(opts = {}) {
+  if (typeof opts === 'string') opts = { message: opts };
+  const { title = 'Сообщение', message = '', type = 'info', okText = 'Понятно' } = opts;
+  const iconMap = { info:'ℹ️', success:'✓', warn:'⚠️', error:'✗' };
+  return new Promise((resolve) => {
+    const onDismiss = {};
+    const okBtn = el('button', { class:'btn btn-primary' }, okText);
+    const finish = _cmodalRender({ title, message, icon: iconMap[type] || '', foot: [okBtn], onDismiss });
+    onDismiss.fn = () => finish(resolve);
+    okBtn.onclick = () => finish(resolve);
+    setTimeout(() => okBtn.focus(), 30);
+  });
+}
 
 // ============================================================
 // FORM HELPERS — компактные конструкторы полей
@@ -1373,7 +1431,7 @@ function openSupplierDetail(id) {
     } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); if (btn) btn.disabled = false; }
   }
   async function del() {
-    if (!confirm(`Удалить поставщика «${sp.name}»?`)) return;
+    if (!(await confirmModal({ title:'Удаление поставщика', message:`Удалить поставщика «${sp.name}»?`, confirmText:'Удалить', danger:true }))) return;
     try {
       await window.__API__.apiFetch('suppliers/' + sp.id, { method:'DELETE' });
       const i = state.suppliers.findIndex(x => x.id === sp.id); if (i >= 0) state.suppliers.splice(i, 1);
@@ -2251,7 +2309,7 @@ VIEWS.deals = () => {
       if (canManageThis) {
         headKids.push(el('button', { class:'stage-del', title:'Удалить этап', onclick: async (e) => {
           e.stopPropagation();
-          if (!confirm(`Удалить этап «${s.label}»? Его сделки перейдут на другой этап.`)) return;
+          if (!(await confirmModal({ title:'Удаление этапа', message:`Удалить этап «${s.label}»? Его сделки перейдут на другой этап.`, confirmText:'Удалить', danger:true }))) return;
           try {
             const res = await window.__API__.apiFetch('deal_stages/' + encodeURIComponent(s.id), { method:'DELETE' });
             if (res && res.reassignedTo) state.deals.forEach(d => { if (d.stage === s.id) d.stage = res.reassignedTo; });
@@ -2320,7 +2378,7 @@ function openBulkEdit(ids) {
     if (stageSel.value) body.stage_id = stageSel.value;
     if (titleI.value.trim()) body.title = titleI.value.trim();
     if (!Object.keys(body).length) { toast('Заполните хотя бы одно поле', 'warn'); return; }
-    if (!confirm(`Применить изменения к ${total} ${plural(total, 'сделке', 'сделкам', 'сделкам')}?`)) return;
+    if (!(await confirmModal({ title:'Массовое изменение', message:`Применить изменения к ${total} ${plural(total, 'сделке', 'сделкам', 'сделкам')}?`, confirmText:'Применить' }))) return;
     applyBtn.disabled = true; applyBtn.textContent = 'Применение…';
     let ok = 0, fail = 0;
     for (let i = 0; i < ids.length; i += 8) {
@@ -2376,7 +2434,7 @@ function openStageManager() {
     labelI.oninput = () => { clearTimeout(debouncers.get(stage.id)); debouncers.set(stage.id, setTimeout(doSave, 600)); };
     labelI.onblur = () => { clearTimeout(debouncers.get(stage.id)); doSave(); };
     const delB = el('button', { class:'btn btn-sm btn-danger', title:'Удалить этап', onclick: async () => {
-      if (!confirm(`Удалить этап «${stage.label}»? Его сделки перейдут на другой этап.`)) return;
+      if (!(await confirmModal({ title:'Удаление этапа', message:`Удалить этап «${stage.label}»? Его сделки перейдут на другой этап.`, confirmText:'Удалить', danger:true }))) return;
       try { await window.__API__.apiFetch('deal_stages/' + encodeURIComponent(stage.id), { method:'DELETE' }); changed = true; row.remove(); }
       catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
     } }, '×');
@@ -2621,7 +2679,7 @@ async function openDealDetail(id) {
   const fieldRow = (label, input) => el('div', { class:'form-row' }, [el('label', {}, label), input]);
   const printBtn = el('button', { class:'btn btn-sm', onclick: () => printInvoice(d) }, '🖨 Печать СФ');
   const delBtn = (currentUser && currentUser.roleKey === 'director') ? el('button', { class:'btn btn-sm btn-danger', onclick: async () => {
-    if (!confirm(`Удалить сделку «${d.title}»? Она переместится в архив на 30 дней, затем удалится навсегда.`)) return;
+    if (!(await confirmModal({ title:'Удаление сделки', message:`Удалить сделку «${d.title}»? Она переместится в архив на 30 дней, затем удалится навсегда.`, confirmText:'Удалить', danger:true }))) return;
     try {
       await window.__API__.apiFetch('deals/' + d.id, { method:'DELETE' });
       const i = state.deals.findIndex(x => x.id === d.id); if (i >= 0) state.deals.splice(i, 1);
@@ -3174,7 +3232,7 @@ async function openClientDetail(id) {
       el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
       el('button', { class:'btn', onclick: () => { closeModal(); openNewDeal(); toast('Подставлю клиента в новую сделку', 'info'); } }, '+ Сделка'),
       (currentUser.roleKey === 'director') ? el('button', { class:'btn btn-danger', onclick: async () => {
-        if (!confirm(`Удалить клиента «${c.name}»? Он переместится в архив на 30 дней, затем удалится навсегда.`)) return;
+        if (!(await confirmModal({ title:'Удаление клиента', message:`Удалить клиента «${c.name}»? Он переместится в архив на 30 дней, затем удалится навсегда.`, confirmText:'Удалить', danger:true }))) return;
         try {
           await window.__API__.apiFetch('clients/' + c.id, { method:'DELETE' });
           const i = state.clients.findIndex(x => x.id === c.id); if (i >= 0) state.clients.splice(i, 1);
@@ -3417,7 +3475,7 @@ async function openStockDoc(type, docId, onDone) {
   if (doc) foot.push(el('button', { class:'btn', onclick: () => printStockDoc(doc.id) }, '🖨 Печать накладной'));
   if (editable) {
     if (doc) foot.push(el('button', { class:'btn btn-danger', onclick: async () => {
-      if (!confirm('Удалить черновик?')) return;
+      if (!(await confirmModal({ title:'Удаление черновика', message:'Удалить черновик?', confirmText:'Удалить', danger:true }))) return;
       try { await window.__API__.apiFetch('stock-docs/' + doc.id, { method:'DELETE' }); closeModal(); toast('Черновик удалён', 'success'); if (onDone) onDone(); }
       catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
     } }, 'Удалить'));
@@ -3434,7 +3492,7 @@ async function openStockDoc(type, docId, onDone) {
     } }, isIn ? 'Провести (оприходовать)' : 'Провести (списать)'));
   } else if (status === 'posted') {
     foot.push(el('button', { class:'btn btn-danger', onclick: async (e) => {
-      if (!confirm('Отменить проведённый документ? Остаток будет восстановлен.')) return;
+      if (!(await confirmModal({ title:'Отмена документа', message:'Отменить проведённый документ? Остаток будет восстановлен.', confirmText:'Отменить документ', danger:true }))) return;
       const b = e.currentTarget; b.disabled = true;
       try { await window.__API__.apiFetch('stock-docs/' + doc.id + '/cancel', { method:'POST' }); closeModal(); toast('Документ отменён', 'success'); if (onDone) onDone(); }
       catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); b.disabled = false; }
@@ -3870,7 +3928,7 @@ async function openInventorySheet(id) {
     const postBtn = el('button', { class:'btn btn-primary', onclick: async () => {
       const counted = items.filter(it => it.counted != null).length;
       if (!counted) { toast('Внесите фактические количества хотя бы для одной позиции', 'warn'); return; }
-      if (!confirm(`Провести инвентаризацию?\nОстатки на складе будут выставлены по факту (${counted} позиций). Действие необратимо.`)) return;
+      if (!(await confirmModal({ title:'Инвентаризация', message:`Провести инвентаризацию?\nОстатки на складе будут выставлены по факту (${counted} позиций). Действие необратимо.`, confirmText:'Провести', danger:true }))) return;
       postBtn.disabled = true; postBtn.textContent = 'Проведение…';
       try {
         await save();
@@ -4178,7 +4236,7 @@ VIEWS.invoices = () => {
   }
   async function bulkDelete() {
     const ids = [...selected]; if (!ids.length) return;
-    if (!confirm(`Удалить выбранные счета (${ids.length})? Действие необратимо.`)) return;
+    if (!(await confirmModal({ title:'Удаление счетов', message:`Удалить выбранные счета (${ids.length})? Они переместятся в архив на 30 дней.`, confirmText:'Удалить', danger:true }))) return;
     if (delBtn) delBtn.disabled = true;
     try {
       for (const id of ids) {
@@ -4537,7 +4595,7 @@ function openTaskDetail(id) {
   const foot = [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')];
   if (canEdit) {
     foot.push(el('button', { class:'btn btn-danger', onclick: async () => {
-      if (!confirm(`Удалить задачу «${t.title}»?`)) return;
+      if (!(await confirmModal({ title:'Удаление задачи', message:`Удалить задачу «${t.title}»?`, confirmText:'Удалить', danger:true }))) return;
       try {
         await window.__API__.apiFetch('tasks/' + t.id, { method:'DELETE' });
         const i = state.tasks.findIndex(x => x.id === t.id); if (i >= 0) state.tasks.splice(i, 1);
@@ -5098,7 +5156,7 @@ VIEWS.settings = () => {
         el('button', { class:'btn btn-sm', onclick: () => openEditUser(u.id) }, '✏️'),
         !isMe && u.active !== false ? el('button', { class:'btn btn-sm', title:'Заблокировать', onclick: async () => { u.active = false; try { await window.__API__.apiFetch('users/' + u.id, { method: 'PUT', body: { active: 0 } }); toast(u.name + ' заблокирован', 'warn'); } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); } navigate('settings'); } }, '🚫') : null,
         !isMe && u.active === false ? el('button', { class:'btn btn-sm', title:'Активировать', onclick: async () => { u.active = true; try { await window.__API__.apiFetch('users/' + u.id, { method: 'PUT', body: { active: 1 } }); toast(u.name + ' активирован', 'success'); } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); } navigate('settings'); } }, '✓') : null,
-        !isMe ? el('button', { class:'btn btn-sm', title:'Удалить', onclick: async () => { if (confirm('Удалить ' + u.name + '?')) { try { await window.__API__.apiFetch('users/' + u.id, { method: 'DELETE' }); state.users = state.users.filter(x => x.id !== u.id); toast('Пользователь удалён', 'success'); } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); } navigate('settings'); } } }, '🗑') : null,
+        !isMe ? el('button', { class:'btn btn-sm', title:'Удалить', onclick: async () => { if (await confirmModal({ title:'Удаление пользователя', message:'Удалить пользователя ' + u.name + '?', confirmText:'Удалить', danger:true })) { try { await window.__API__.apiFetch('users/' + u.id, { method: 'DELETE' }); state.users = state.users.filter(x => x.id !== u.id); toast('Пользователь удалён', 'success'); } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); } navigate('settings'); } } }, '🗑') : null,
       ]) : el('span', { class:'muted' }, '—')),
     ]);
   })));
@@ -5172,7 +5230,7 @@ VIEWS.settings = () => {
         ? el('span', { class:'role-head' }, [
             el('span', {}, label),
             el('button', { class:'role-del', title:'Удалить роль', onclick: async () => {
-              if (!confirm(`Удалить роль «${label}»? Пользователи с этой ролью потеряют доступ.`)) return;
+              if (!(await confirmModal({ title:'Удаление роли', message:`Удалить роль «${label}»? Пользователи с этой ролью потеряют доступ.`, confirmText:'Удалить', danger:true }))) return;
               try { await window.__API__.apiFetch('roles/' + encodeURIComponent(rk), { method:'DELETE' }); await loadData(); navigate('settings'); toast('Роль удалена', 'success'); }
               catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
             } }, '×'),
@@ -5458,6 +5516,13 @@ function renderShell() {
         <div class="modal-foot" id="modal-foot"></div>
       </div>
     </div>
+    <div class="modal-overlay" id="cmodal" style="z-index:200">
+      <div class="modal" style="max-width:460px">
+        <div class="modal-head"><h3 id="cmodal-title">—</h3><button id="cmodal-close" aria-label="Закрыть">×</button></div>
+        <div class="modal-body" id="cmodal-body"></div>
+        <div class="modal-foot" id="cmodal-foot"></div>
+      </div>
+    </div>
   `;
 
   // Сайдбар — только разрешённые модули
@@ -5488,8 +5553,8 @@ function renderShell() {
   refreshPipelineNav();
 
   // Обработчики
-  $('#reset-state').addEventListener('click', () => {
-    if (confirm('Сбросить демо-данные? Это вернёт всех пользователей, сделки, клиентов к исходному состоянию.')) resetState();
+  $('#reset-state').addEventListener('click', async () => {
+    if (await confirmModal({ title:'Сброс демо-данных', message:'Сбросить демо-данные? Это вернёт всех пользователей, сделки, клиентов к исходному состоянию.', confirmText:'Сбросить', danger:true })) resetState();
   });
   $('#search').addEventListener('keyup', (e) => { if (e.key === 'Enter') runSearch(e.target.value); });
   $('#notif-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleNotifications(); });
