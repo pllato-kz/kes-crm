@@ -2892,40 +2892,72 @@ async function openClientDetail(id) {
     } catch (e) { showNotFound('clients', id); return; }
   }
   setEntityHash('clients', c.id); // уникальный URL карточки
-  const dealsOf = state.deals.filter(d => d.client === id);
-  const body = el('div', {}, [
-    el('dl', { class:'kv' }, [
-      el('dt', {}, 'Наименование'), el('dd', { class:'strong' }, c.name),
-      el('dt', {}, 'БИН/ИИН'),       el('dd', {}, c.bin),
-      el('dt', {}, 'Тип'),            el('dd', {}, (CLIENT_TYPES[c.type]||{}).label || '—'),
-      el('dt', {}, 'Контактное лицо'), el('dd', {}, c.contact),
-      el('dt', {}, 'Телефон'),        el('dd', {}, c.phone),
-      el('dt', {}, 'Email'),           el('dd', {}, c.email),
-      el('dt', {}, 'Город'),           el('dd', {}, c.city),
-      el('dt', {}, 'Адрес'),           el('dd', {}, c.address),
-      el('dt', {}, 'LTV'),             el('dd', { class:'strong' }, fmtMoney(c.ltv)),
-      el('dt', {}, 'Баланс'),          el('dd', {}, c.balance < 0
-                                          ? el('span', { class:'pill pill-danger' }, 'Долг ' + fmtMoney(-c.balance))
-                                          : el('span', { class:'pill pill-success' }, 'Расчётов нет')),
-    ]),
-    el('div', { style:'font-weight:600;margin:16px 0 8px' }, `Сделки (${dealsOf.length})`),
-    el('table', { class:'data' }, el('tbody', {}, dealsOf.length
-      ? dealsOf.map(d => {
-          const s = stageById(d.stage);
-          return el('tr', { onclick: () => { closeModal(); openDealDetail(d.id); } }, [
-            el('td', {}, d.title),
-            el('td', {}, el('span', { class:'pill', style:`background:${s.color}22;color:${s.color}` }, s.label)),
-            el('td', { class:'num strong' }, fmtMoneyK(d.amount)),
-          ]);
-        })
-      : [el('tr', {}, el('td', { colspan: 4, class:'muted', style:'text-align:center;padding:20px' }, 'Сделок ещё нет'))])),
-  ]);
+  const canEdit = can('edit-client', c);
+
+  // ----- Левая панель: редактируемые поля клиента -----
+  const fName = fInput('Наименование', c.name || '');
+  const fType = fSelect('Тип клиента', Object.keys(CLIENT_TYPES).map(k => ({ value: k, label: CLIENT_TYPES[k].label })), c.type);
+  const fBin = fInput('БИН/ИИН', c.bin || '');
+  const fContact = fInput('Контактное лицо', c.contact || '');
+  const fPhone = fInput('Телефон', c.phone || '');
+  const fEmail = fInput('Email', c.email || '', { type: 'email' });
+  const fCity = fInput('Город', c.city || '');
+  const fAddr = fInput('Адрес', c.address || '');
+  const fMgr = fSelect('Менеджер', state.users.filter(u => u.active !== false).map(u => ({ value: u.id, label: u.name })), c.manager);
+  const fLtv = fInput('LTV, ₸', c.ltv != null ? c.ltv : '', { type: 'number' });
+  const fBal = fInput('Баланс, ₸', c.balance != null ? c.balance : '', { type: 'number' });
+  const fields = [fName, fType, fBin, fContact, fPhone, fEmail, fCity, fAddr, fMgr, fLtv, fBal];
+  if (!canEdit) fields.forEach(f => f.row.querySelectorAll('input,select').forEach(i => i.disabled = true));
+  const left = el('div', { class:'deal-left' }, [el('div', { class:'section-title' }, 'Информация о клиенте'), ...fields.map(f => f.row)]);
+
+  // ----- Правая панель: связанные сделки (живой список из state.deals) -----
+  const dealsHost = el('div', { style:'padding:12px 14px;overflow-y:auto;flex:1' });
+  function renderDeals() {
+    const dealsOf = state.deals.filter(d => d.client === c.id)
+      .sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')));
+    dealsHost.innerHTML = '';
+    dealsHost.append(el('div', { class:'section-title' }, `Сделки клиента (${dealsOf.length})`));
+    if (!dealsOf.length) { dealsHost.append(el('div', { class:'muted', style:'padding:16px;text-align:center' }, 'Сделок ещё нет')); return; }
+    const tbl = el('table', { class:'data' });
+    tbl.append(el('thead', {}, el('tr', {}, [el('th', {}, 'Сделка'), el('th', {}, 'Этап'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Дата')])));
+    tbl.append(el('tbody', {}, dealsOf.map(d => {
+      const s = stageById(d.stage);
+      return el('tr', { style:'cursor:pointer', onclick: () => { closeModal(); openDealDetail(d.id); } }, [
+        el('td', { class:'strong' }, d.title),
+        el('td', {}, el('span', { class:'pill', style:`background:${s.color}22;color:${s.color}` }, s.label)),
+        el('td', { class:'num strong' }, fmtMoneyK(d.amount)),
+        el('td', { class:'muted' }, d.created ? fmtDate(d.created) : '—'),
+      ]);
+    })));
+    dealsHost.append(tbl);
+  }
+  renderDeals();
+  const right = el('div', { class:'deal-right' }, [dealsHost]);
+
+  async function saveClient(btn) {
+    if (btn) btn.disabled = true;
+    const upd = {
+      id: c.id, name: fName.get().trim() || c.name, type: fType.get(), bin: fBin.get(), contact: fContact.get(),
+      phone: fPhone.get(), email: fEmail.get(), city: fCity.get(), address: fAddr.get(), manager: fMgr.get(),
+      ltv: Number(fLtv.get()) || 0, balance: Number(fBal.get()) || 0,
+    };
+    try {
+      const saved = await window.__API__.apiFetch('clients/' + c.id, { method:'PUT', body: window.__API__.toApi.client(upd) });
+      Object.assign(c, window.__API__.map.client(saved)); // c — ссылка из state.clients → синхронно во всех разделах
+      const titleEl = document.querySelector('#modal-title'); if (titleEl) titleEl.textContent = c.name;
+      toast('Клиент сохранён', 'success');
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+    finally { if (btn) btn.disabled = false; }
+  }
+
   openModal({
+    wide: true,
     title: c.name,
-    body,
+    body: el('div', { class:'deal-modal' }, [el('div', { class:'deal-split' }, [left, right])]),
     foot: [
-      el('button', { class:'btn', onclick: () => stub('Редактирование клиента', 'Здесь форма правок реквизитов, контактов, тегов и заметок. Изменения логируются.') }, '✏️ Редактировать'),
-      el('button', { class:'btn btn-primary', onclick: () => { closeModal(); openNewDeal(); toast('Подставлю клиента в новую сделку', 'info'); } }, '+ Сделка'),
+      el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
+      el('button', { class:'btn', onclick: () => { closeModal(); openNewDeal(); toast('Подставлю клиента в новую сделку', 'info'); } }, '+ Сделка'),
+      canEdit ? el('button', { class:'btn btn-primary', onclick: (e) => saveClient(e.currentTarget) }, 'Сохранить') : null,
     ],
   });
 }
