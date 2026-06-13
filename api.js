@@ -155,7 +155,7 @@
     return out;
   }
   const buildStages = (rows) => rows.slice().sort((a, b) => (a.sort || 0) - (b.sort || 0))
-    .map((s) => ({ id: s.id, label: s.label, color: s.color }));
+    .map((s) => ({ id: s.id, label: s.label, color: s.color, sort: s.sort }));
   function buildClientTypes(rows) {
     const out = {}; for (const t of rows) out[t.key] = { label: t.label, color: t.color }; return out;
   }
