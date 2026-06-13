@@ -2724,7 +2724,7 @@ VIEWS.clients = () => {
     [el('option', { value:'' }, 'Все менеджеры')].concat(managers.map(u => el('option', { value: u.id }, u.name))));
   const fromI = el('input', { type:'date', title:'Последняя сделка с', style:'padding:6px', onchange: e => { filterState.from = e.target.value; refresh(); } });
   const toI = el('input', { type:'date', title:'Последняя сделка по', style:'padding:6px', onchange: e => { filterState.to = e.target.value; refresh(); } });
-  const resetBtn = el('button', { class:'btn btn-sm', style:'display:none', onclick: () => {
+  const resetBtn = el('button', { class:'btn btn-sm', style:'visibility:hidden', onclick: () => {
     Object.assign(filterState, { q:'', type:'', city:'', manager:'', from:'', to:'' });
     searchI.value = ''; typeS.value = ''; cityS.value = ''; mgrS.value = ''; fromI.value = ''; toI.value = '';
     refresh();
@@ -2748,13 +2748,16 @@ VIEWS.clients = () => {
   };
 
   const tw = el('div', { class: 'table-wrap' });
-  tw.append(el('div', { class: 'table-toolbar' }, [
-    searchI, typeS, cityS, mgrS,
-    el('span', { class:'muted', style:'font-size:12px' }, 'Послед. сделка c:'), fromI,
-    el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
-    resetBtn,
-    // Импорт/Экспорт — новой строкой справа, в том же блоке фильтров
-    el('div', { style:'flex-basis:100%;display:flex;justify-content:flex-end;gap:8px' }, [
+  tw.append(el('div', { class: 'table-toolbar', style:'flex-wrap:nowrap;align-items:flex-start' }, [
+    // Фильтры — слева, переносятся внутри своей колонки; «Сбросить» резервирует место
+    el('div', { style:'display:flex;flex-wrap:wrap;gap:10px;align-items:center;flex:1;min-width:0' }, [
+      searchI, typeS, cityS, mgrS,
+      el('span', { class:'muted', style:'font-size:12px' }, 'Послед. сделка c:'), fromI,
+      el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
+      resetBtn,
+    ]),
+    // Импорт/Экспорт — всегда справа на одной линии с фильтрами, не зависят от переноса
+    el('div', { style:'display:flex;gap:8px;flex:none' }, [
       el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
       el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
     ]),
@@ -2764,7 +2767,7 @@ VIEWS.clients = () => {
   function refresh() {
     // «Сбросить» виден только если активен хотя бы один фильтр
     const anyActive = !!(filterState.q || filterState.type || filterState.city || filterState.manager || filterState.from || filterState.to);
-    resetBtn.style.display = anyActive ? '' : 'none';
+    resetBtn.style.visibility = anyActive ? 'visible' : 'hidden';
     const visible = state.clients.filter(c => {
       if (filterState.q && !(c.name+c.bin+c.contact).toLowerCase().includes(filterState.q)) return false;
       if (filterState.type && c.type !== filterState.type) return false;
