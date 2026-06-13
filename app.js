@@ -7,6 +7,7 @@ let DEALS_PIPELINE = '';            // id активной воронки (URL #
 const { saveState, resetState } = window.__KES__;
 let state = { meta: {}, users: [], categories: [], products: [], clients: [], deals: [], leads: [], suppliers: [], tasks: [], invoices: [], shipments: [], receipts: [], notifications: [] };
 let currentUser = null; // заполняется после логина
+let CURRENT_VIEW = '';  // текущий активный раздел (для точечного обновления списков)
 
 // ---------- Утилиты ----------
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -372,6 +373,7 @@ function navigate(view, params = {}, noHash = false) {
       .join(' ');
   }
   $('#page-title').textContent = label || view;
+  CURRENT_VIEW = view;
   const main = $('#main');
   main.innerHTML = '';
   const renderer = VIEWS[view] || VIEWS.dashboard;
@@ -1314,9 +1316,10 @@ function openInvoiceDetail(id) {
   const setStatus = async (status, msg) => {
     const prev = iv.status; iv.status = status;
     try {
-      await window.__API__.apiFetch('invoices/' + iv.id, { method: 'PUT', body: { status_id: status } });
+      const saved = await window.__API__.apiFetch('invoices/' + iv.id, { method: 'PUT', body: { status_id: status } });
+      if (saved) Object.assign(iv, window.__API__.map.invoice(saved)); // синхронизируем объект из state с сервером
       closeModal(); toast(msg, 'success');
-      if (document.querySelector('#nav button[data-view="invoices"].active')) navigate('invoices');
+      if (CURRENT_VIEW === 'invoices') navigate('invoices'); // если открыт раздел «Документы» — перерисовать
     } catch (err) { iv.status = prev; toast('Не удалось сохранить', 'error'); }
   };
   const isPaid = iv.status === 'paid';
