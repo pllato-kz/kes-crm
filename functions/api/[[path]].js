@@ -354,6 +354,7 @@ async function dataRoute({ request, env }, seg, url, auth) {
   // задачи: расширенные поля (описание/дата начала/статус/комментарии) — добавляем на лету
   if (resource === 'tasks') await ensureTaskColumns(env);
   if (resource === 'deals' || resource === 'clients' || resource === 'invoices') await ensureArchiveColumns(env);
+  if (resource === 'shipments' && ['POST', 'PUT', 'PATCH'].includes(method)) await ensureShipmentStatuses(env);
   if (resource === 'roles') await ensureArchiveRight(env); // выдать директору право «Архив»
   if (resource === 'deals') await ensureDealColumns(env);
   if (resource === 'company') await ensureCompanyColumns(env);
@@ -1367,15 +1368,34 @@ async function writeDeal(env, request, method, id, auth) {
     } else if (prevStage && newStage !== prevStage) {
       await env.DB.prepare(`INSERT INTO deal_stage_history (deal_id, from_stage, to_stage, user_id) VALUES (?,?,?,?)`).bind(dealId, prevStage, newStage, uid).run();
     }
-    // Автосписание со склада при переходе на этап «Отгружено» (этапы на статусы документов не влияют)
+    // Автосписание со склада при переходе на этап «Отгружено» + синхронизация статуса отгрузки
     if (newStage !== prevStage) {
       try {
         const st = await env.DB.prepare('SELECT label FROM deal_stages WHERE id=?').bind(newStage).first();
-        if (st && /отгруж/i.test(st.label || '')) await autoShipDeal(env, dealId, auth);
+        const label = (st && st.label) || '';
+        if (/отгруж/i.test(label)) await autoShipDeal(env, dealId, auth);
+        // Этап сделки → статус связанной отгрузки (двусторонняя синхронизация)
+        let shipStatus = null;
+        if (/достав|закры|выполн|заверш/i.test(label)) shipStatus = 'delivered';
+        else if (/отгруж/i.test(label)) shipStatus = 'shipped';
+        if (shipStatus) {
+          await ensureShipmentStatuses(env);
+          await env.DB.prepare('UPDATE shipments SET status_id=? WHERE deal_id=?').bind(shipStatus, dealId).run();
+        }
       } catch (e) { /* не блокируем смену этапа */ }
     }
   }
   return getDeal(env, dealId);
+}
+
+// Статусы отгрузок: гарантируем наличие planned/shipped/delivered (для синхронизации со сделкой)
+let SHIP_STATUS_OK = false;
+async function ensureShipmentStatuses(env) {
+  if (SHIP_STATUS_OK) return;
+  for (const [idv, label, color] of [['planned','Запланирована','#F59E0B'], ['shipped','В пути','#06B6D4'], ['delivered','Доставлена','#22C55E']]) {
+    try { await env.DB.prepare('INSERT OR IGNORE INTO shipment_statuses (id,label,color) VALUES (?,?,?)').bind(idv, label, color).run(); } catch (e) {}
+  }
+  SHIP_STATUS_OK = true;
 }
 
 // История смены этапов сделки
