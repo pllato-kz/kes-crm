@@ -541,7 +541,12 @@ async function createPipeline(env, request) {
   const row = await env.DB.prepare('SELECT MAX(sort) AS m FROM pipelines').first();
   const sort = (row && row.m != null ? row.m : 0) + 1;
   await env.DB.prepare('INSERT INTO pipelines (id, name, sort) VALUES (?,?,?)').bind(id, name, sort).run();
-  const starter = [['Новая', '#3B82F6'], ['В работе', '#F59E0B'], ['Оплачено', '#10B981']];
+  // стандартный набор этапов — как в основной воронке
+  const starter = [
+    ['Новая', '#9CA3AF'], ['КП отправлено', '#3B82F6'], ['Согласовано', '#8B5CF6'],
+    ['Счёт выставлен', '#F59E0B'], ['Оплачено', '#10B981'], ['Отгружено', '#06B6D4'],
+    ['Закрыта', '#22C55E'], ['Отказ', '#EF4444'],
+  ];
   let i = 0;
   for (const [label, color] of starter) {
     await env.DB.prepare('INSERT INTO deal_stages (id, label, color, sort, pipeline_id) VALUES (?,?,?,?,?)')
