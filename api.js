@@ -191,7 +191,9 @@
     const categories = (cats || []).map((c) => ({ id: c.id, name: c.name, icon: c.icon, count: catCount[c.id] || 0 }));
 
     const state = {
-      meta: { tenant: meta.tenant, city: meta.city, currency: meta.currency || '₸', version: 1 },
+      meta: { id: meta.id || 1, tenant: meta.tenant, city: meta.city, currency: meta.currency || '₸',
+              legalName: meta.legal_name, bin: meta.bin, address: meta.address,
+              workHours: meta.work_hours, website: meta.website, note: meta.note, version: 1 },
       users: (usersRows || []).map((u) => M.user(u, rolesByKey)),
       categories,
       products,

@@ -316,11 +316,13 @@ async function dataRoute({ request, env }, seg, url, auth) {
   // задачи: расширенные поля (описание/дата начала/статус/комментарии) — добавляем на лету
   if (resource === 'tasks') await ensureTaskColumns(env);
   if (resource === 'deals') await ensureDealColumns(env);
+  if (resource === 'company') await ensureCompanyColumns(env);
   if (['pipelines', 'deal_stages', 'deals'].includes(resource)) await ensurePipelineSchema(env);
 
   // изменять роли (матрицу доступа) может только директор
   if (resource === 'roles' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     if (!auth || auth.role !== 'director') return err(403, 'Менять доступы по ролям может только директор');
+    if (method === 'DELETE' && id) return deleteRole(env, id, auth);
   }
   // управлять этапами воронки может только директор; защищённые этапы (protected) нельзя менять/удалять
   if (resource === 'deal_stages' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
@@ -524,6 +526,46 @@ async function ensureDealColumns(env) {
     'ALTER TABLE deals ADD COLUMN address TEXT',
   ]) { try { await env.DB.prepare(ddl).run(); } catch (e) { /* уже есть */ } }
   DEALS_SCHEMA_OK = true;
+}
+
+// Удаление роли: пользователей этой роли переносим на запасную роль (чтобы не нарушить FK).
+async function deleteRole(env, key, auth) {
+  if (auth && auth.role === key) return err(400, 'Нельзя удалить свою текущую роль');
+  const cnt = (await env.DB.prepare('SELECT COUNT(*) AS n FROM roles').first()).n;
+  if (cnt <= 1) return err(400, 'Нельзя удалить последнюю роль');
+  const fallback = await env.DB.prepare('SELECT key FROM roles WHERE key<>? ORDER BY key LIMIT 1').bind(key).first();
+  if (!fallback) return err(400, 'Нет запасной роли для переноса пользователей');
+  await env.DB.prepare('UPDATE users SET role_key=? WHERE role_key=?').bind(fallback.key, key).run();
+  await env.DB.prepare('DELETE FROM roles WHERE key=?').bind(key).run();
+  return json({ deleted: 1, reassignedTo: fallback.key });
+}
+
+// Реквизиты компании: расширенные поля (редактируются в настройках). Добавляются на лету.
+let COMPANY_SCHEMA_OK = false;
+async function ensureCompanyColumns(env) {
+  if (COMPANY_SCHEMA_OK) return;
+  for (const ddl of [
+    'ALTER TABLE company ADD COLUMN legal_name TEXT',
+    'ALTER TABLE company ADD COLUMN bin TEXT',
+    'ALTER TABLE company ADD COLUMN address TEXT',
+    'ALTER TABLE company ADD COLUMN work_hours TEXT',
+    'ALTER TABLE company ADD COLUMN website TEXT',
+    'ALTER TABLE company ADD COLUMN note TEXT',
+  ]) { try { await env.DB.prepare(ddl).run(); } catch (e) { /* уже есть */ } }
+  // значения по умолчанию (если пусто) — чтобы карточка не была пустой
+  try {
+    await env.DB.prepare(
+      `UPDATE company SET
+         legal_name = COALESCE(legal_name, 'ТОО «KazEnergoSnab»'),
+         bin        = COALESCE(bin, '180440099887'),
+         address    = COALESCE(address, 'Караганда, ул. Бытовая, 13/1'),
+         work_hours = COALESCE(work_hours, 'Пн–Пт 9:00–18:00, обед 13:00–14:00'),
+         website    = COALESCE(website, 'snabenergo.kz'),
+         note       = COALESCE(note, 'Сертифицированный субдилер по РК с 2018')
+       WHERE id = 1`
+    ).run();
+  } catch (e) {}
+  COMPANY_SCHEMA_OK = true;
 }
 
 // Воронки продаж: таблица pipelines + колонка pipeline_id у этапов.
