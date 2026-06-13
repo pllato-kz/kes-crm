@@ -2752,11 +2752,11 @@ VIEWS.clients = () => {
     el('span', { class:'muted', style:'font-size:12px' }, 'Послед. сделка c:'), fromI,
     el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
     resetBtn,
-  ]));
-  // Импорт/Экспорт — справа, под блоком фильтров
-  tw.append(el('div', { style:'display:flex;justify-content:flex-end;gap:8px;margin:0 0 12px' }, [
-    el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
-    el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
+    // Импорт/Экспорт — новой строкой справа, в том же блоке фильтров
+    el('div', { style:'flex-basis:100%;display:flex;justify-content:flex-end;gap:8px' }, [
+      el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
+      el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
+    ]),
   ]));
   tw.append(bulkBar);
 
