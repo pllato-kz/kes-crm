@@ -4789,10 +4789,24 @@ VIEWS.archive = () => {
   wrap.append(el('div', { class:'page-head' }, [
     el('div', {}, [el('h1', {}, 'Архив'), el('div', { class:'sub' }, 'Удалённые сделки и клиенты · хранятся 30 дней, затем удаляются навсегда')]),
   ]));
+
+  // Тулбар: поиск + сортировка по времени удаления
+  let ARCH = { deals: [], clients: [] };
+  let q = '', sort = 'desc';
+  const searchI = el('input', { placeholder:'Поиск в архиве…', oninput: (e) => { q = e.target.value.toLowerCase().trim(); render(); } });
+  const sortSel = el('select', { onchange: (e) => { sort = e.target.value; render(); } }, [
+    el('option', { value:'desc' }, 'Сначала новые'),
+    el('option', { value:'asc' }, 'Сначала старые'),
+  ]);
+  wrap.append(el('div', { class:'table-toolbar', style:'border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px' }, [
+    searchI, el('span', { class:'muted', style:'font-size:12px' }, 'По времени:'), sortSel,
+  ]));
+
   const host = el('div', {}, el('div', { class:'muted', style:'padding:14px' }, 'Загрузка…'));
   wrap.append(host);
 
   const daysLeft = (at) => { const ms = 30*24*3600*1000 - (Date.now() - new Date(at).getTime()); return Math.max(0, Math.ceil(ms / (24*3600*1000))); };
+  const byTime = (a, b) => { const ta = new Date(a.archived_at || 0).getTime(), tb = new Date(b.archived_at || 0).getTime(); return sort === 'asc' ? ta - tb : tb - ta; };
   async function restore(type, id) {
     try {
       await window.__API__.apiFetch('archive/restore', { method:'POST', body: { type, id } });
@@ -4800,17 +4814,22 @@ VIEWS.archive = () => {
       await loadData(); navigate('archive');
     } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
   }
-  function section(title, rows, emptyText) {
+  function section(cols, rows, emptyText) {
     const tw = el('div', { class:'table-wrap' });
     tw.append(el('table', { class:'data' }, [
-      el('thead', {}, el('tr', {}, [el('th', {}, title.col), el('th', {}, title.mid), el('th', {}, 'Удалено'), el('th', {}, 'Осталось'), el('th', {}, '')])),
+      el('thead', {}, el('tr', {}, [el('th', {}, cols.col), el('th', {}, cols.mid), el('th', {}, 'Удалено'), el('th', {}, 'Осталось'), el('th', {}, '')])),
       el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan:5, class:'muted', style:'text-align:center;padding:16px' }, emptyText))]),
     ]));
     return tw;
   }
-  window.__API__.apiFetch('archive').then(data => {
+  function render() {
+    const deals = ARCH.deals
+      .filter(d => !q || (String(d.title || '') + ' ' + (d.no || '')).toLowerCase().includes(q))
+      .slice().sort(byTime);
+    const clients = ARCH.clients
+      .filter(c => !q || (String(c.name || '') + ' ' + (c.city || '') + ' ' + (c.bin || '')).toLowerCase().includes(q))
+      .slice().sort(byTime);
     host.innerHTML = '';
-    const deals = data.deals || [], clients = data.clients || [];
     host.append(el('div', { style:'font-weight:600;margin:8px 0 10px' }, `Сделки в архиве (${deals.length})`));
     host.append(section({ col:'Сделка', mid:'Сумма' }, deals.map(d => el('tr', {}, [
       el('td', { class:'strong' }, d.title || '—'),
@@ -4818,7 +4837,7 @@ VIEWS.archive = () => {
       el('td', { class:'muted' }, d.archived_at ? fmtDate(d.archived_at) : '—'),
       el('td', {}, daysLeft(d.archived_at) + ' дн.'),
       el('td', {}, el('button', { class:'btn btn-sm btn-primary', onclick: () => restore('deal', d.id) }, '↩ Восстановить')),
-    ])), 'Архив сделок пуст'));
+    ])), q ? 'Ничего не найдено' : 'Архив сделок пуст'));
     host.append(el('div', { style:'font-weight:600;margin:24px 0 10px' }, `Клиенты в архиве (${clients.length})`));
     host.append(section({ col:'Клиент', mid:'Город' }, clients.map(c => el('tr', {}, [
       el('td', { class:'strong' }, c.name || '—'),
@@ -4826,8 +4845,10 @@ VIEWS.archive = () => {
       el('td', { class:'muted' }, c.archived_at ? fmtDate(c.archived_at) : '—'),
       el('td', {}, daysLeft(c.archived_at) + ' дн.'),
       el('td', {}, el('button', { class:'btn btn-sm btn-primary', onclick: () => restore('client', c.id) }, '↩ Восстановить')),
-    ])), 'Архив клиентов пуст'));
-  }).catch(err => { host.innerHTML = ''; host.append(el('div', { class:'pill pill-danger', style:'margin:12px' }, 'Ошибка: ' + ((err && err.message) || err))); });
+    ])), q ? 'Ничего не найдено' : 'Архив клиентов пуст'));
+  }
+  window.__API__.apiFetch('archive').then(data => { ARCH = { deals: data.deals || [], clients: data.clients || [] }; render(); })
+    .catch(err => { host.innerHTML = ''; host.append(el('div', { class:'pill pill-danger', style:'margin:12px' }, 'Ошибка: ' + ((err && err.message) || err))); });
   return wrap;
 };
 
