@@ -271,7 +271,7 @@ function createPipelineUI() {
     title: 'Новая воронка',
     body: el('div', {}, [
       el('div', { class: 'form-row' }, [el('label', {}, 'Название'), nameI]),
-      el('div', { class: 'muted', style: 'font-size:12px;margin-top:6px' }, 'Будут созданы стартовые этапы: «Новая», «В работе», «Оплачено» — их можно изменить.'),
+      el('div', { class: 'muted', style: 'font-size:12px;margin-top:6px' }, 'Будут созданы стандартные этапы: Новая, КП отправлено, Согласовано, Счёт выставлен, Оплачено, Отгружено, Закрыта, Отказ — их можно изменить.'),
     ]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
