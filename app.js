@@ -2753,12 +2753,14 @@ VIEWS.clients = () => {
     searchI, typeS, cityS, mgrS,
     el('span', { class:'muted', style:'font-size:12px' }, 'Послед. сделка c:'), fromI,
     el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
-    resetBtn,
   ]));
-  // Импорт/Экспорт — ниже блока фильтров, справа
-  tw.append(el('div', { style:'display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-bottom:1px solid var(--border);background:#FAFBFC' }, [
-    el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
-    el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
+  // Ниже фильтров: слева «Сбросить» (при активном фильтре), справа — Импорт/Экспорт
+  tw.append(el('div', { style:'display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--border);background:#FAFBFC' }, [
+    resetBtn,
+    el('div', { style:'display:flex;gap:8px;margin-left:auto' }, [
+      el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
+      el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
+    ]),
   ]));
   tw.append(bulkBar);
 
