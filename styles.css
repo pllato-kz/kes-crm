@@ -1,5 +1,20 @@
 /* KES CRM — дизайн-система. Брендинг с логотипа: синий гексагон #00A6E2 + чёрный #111. */
 
+/* ===== Экран загрузки (до старта app.js) — без «вспышки» демо-разметки ===== */
+.boot-splash {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+  background: #F4F5F7; color: #6B7280;
+  font-family: Inter, system-ui, Arial, sans-serif;
+}
+.boot-splash .boot-spinner {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 3px solid rgba(0,166,226,.22); border-top-color: #00A6E2;
+  animation: boot-spin .8s linear infinite;
+}
+.boot-splash .boot-text { font-size: 13px; }
+@keyframes boot-spin { to { transform: rotate(360deg); } }
+
 :root {
   --brand: #00A6E2;
   --brand-dark: #0086B8;
