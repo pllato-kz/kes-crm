@@ -148,6 +148,18 @@ export async function onRequest(context) {
       if (request.method === 'POST') return createMovement(env, request, auth);
       return err(405, 'Метод не поддерживается');
     }
+    // документы склада: приход/расход со статусами draft → posted → cancelled
+    if (seg[0] === 'stock-docs') {
+      await ensureMovementsSchema(env);
+      const did = seg[1];
+      if (request.method === 'POST' && did && seg[2] === 'post') return postStockDoc(env, did, auth);
+      if (request.method === 'POST' && did && seg[2] === 'cancel') return cancelStockDoc(env, did, auth);
+      if (request.method === 'GET') return did ? getStockDoc(env, did) : listStockDocs(env, url);
+      if (request.method === 'POST' && !did) return createStockDoc(env, request, auth);
+      if (['PUT', 'PATCH'].includes(request.method) && did) return updateStockDoc(env, request, did);
+      if (request.method === 'DELETE' && did) return deleteStockDoc(env, did);
+      return err(405, 'Метод не поддерживается');
+    }
 
     // агрегаты для раздела «Отчёты» (всё из данных CRM)
     if (seg[0] === 'reports' && seg[1] === 'summary' && request.method === 'GET') return reportsSummary(env, url);
@@ -888,7 +900,133 @@ async function ensureMovementsSchema(env) {
       date TEXT, doc_no TEXT, counterparty TEXT, note TEXT, created_by TEXT, created_at TEXT
     )`).run();
   } catch (e) {}
+  try { await env.DB.prepare('ALTER TABLE stock_movements ADD COLUMN doc_id TEXT').run(); } catch (e) {}
+  // документы склада (приход/расход) со статусами draft → posted → cancelled
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS stock_docs (
+      id TEXT PRIMARY KEY, type TEXT, no TEXT, date TEXT, counterparty TEXT, note TEXT,
+      status TEXT DEFAULT 'draft', items TEXT, total_qty REAL DEFAULT 0,
+      created_by TEXT, created_at TEXT, posted_at TEXT, cancelled_at TEXT
+    )`).run();
+  } catch (e) {}
   MOVEMENTS_SCHEMA_OK = true;
+}
+
+// ----- Документы склада (приход/расход) -----
+async function enrichDocItems(env, items) {
+  const out = [];
+  for (const it of (items || [])) {
+    const pid = it.product_id || it.productId;
+    const qty = num(it.qty);
+    if (!pid || qty <= 0) continue;
+    const p = await env.DB.prepare('SELECT id, name, sku FROM products WHERE id=?').bind(pid).first();
+    if (!p) continue;
+    out.push({ product_id: p.id, product_name: p.name, product_sku: p.sku, qty });
+  }
+  return out;
+}
+async function nextDocNo(env, type) {
+  const prefix = type === 'receipt' ? 'ПР' : 'РС';
+  const row = await env.DB.prepare('SELECT COUNT(*) AS n FROM stock_docs WHERE type=?').bind(type).first();
+  return prefix + '-' + String(((row && row.n) || 0) + 1).padStart(4, '0');
+}
+function parseDoc(d) { try { d.items = JSON.parse(d.items || '[]'); } catch (e) { d.items = []; } return d; }
+
+async function listStockDocs(env, url) {
+  const type = (url.searchParams.get('type') || '').trim();
+  const status = (url.searchParams.get('status') || '').trim();
+  const limit = clampInt(url.searchParams.get('limit'), 50, 1, 500);
+  const conds = [], args = [];
+  if (type) { conds.push('type=?'); args.push(type); }
+  if (status) { conds.push('status=?'); args.push(status); }
+  const ws = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+  const r = await env.DB.prepare(
+    `SELECT id, type, no, date, counterparty, note, status, total_qty, created_at, posted_at FROM stock_docs ${ws} ORDER BY created_at DESC LIMIT ?`
+  ).bind(...args, limit).all();
+  return json(r.results);
+}
+async function getStockDoc(env, id) {
+  const d = await env.DB.prepare('SELECT * FROM stock_docs WHERE id=?').bind(id).first();
+  if (!d) return err(404, 'Документ не найден');
+  return json(parseDoc(d));
+}
+async function createStockDoc(env, request, auth) {
+  const b = await request.json().catch(() => ({}));
+  const type = b.type === 'writeoff' ? 'writeoff' : 'receipt';
+  const items = await enrichDocItems(env, b.items);
+  const id = genId();
+  const now = new Date().toISOString();
+  const no = await nextDocNo(env, type);
+  const totalQty = items.reduce((s, it) => s + num(it.qty), 0);
+  await env.DB.prepare(
+    `INSERT INTO stock_docs (id, type, no, date, counterparty, note, status, items, total_qty, created_by, created_at)
+     VALUES (?,?,?,?,?,?, 'draft', ?,?,?,?)`
+  ).bind(id, type, no, b.date || now.slice(0, 10), b.counterparty || '', b.note || '', JSON.stringify(items), totalQty, auth ? auth.sub : null, now).run();
+  return getStockDoc(env, id);
+}
+async function updateStockDoc(env, request, id) {
+  const d = await env.DB.prepare('SELECT status FROM stock_docs WHERE id=?').bind(id).first();
+  if (!d) return err(404, 'Документ не найден');
+  if (d.status !== 'draft') return err(400, 'Редактировать можно только черновик');
+  const b = await request.json().catch(() => ({}));
+  const items = await enrichDocItems(env, b.items);
+  const totalQty = items.reduce((s, it) => s + num(it.qty), 0);
+  await env.DB.prepare('UPDATE stock_docs SET date=?, counterparty=?, note=?, items=?, total_qty=? WHERE id=?')
+    .bind(b.date || '', b.counterparty || '', b.note || '', JSON.stringify(items), totalQty, id).run();
+  return getStockDoc(env, id);
+}
+async function deleteStockDoc(env, id) {
+  const d = await env.DB.prepare('SELECT status FROM stock_docs WHERE id=?').bind(id).first();
+  if (!d) return err(404, 'Документ не найден');
+  if (d.status !== 'draft') return err(400, 'Удалить можно только черновик');
+  await env.DB.prepare('DELETE FROM stock_docs WHERE id=?').bind(id).run();
+  return json({ deleted: 1 });
+}
+async function postStockDoc(env, id, auth) {
+  const d = await env.DB.prepare('SELECT * FROM stock_docs WHERE id=?').bind(id).first();
+  if (!d) return err(404, 'Документ не найден');
+  if (d.status !== 'draft') return err(400, 'Провести можно только черновик');
+  const items = parseDoc({ ...d }).items;
+  if (!items.length) return err(400, 'В документе нет позиций');
+  const dir = d.type === 'receipt' ? 'in' : 'out';
+  const wh = 'w1';
+  if (dir === 'out') {
+    for (const it of items) {
+      const cur = await env.DB.prepare('SELECT stock FROM product_stock WHERE product_id=? AND warehouse_id=?').bind(it.product_id, wh).first();
+      const stock = cur ? num(cur.stock) : 0;
+      if (num(it.qty) > stock) return err(400, `Недостаточно остатка по «${it.product_name}»: на складе ${stock}`);
+    }
+  }
+  const now = new Date().toISOString();
+  for (const it of items) {
+    const cur = await env.DB.prepare('SELECT stock, reserved FROM product_stock WHERE product_id=? AND warehouse_id=?').bind(it.product_id, wh).first();
+    const stock = cur ? num(cur.stock) : 0, reserved = cur ? num(cur.reserved) : 0;
+    const newStock = dir === 'in' ? stock + num(it.qty) : stock - num(it.qty);
+    await env.DB.prepare('INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?,?,?,?) ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock').bind(it.product_id, wh, newStock, reserved).run();
+    await env.DB.prepare(`INSERT INTO stock_movements (id, product_id, direction, type, qty, date, doc_no, counterparty, note, created_by, created_at, doc_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(genId(), it.product_id, dir, d.type, num(it.qty), d.date, d.no, d.counterparty, d.note, auth ? auth.sub : null, now, d.id).run();
+  }
+  await env.DB.prepare("UPDATE stock_docs SET status='posted', posted_at=? WHERE id=?").bind(now, id).run();
+  return getStockDoc(env, id);
+}
+async function cancelStockDoc(env, id, auth) {
+  const d = await env.DB.prepare('SELECT * FROM stock_docs WHERE id=?').bind(id).first();
+  if (!d) return err(404, 'Документ не найден');
+  if (d.status !== 'posted') return err(400, 'Отменить можно только проведённый документ');
+  const items = parseDoc({ ...d }).items;
+  const dir = d.type === 'receipt' ? 'in' : 'out';
+  const wh = 'w1';
+  const now = new Date().toISOString();
+  for (const it of items) {
+    const cur = await env.DB.prepare('SELECT stock, reserved FROM product_stock WHERE product_id=? AND warehouse_id=?').bind(it.product_id, wh).first();
+    const stock = cur ? num(cur.stock) : 0, reserved = cur ? num(cur.reserved) : 0;
+    const newStock = dir === 'in' ? Math.max(0, stock - num(it.qty)) : stock + num(it.qty);
+    await env.DB.prepare('INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?,?,?,?) ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock').bind(it.product_id, wh, newStock, reserved).run();
+    await env.DB.prepare(`INSERT INTO stock_movements (id, product_id, direction, type, qty, date, doc_no, counterparty, note, created_by, created_at, doc_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(genId(), it.product_id, dir === 'in' ? 'out' : 'in', d.type, num(it.qty), now.slice(0, 10), d.no, d.counterparty, 'Отмена документа', auth ? auth.sub : null, now, d.id).run();
+  }
+  await env.DB.prepare("UPDATE stock_docs SET status='cancelled', cancelled_at=? WHERE id=?").bind(now, id).run();
+  return getStockDoc(env, id);
 }
 
 async function listMovements(env, url) {
