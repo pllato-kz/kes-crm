@@ -219,6 +219,12 @@
   // Подгрузка позиций конкретной сделки (для карточки сделки)
   async function loadDeal(id) { return M.deal(await apiFetch('deals/' + encodeURIComponent(id))); }
 
+  // Свежие воронки и этапы из БД (без полной перезагрузки) — для динамичных фильтров отчётов
+  async function refreshDicts() {
+    const [stagesRows, pipeRows] = await Promise.all([apiFetch('deal_stages'), apiFetch('pipelines')]);
+    return { STAGES: buildStages(stagesRows), PIPELINES: buildPipelines(pipeRows) };
+  }
+
   // Загрузка файла в R2 (multipart). Возвращает { key, url, size, type }.
   async function uploadFile(file) {
     const fd = new FormData();
@@ -238,6 +244,6 @@
 
   window.__API__ = {
     apiFetch, login, logout, isAuthed, getToken, clearToken,
-    loadAllData, loadDeal, uploadFile, map: M, toApi,
+    loadAllData, loadDeal, refreshDicts, uploadFile, map: M, toApi,
   };
 })();
