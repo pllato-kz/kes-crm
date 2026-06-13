@@ -2716,9 +2716,9 @@ VIEWS.clients = () => {
   const managers = state.users.filter(u => u.active !== false);
   const searchI = el('input', { placeholder:'Поиск клиента или БИН…', oninput: e => { filterState.q = e.target.value.toLowerCase(); refresh(); } });
   const typeS = el('select', { onchange: e => { filterState.type = e.target.value; refresh(); } },
-    [el('option', { value:'' }, 'Все типы'), el('option', { value:'opt' }, 'Опт'), el('option', { value:'rozn' }, 'Розница'), el('option', { value:'dilr' }, 'Дилер')]);
+    [el('option', { value:'' }, 'Тип'), el('option', { value:'opt' }, 'Опт'), el('option', { value:'rozn' }, 'Розница'), el('option', { value:'dilr' }, 'Дилер')]);
   const cityS = el('select', { onchange: e => { filterState.city = e.target.value; refresh(); } },
-    [el('option', { value:'' }, 'Все города')].concat(cities.map(c => el('option', { value: c }, c))));
+    [el('option', { value:'' }, 'Город')].concat(cities.map(c => el('option', { value: c }, c))));
   const mgrS = el('select', { onchange: e => { filterState.manager = e.target.value; refresh(); } },
     [el('option', { value:'' }, 'Все менеджеры')].concat(managers.map(u => el('option', { value: u.id }, u.name))));
   const fromI = el('input', { type:'date', title:'Последняя сделка с', style:'padding:6px', onchange: e => { filterState.from = e.target.value; refresh(); } });
@@ -2728,6 +2728,23 @@ VIEWS.clients = () => {
     searchI.value = ''; typeS.value = ''; cityS.value = ''; mgrS.value = ''; fromI.value = ''; toI.value = '';
     refresh();
   } }, 'Сбросить');
+
+  // Массовое редактирование: выбор клиентов
+  const selected = new Set();
+  let visibleNow = state.clients;
+  const selAll = el('input', { type:'checkbox', title:'Выбрать всех (по фильтру)' });
+  const bulkCount = el('span', { class:'strong' }, '');
+  const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [
+    bulkCount,
+    el('button', { class:'btn btn-sm btn-primary', onclick: () => openClientBulkEdit([...selected]) }, 'Массовое редактирование'),
+    el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); selAll.checked = false; const tb = tw.querySelector('tbody'); if (tb) tb.replaceWith(buildTbody(visibleNow)); refreshBulk(); } }, 'Снять выбор'),
+  ]);
+  function refreshBulk() { bulkCount.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
+  selAll.onchange = () => {
+    visibleNow.forEach(c => { if (selAll.checked) selected.add(c.id); else selected.delete(c.id); });
+    const tb = tw.querySelector('tbody'); if (tb) tb.replaceWith(buildTbody(visibleNow));
+    refreshBulk();
+  };
 
   const tw = el('div', { class: 'table-wrap' });
   tw.append(el('div', { class: 'table-toolbar' }, [
@@ -2739,6 +2756,7 @@ VIEWS.clients = () => {
     el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
     el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт CSV'),
   ]));
+  tw.append(bulkBar);
 
   function refresh() {
     // «Сбросить» виден только если активен хотя бы один фильтр
@@ -2757,14 +2775,20 @@ VIEWS.clients = () => {
       }
       return true;
     });
+    visibleNow = visible;
     const tb = tw.querySelector('tbody');
     if (tb) tb.replaceWith(buildTbody(visible));
+    selAll.checked = visible.length > 0 && visible.every(x => selected.has(x.id));
+    refreshBulk();
   }
   function buildTbody(list) {
     return el('tbody', {}, list.map(c => {
       const m = userById(c.manager);
       const ct = CLIENT_TYPES[c.type] || { label: '—', color: '#999' };
+      const cb = el('input', { type:'checkbox', checked: selected.has(c.id) ? 'checked' : null, onclick: (e) => e.stopPropagation(),
+        onchange: () => { if (cb.checked) selected.add(c.id); else selected.delete(c.id); selAll.checked = visibleNow.length > 0 && visibleNow.every(x => selected.has(x.id)); refreshBulk(); } });
       return el('tr', { onclick: () => openClientDetail(c.id) }, [
+        el('td', { style:'text-align:center', onclick: (e) => e.stopPropagation() }, cb),
         el('td', {}, [
           el('div', { class:'strong' }, c.name),
           el('div', { class:'muted' }, c.contact + ' · ' + c.phone),
@@ -2787,6 +2811,7 @@ VIEWS.clients = () => {
 
   const t = el('table', { class: 'data' });
   t.append(el('thead', {}, el('tr', {}, [
+    el('th', { style:'width:34px;text-align:center' }, selAll),
     el('th', {}, 'Клиент'),
     el('th', {}, 'БИН'),
     el('th', {}, 'Тип'),
@@ -2802,6 +2827,36 @@ VIEWS.clients = () => {
   wrap.append(tw);
   return wrap;
 };
+
+// Массовое редактирование выбранных клиентов: назначить менеджера всем сразу
+function openClientBulkEdit(ids) {
+  const total = ids.length;
+  if (!total) { toast('Не выбрано ни одного клиента', 'warn'); return; }
+  const mgrSel = el('select', {}, state.users.filter(u => u.active !== false).map(u => el('option', { value: u.id }, u.name)));
+  const applyBtn = el('button', { class:'btn btn-primary', onclick: async () => {
+    const mgr = mgrSel.value;
+    if (!mgr) { toast('Выберите менеджера', 'warn'); return; }
+    applyBtn.disabled = true;
+    const body = { manager_id: mgr };
+    try {
+      for (let i = 0; i < ids.length; i += 8) { // батчами
+        await Promise.all(ids.slice(i, i + 8).map(id => window.__API__.apiFetch('clients/' + id, { method:'PUT', body }).then(() => {
+          const c = byId(state.clients, id); if (c) c.manager = mgr;
+        })));
+      }
+      closeModal(); toast(`Изменено клиентов: ${ids.length}`, 'success'); navigate('clients');
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); applyBtn.disabled = false; }
+  } }, `Применить к ${total}`);
+
+  openModal({
+    title: `Массовое редактирование · ${total} ${plural(total, 'клиент', 'клиента', 'клиентов')}`,
+    body: el('div', {}, [
+      el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Выбранным клиентам будет назначен указанный менеджер.'),
+      el('div', { class:'form-row' }, [el('label', {}, 'Менеджер'), mgrSel]),
+    ]),
+    foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), applyBtn],
+  });
+}
 
 async function openClientDetail(id) {
   let c = byId(state.clients, id);
