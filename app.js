@@ -4957,11 +4957,11 @@ VIEWS.reports = () => {
 VIEWS.archive = () => {
   const wrap = el('div');
   wrap.append(el('div', { class:'page-head' }, [
-    el('div', {}, [el('h1', {}, 'Архив'), el('div', { class:'sub' }, 'Удалённые сделки и клиенты · хранятся 30 дней, затем удаляются навсегда')]),
+    el('div', {}, [el('h1', {}, 'Архив'), el('div', { class:'sub' }, 'Удалённые сделки, клиенты и счета · хранятся 30 дней, затем удаляются навсегда')]),
   ]));
 
   // Тулбар: поиск + сортировка по времени удаления
-  let ARCH = { deals: [], clients: [] };
+  let ARCH = { deals: [], clients: [], invoices: [] };
   let q = '', sort = 'desc';
   const searchI = el('input', { placeholder:'Поиск в архиве…', oninput: (e) => { q = e.target.value.toLowerCase().trim(); render(); } });
   const sortSel = el('select', { style:'padding-right:20px', onchange: (e) => { sort = e.target.value; render(); } }, [
@@ -4980,7 +4980,7 @@ VIEWS.archive = () => {
   async function restore(type, id) {
     try {
       await window.__API__.apiFetch('archive/restore', { method:'POST', body: { type, id } });
-      toast(type === 'deal' ? 'Сделка восстановлена' : 'Клиент восстановлен', 'success');
+      toast(type === 'deal' ? 'Сделка восстановлена' : type === 'client' ? 'Клиент восстановлен' : 'Счёт восстановлен', 'success');
       await loadData(); navigate('archive');
     } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
   }
@@ -4999,6 +4999,9 @@ VIEWS.archive = () => {
     const clients = ARCH.clients
       .filter(c => !q || (String(c.name || '') + ' ' + (c.city || '') + ' ' + (c.bin || '')).toLowerCase().includes(q))
       .slice().sort(byTime);
+    const invoices = ARCH.invoices
+      .filter(iv => { const cl = clientById(iv.client_id); return !q || (String(iv.no || '') + ' ' + (cl ? cl.name : '')).toLowerCase().includes(q); })
+      .slice().sort(byTime);
     host.innerHTML = '';
     host.append(el('div', { style:'font-weight:600;margin:8px 0 10px' }, `Сделки в архиве (${deals.length})`));
     host.append(section({ col:'Сделка', mid:'Сумма' }, deals.map(d => el('tr', {}, [
@@ -5016,8 +5019,19 @@ VIEWS.archive = () => {
       el('td', {}, daysLeft(c.archived_at) + ' дн.'),
       el('td', {}, el('button', { class:'btn btn-sm btn-primary', onclick: () => restore('client', c.id) }, '↩ Восстановить')),
     ])), q ? 'Ничего не найдено' : 'Архив клиентов пуст'));
+    host.append(el('div', { style:'font-weight:600;margin:24px 0 10px' }, `Счета в архиве (${invoices.length})`));
+    host.append(section({ col:'№ счёта', mid:'Клиент' }, invoices.map(iv => {
+      const cl = clientById(iv.client_id);
+      return el('tr', {}, [
+        el('td', { class:'strong' }, iv.no || '—'),
+        el('td', {}, cl ? cl.name : '—'),
+        el('td', { class:'muted' }, iv.archived_at ? fmtDate(iv.archived_at) : '—'),
+        el('td', {}, daysLeft(iv.archived_at) + ' дн.'),
+        el('td', {}, el('button', { class:'btn btn-sm btn-primary', onclick: () => restore('invoice', iv.id) }, '↩ Восстановить')),
+      ]);
+    }), q ? 'Ничего не найдено' : 'Архив счетов пуст'));
   }
-  window.__API__.apiFetch('archive').then(data => { ARCH = { deals: data.deals || [], clients: data.clients || [] }; render(); })
+  window.__API__.apiFetch('archive').then(data => { ARCH = { deals: data.deals || [], clients: data.clients || [], invoices: data.invoices || [] }; render(); })
     .catch(err => { host.innerHTML = ''; host.append(el('div', { class:'pill pill-danger', style:'margin:12px' }, 'Ошибка: ' + ((err && err.message) || err))); });
   return wrap;
 };
