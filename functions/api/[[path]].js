@@ -1076,13 +1076,18 @@ async function autoShipDeal(env, dealId, auth) {
 
 async function listMovements(env, url) {
   const product = (url.searchParams.get('product') || '').trim();
-  const limit = clampInt(url.searchParams.get('limit'), 50, 1, 500);
-  const where = product ? 'WHERE m.product_id = ?' : '';
-  const args = product ? [product] : [];
+  const from = (url.searchParams.get('from') || '').trim();
+  const to = (url.searchParams.get('to') || '').trim();
+  const limit = clampInt(url.searchParams.get('limit'), 50, 1, 1000);
+  const conds = [], args = [];
+  if (product) { conds.push('m.product_id = ?'); args.push(product); }
+  if (from) { conds.push('substr(m.date,1,10) >= ?'); args.push(from); }
+  if (to) { conds.push('substr(m.date,1,10) <= ?'); args.push(to); }
+  const ws = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
   const r = await env.DB.prepare(
     `SELECT m.*, p.name AS product_name, p.sku AS product_sku
        FROM stock_movements m LEFT JOIN products p ON p.id = m.product_id
-      ${where} ORDER BY m.created_at DESC LIMIT ?`
+      ${ws} ORDER BY m.created_at DESC LIMIT ?`
   ).bind(...args, limit).all();
   return json(r.results);
 }
