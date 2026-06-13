@@ -4463,6 +4463,35 @@ VIEWS.reports = () => {
   return wrap;
 };
 
+// Создание новой роли (директор) — появляется колонкой в матрице доступа
+function openNewRole() {
+  const nameI = el('input', { placeholder: 'Например: Логист' });
+  const colorI = el('input', { type: 'color', value: '#6B7280', style: 'width:48px;height:34px;padding:2px' });
+  openModal({
+    title: 'Новая роль',
+    body: el('div', {}, [
+      el('div', { class: 'form-row' }, [el('label', {}, 'Название роли'), nameI]),
+      el('div', { class: 'form-row' }, [el('label', {}, 'Цвет'), colorI]),
+      el('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, 'После создания отметьте доступные разделы в матрице и нажмите «Сохранить доступы».'),
+    ]),
+    foot: [
+      el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
+      el('button', { class: 'btn btn-primary', onclick: async (e) => {
+        const label = nameI.value.trim();
+        if (!label) { nameI.focus(); return; }
+        const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
+        const key = (slug || 'role') + '-' + Math.random().toString(36).slice(2, 6);
+        const btn = e.currentTarget; btn.disabled = true;
+        try {
+          await window.__API__.apiFetch('roles', { method: 'POST', body: { key, label, color: colorI.value, modules: '[]', can_edit: '{}', see_all_data: 0 } });
+          await loadData(); closeModal(); navigate('settings'); toast('Роль создана', 'success');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); btn.disabled = false; }
+      } }, 'Создать'),
+    ],
+  });
+  setTimeout(() => nameI.focus(), 30);
+}
+
 // ============================================================
 // VIEW: SETTINGS
 // ============================================================
@@ -4600,8 +4629,11 @@ VIEWS.settings = () => {
     ['catalog','Каталог'],['warehouse','Склад'],['shipments','Отгрузки'],['invoices','Документы'],
     ['suppliers','Поставщики'],['tasks','Задачи'],['reports','Отчёты'],['settings','Настройки'],
   ];
-  const roleCols = [['director','👔 Директор'],['manager','💼 Менеджер'],['warehouse','🏭 Кладовщик'],['accountant','💰 Бухгалтер']]
-    .filter(([rk]) => ROLES[rk]);
+  const CORE_ROLES = ['director', 'manager', 'warehouse', 'accountant'];
+  // Колонки — все роли из БД (включая новые), подписи без иконок
+  const roleCols = Object.entries(ROLES)
+    .sort((a, b) => { const ia = CORE_ROLES.indexOf(a[0]), ib = CORE_ROLES.indexOf(b[0]); return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib); })
+    .map(([rk, r]) => [rk, r.label]);
   // черновик доступов (Set модулей по роли) — редактируется только директором
   const draft = {}; roleCols.forEach(([rk]) => { draft[rk] = new Set(ROLES[rk].modules); });
 
@@ -4619,14 +4651,27 @@ VIEWS.settings = () => {
 
   permsCard.append(el('div', { class:'card-head' }, [
     el('h3', {}, 'Матрица доступа по ролям'),
-    saveRolesBtn,
+    el('div', { class:'row', style:'gap:8px' }, [
+      canEditUsers ? el('button', { class:'btn btn-sm', onclick: openNewRole }, '+ Роль') : null,
+      saveRolesBtn,
+    ]),
   ]));
   if (canEditUsers) permsCard.append(el('div', { class:'muted', style:'font-size:12px;margin:-6px 4px 10px' }, 'Отметьте, какие разделы видит каждая роль, и нажмите «Сохранить доступы». Раздел «Настройки» у директора зафиксирован.'));
 
   const pt = el('table', { class:'data' });
   pt.append(el('thead', {}, el('tr', {}, [
     el('th', {}, 'Модуль'),
-    ...roleCols.map(([, label]) => el('th', { class:'num' }, label)),
+    ...roleCols.map(([rk, label]) => el('th', { class:'num' },
+      (canEditUsers && !CORE_ROLES.includes(rk))
+        ? el('span', { style:'display:inline-flex;align-items:center;gap:5px;justify-content:flex-end' }, [
+            label,
+            el('button', { class:'x-btn', title:'Удалить роль', onclick: async () => {
+              if (!confirm(`Удалить роль «${label}»?`)) return;
+              try { await window.__API__.apiFetch('roles/' + encodeURIComponent(rk), { method:'DELETE' }); await loadData(); navigate('settings'); toast('Роль удалена', 'success'); }
+              catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+            } }, '×'),
+          ])
+        : label)),
   ])));
   pt.append(el('tbody', {}, ALL_MODULES.map(([k,label]) => el('tr', {}, [
     el('td', { class:'strong' }, label),
