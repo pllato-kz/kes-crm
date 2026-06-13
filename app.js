@@ -3268,17 +3268,25 @@ async function openStockDoc(type, docId, onDone) {
   }
 
   const sp = { draft: ['pill-muted', 'Черновик'], posted: ['pill-success', 'Проведён'], cancelled: ['pill-danger', 'Отменён'] }[status] || ['pill-muted', status];
-  openModal({
-    title: (isIn ? '📥 Приход' : '📤 Расход') + (doc ? ' · ' + doc.no : ''),
-    body: el('div', {}, [
-      el('div', { style:'margin-bottom:8px' }, el('span', { class:'pill ' + sp[0] }, sp[1])),
-      el('div', { class:'form-row' }, [el('label', {}, isIn ? 'Поставщик' : 'Получатель / причина'), partyI]),
-      el('div', { class:'form-row' }, [el('label', {}, 'Дата'), dateI]),
-      el('div', { class:'form-row' }, [el('label', {}, 'Примечание'), noteI]),
-      el('div', { style:'font-weight:600;margin:12px 0 4px' }, 'Позиции'),
+  // Левая панель — реквизиты документа, правая — товары (как в карточке сделки)
+  const left = el('div', { class:'deal-left' }, [
+    el('div', { class:'section-title' }, isIn ? 'Приход' : 'Расход'),
+    el('div', { style:'margin-bottom:10px' }, el('span', { class:'pill ' + sp[0] }, sp[1])),
+    el('div', { class:'form-row' }, [el('label', {}, isIn ? 'Поставщик' : 'Получатель / причина'), partyI]),
+    el('div', { class:'form-row' }, [el('label', {}, 'Дата'), dateI]),
+    el('div', { class:'form-row' }, [el('label', {}, 'Примечание'), noteI]),
+  ]);
+  const right = el('div', { class:'deal-right' }, [
+    el('div', { style:'padding:12px 14px;overflow-y:auto;flex:1' }, [
+      el('div', { class:'section-title' }, 'Товары'),
       itemsHost,
       pickerHost,
     ]),
+  ]);
+  openModal({
+    wide: true,
+    title: (isIn ? '📥 Приход' : '📤 Расход') + (doc ? ' · ' + doc.no : ''),
+    body: el('div', { class:'deal-modal' }, [el('div', { class:'deal-split' }, [left, right])]),
     foot,
   });
 }
