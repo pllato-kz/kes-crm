@@ -1423,6 +1423,20 @@ async function autoCreateShipmentForDeal(d) {
   return mapped;
 }
 
+// Автосоздание счёта из сделки — данные заполняются из сделки/клиента.
+async function autoCreateInvoiceForDeal(d) {
+  const due = new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString().slice(0, 10); // срок оплаты +5 дней
+  const iv = {
+    no: 'СФ-2026-0' + (240 + state.invoices.length),
+    deal: d.id, client: d.client, date: new Date().toISOString().slice(0, 10),
+    amount: d.amount || 0, status: 'pending', due,
+  };
+  const saved = await window.__API__.apiFetch('invoices', { method: 'POST', body: window.__API__.toApi.invoice(iv) });
+  const mapped = window.__API__.map.invoice(saved);
+  state.invoices.unshift(mapped);
+  return mapped;
+}
+
 // Двусторонняя синхронизация: статус отгрузки → этап связанной сделки.
 // (обратное направление — этап сделки → статус отгрузки — делает бэкенд writeDeal)
 async function setShipmentStatus(s, status) {
@@ -2871,24 +2885,33 @@ async function openDealDetail(id) {
 
   // ----- Документы: счета клиента (синхронно с разделом «Документы») -----
   const docsList = el('div', { style:'padding:0 14px 14px;overflow-y:auto' });
-  (function renderDocs() {
+  function renderDocs() {
     const invs = state.invoices.filter(iv => iv.client === d.client || iv.deal === d.id);
     docsList.innerHTML = '';
-    if (!invs.length) { docsList.append(el('div', { class:'muted', style:'font-size:12px;padding:8px 0' }, 'Счетов по клиенту нет')); return; }
-    const stMap = { paid:['pill-success','Оплачено'], pending:['pill-warn','Ожидает'], overdue:['pill-danger','Просрочка'] };
-    const t = el('table', { class:'data' });
-    t.append(el('thead', {}, el('tr', {}, [el('th', {}, '№ счёта'), el('th', {}, 'Дата'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Статус')])));
-    t.append(el('tbody', {}, invs.map(iv => {
-      const sp = stMap[iv.status] || ['pill-muted', iv.status || '—'];
-      return el('tr', { style:'cursor:pointer', onclick: () => { closeModal(); openInvoiceDetail(iv.id); } }, [
-        el('td', { class:'strong' }, iv.no),
-        el('td', { class:'muted' }, iv.date ? fmtDate(iv.date) : '—'),
-        el('td', { class:'num strong' }, fmtMoneyK(iv.amount)),
-        el('td', {}, el('span', { class:'pill ' + sp[0] }, sp[1])),
-      ]);
-    })));
-    docsList.append(t);
-  })();
+    if (!invs.length) {
+      docsList.append(el('div', { class:'muted', style:'font-size:12px;padding:8px 0' }, 'Счетов по сделке нет'));
+    } else {
+      const stMap = { paid:['pill-success','Оплачено'], pending:['pill-warn','Ожидает'], overdue:['pill-danger','Просрочка'] };
+      const t = el('table', { class:'data' });
+      t.append(el('thead', {}, el('tr', {}, [el('th', {}, '№ счёта'), el('th', {}, 'Дата'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Статус')])));
+      t.append(el('tbody', {}, invs.map(iv => {
+        const sp = stMap[iv.status] || ['pill-muted', iv.status || '—'];
+        return el('tr', { style:'cursor:pointer', onclick: () => { closeModal(); openInvoiceDetail(iv.id); } }, [
+          el('td', { class:'strong' }, iv.no),
+          el('td', { class:'muted' }, iv.date ? fmtDate(iv.date) : '—'),
+          el('td', { class:'num strong' }, fmtMoneyK(iv.amount)),
+          el('td', {}, el('span', { class:'pill ' + sp[0] }, sp[1])),
+        ]);
+      })));
+      docsList.append(t);
+    }
+    docsList.append(el('button', { class:'btn btn-sm btn-primary', style:'margin-top:10px', onclick: async (e) => {
+      e.currentTarget.disabled = true;
+      try { await autoCreateInvoiceForDeal(d); renderDocs(); toast('Счёт создан из сделки', 'success'); }
+      catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); e.currentTarget.disabled = false; }
+    } }, '+ Создать счёт из сделки'));
+  }
+  renderDocs();
   const paneDocs = el('div', { class:'chat-pane', 'data-pane':'docs' }, [el('div', { class:'section-title', style:'padding:12px 14px 6px' }, 'Счета клиента'), docsList]);
 
   // ----- Отгрузка: связанная отгрузка сделки (двусторонняя синхронизация статуса) -----
