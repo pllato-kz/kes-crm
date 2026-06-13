@@ -4794,7 +4794,7 @@ VIEWS.archive = () => {
   let ARCH = { deals: [], clients: [] };
   let q = '', sort = 'desc';
   const searchI = el('input', { placeholder:'Поиск в архиве…', oninput: (e) => { q = e.target.value.toLowerCase().trim(); render(); } });
-  const sortSel = el('select', { onchange: (e) => { sort = e.target.value; render(); } }, [
+  const sortSel = el('select', { style:'padding-right:20px', onchange: (e) => { sort = e.target.value; render(); } }, [
     el('option', { value:'desc' }, 'Сначала новые'),
     el('option', { value:'asc' }, 'Сначала старые'),
   ]);
