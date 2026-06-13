@@ -3709,12 +3709,12 @@ function openTaskDetail(id) {
   const prio = fSelect('Приоритет', [{value:'low',label:'низкий'},{value:'medium',label:'средний'},{value:'high',label:'высокий'}], t.priority || 'medium');
   const due = fDateField('Дата окончания', String(t.due || '').slice(0, 10));
   const time = fTimeField('Время выполнения', (String(t.due || '').slice(11, 16) || '18:00'));
+  const status = fSelect('Статус', TASK_STATUS, t.status || (t.done ? 'done' : 'new'));
+  const start = fDateField('Дата начала', String(t.startDate || '').slice(0, 10));
+  const dealSel = fSelect('Связанная сделка', [{ value:'', label:'— Не связана —' }, ...state.deals.map(d => ({ value:d.id, label:d.title }))], t.deal || '');
+  const comments = fTextarea('Комментарии', t.comments || '');
 
-  const linkedDeal = t.deal ? byId(state.deals, t.deal) : null;
-  const meta = el('div', { class:'muted', style:'font-size:12px;margin-top:8px' },
-    linkedDeal ? `Связана со сделкой: ${linkedDeal.title}` : 'Не связана со сделкой');
-
-  const fields = [title, desc, owner, prio, due, time];
+  const fields = [title, desc, status, prio, owner, dealSel, start, due, time, comments];
   if (!canEdit) fields.forEach(f => f.row.querySelectorAll('input,select,textarea').forEach(i => i.disabled = true));
 
   const foot = [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')];
@@ -3734,6 +3734,7 @@ function openTaskDetail(id) {
       const upd = {
         id: t.id, title: title.get().trim(), description: desc.get(), owner: owner.get(),
         due: due.getDate() + ' ' + (time.get() || '18:00'), priority: prio.get(),
+        status: status.get(), startDate: start.getDate(), deal: dealSel.get() || null, comments: comments.get(),
       };
       try {
         const saved = await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body: window.__API__.toApi.task(upd) });
@@ -3743,7 +3744,7 @@ function openTaskDetail(id) {
     } }, 'Сохранить'));
   }
 
-  openModal({ title: 'Задача', body: el('div', {}, [...fields.map(f => f.row), meta]), foot });
+  openModal({ title: 'Редактирование задачи', body: el('div', {}, fields.map(f => f.row)), foot });
 }
 
 
