@@ -218,7 +218,7 @@ const ROUTES = [
   'shipments','invoices','suppliers','tasks','reports','settings'
 ];
 
-function navigate(view, params = {}) {
+function navigate(view, params = {}, noHash = false) {
   if (!ROUTES.includes(view)) view = 'dashboard';
   // Гейт прав: если у роли нет этого модуля — показываем заглушку «нет доступа»
   if (currentUser && !can('see-module', view)) {
@@ -250,7 +250,7 @@ function navigate(view, params = {}) {
   const main = $('#main');
   main.innerHTML = '';
   const renderer = VIEWS[view] || VIEWS.dashboard;
-  updateHash(view, false); // синхронизируем URL (#view?...состояние) до рендера
+  if (!noHash) updateHash(view, false); // синхронизируем URL (#view?...состояние) до рендера
   main.append(renderer(params));
 }
 
@@ -302,6 +302,8 @@ const ROUTE_STATE = {
   },
 };
 let __routingSuppress = false;
+// Текущая открытая карточка-сущность (#deals/{id} | #clients/{id}) — чтобы closeModal вернул URL к списку
+let __entityRoute = null;
 
 function buildHash(view) {
   let h = view;
@@ -316,7 +318,10 @@ function buildHash(view) {
 function parseHash() {
   const raw = String(location.hash || '').replace(/^#\/?/, '');
   const qi = raw.indexOf('?');
-  const view = (qi >= 0 ? raw.slice(0, qi) : raw).trim();
+  const path = (qi >= 0 ? raw.slice(0, qi) : raw).trim();
+  const seg = path.split('/');
+  const view = (seg[0] || '').trim();
+  const id = seg[1] ? decodeURIComponent(seg[1]).trim() : '';   // #deals/{id} | #clients/{id}
   const params = {};
   if (qi >= 0) raw.slice(qi + 1).split('&').forEach(kv => {
     if (!kv) return;
@@ -325,7 +330,15 @@ function parseHash() {
     const v = i >= 0 ? decodeURIComponent(kv.slice(i + 1)) : '';
     if (k) params[k] = v;
   });
-  return { view, params };
+  return { view, id, params };
+}
+// Устанавливает URL карточки (#deals/{id}) при открытии и запоминает сущность для возврата
+function setEntityHash(view, id) {
+  __entityRoute = { view, id };
+  const target = view + '/' + encodeURIComponent(id);
+  if (String(location.hash || '').replace(/^#\/?/, '') === target) return; // уже стоит (открыли по ссылке)
+  __routingSuppress = true;
+  location.hash = target; // запись в историю — кнопка «назад» закроет карточку
 }
 function updateHash(view, replace) {
   const target = buildHash(view);
@@ -338,13 +351,34 @@ function updateHash(view, replace) {
   }
 }
 function routeFromHash() {
-  const { view, params } = parseHash();
+  const { view, id, params } = parseHash();
   if (view && ROUTES.includes(view) && currentUser && can('see-module', view)) {
     if (ROUTE_STATE[view]) { try { ROUTE_STATE[view].apply(params); } catch (e) {} }
+    if (id && (view === 'deals' || view === 'clients')) {
+      navigate(view, params, true);                 // рендерим список-основу, не затирая URL карточки
+      if (view === 'deals') openDealDetail(id);
+      else openClientDetail(id);
+      return;
+    }
+    // в URL больше нет id, а карточка открыта (напр. кнопка «назад») — закрываем её
+    if (__entityRoute) { __entityRoute = null; const mm = $('#modal'); if (mm) mm.classList.remove('show'); }
     navigate(view, params);
   } else {
     navigate((currentUser && role().modules[0]) || 'dashboard');
   }
+}
+// Карточка не найдена по ID — страница «не найдено»
+function showNotFound(view, id) {
+  __entityRoute = { view, id };
+  openModal({
+    title: 'Не найдено',
+    body: el('div', { class: 'empty', style: 'padding:48px 20px;text-align:center' }, [
+      el('div', { class: 'em-icon', style: 'font-size:44px' }, '🔍'),
+      el('div', { class: 'em-text', style: 'margin-top:10px;font-weight:600;font-size:16px' }, (view === 'clients' ? 'Клиент' : 'Сделка') + ' не найдена'),
+      el('div', { class: 'muted', style: 'margin-top:6px' }, 'Запись с идентификатором «' + id + '» не существует или была удалена.'),
+    ]),
+    foot: [el('button', { class: 'btn btn-primary', onclick: closeModal }, '← К списку')],
+  });
 }
 window.addEventListener('hashchange', () => {
   if (__routingSuppress) { __routingSuppress = false; return; } // мы сами поменяли hash — не перерисовываем повторно
@@ -398,6 +432,8 @@ function openModal({ title, body, foot = [], wide = false }) {
 function closeModal() {
   const m = $('#modal'); if (m) m.classList.remove('show');
   const box = document.querySelector('#modal .modal'); if (box) box.classList.remove('modal-xl');
+  // если закрыли карточку-сущность — возвращаем URL к списку (без записи в историю)
+  if (__entityRoute) { const v = __entityRoute.view; __entityRoute = null; updateHash(v, true); }
 }
 // Делегированные обработчики через document — переживают перерисовку body
 document.addEventListener('click', (e) => {
@@ -2082,15 +2118,25 @@ function openStageManager() {
 }
 
 async function openDealDetail(id) {
-  const d = byId(state.deals, id);
-  if (!d) return;
-  // ленивая подгрузка позиций сделки из БД
-  try {
-    const full = await window.__API__.loadDeal(id);
-    d.lineItems = full.lineItems || [];
-    if (full.amount != null) d.amount = full.amount;
-    if (full.items != null) d.items = full.items;
-  } catch (e) { if (!d.lineItems) d.lineItems = []; }
+  let d = byId(state.deals, id);
+  if (!d) {
+    // прямая ссылка #deals/{id}: сделки нет в памяти — тянем из БД
+    try {
+      d = await window.__API__.loadDeal(id);
+      if (!d || !d.id) throw new Error('not found');
+      state.deals.push(d);
+    } catch (e) { showNotFound('deals', id); return; }
+  } else {
+    // ленивая подгрузка позиций сделки из БД
+    try {
+      const full = await window.__API__.loadDeal(id);
+      d.lineItems = full.lineItems || [];
+      if (full.amount != null) d.amount = full.amount;
+      if (full.items != null) d.items = full.items;
+    } catch (e) { if (!d.lineItems) d.lineItems = []; }
+  }
+  setEntityHash('deals', d.id); // уникальный URL карточки
+  if (!d.lineItems) d.lineItems = [];
   let history = [];
   try { history = await window.__API__.apiFetch('deals/' + id + '/history'); } catch (e) {}
   const cl = clientById(d.client);
@@ -2562,9 +2608,18 @@ VIEWS.clients = () => {
   return wrap;
 };
 
-function openClientDetail(id) {
-  const c = byId(state.clients, id);
-  if (!c) return;
+async function openClientDetail(id) {
+  let c = byId(state.clients, id);
+  if (!c) {
+    // прямая ссылка #clients/{id}: клиента нет в памяти — тянем из БД
+    try {
+      const raw = await window.__API__.apiFetch('clients/' + encodeURIComponent(id));
+      c = window.__API__.map.client(raw);
+      if (!c || !c.id) throw new Error('not found');
+      state.clients.push(c);
+    } catch (e) { showNotFound('clients', id); return; }
+  }
+  setEntityHash('clients', c.id); // уникальный URL карточки
   const dealsOf = state.deals.filter(d => d.client === id);
   const body = el('div', {}, [
     el('dl', { class:'kv' }, [
