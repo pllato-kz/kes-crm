@@ -5016,7 +5016,7 @@ VIEWS.settings = () => {
   const ALL_MODULES = [
     ['dashboard','Дашборд'],['deals','Сделки'],['clients','Клиенты'],
     ['catalog','Каталог'],['warehouse','Склад'],['shipments','Отгрузки'],['invoices','Документы'],
-    ['suppliers','Поставщики'],['tasks','Задачи'],['reports','Отчёты'],['settings','Настройки'],
+    ['suppliers','Поставщики'],['tasks','Задачи'],['reports','Отчёты'],['settings','Настройки'],['archive','Архив'],
   ];
   const CORE_ROLES = ['director', 'manager', 'warehouse', 'accountant'];
   // Колонки — все роли из БД (включая новые), подписи без иконок
@@ -5238,7 +5238,7 @@ function logout() {
 function role() { return ROLES[currentUser?.roleKey] || ROLES.manager; }
 function can(action, target) {
   const r = role();
-  if (action === 'see-module')  return target === 'archive' ? (currentUser && currentUser.roleKey === 'director') : r.modules.includes(target);
+  if (action === 'see-module')  return r.modules.includes(target);
   if (action === 'edit-deal')   return r.canEdit.deals === 'all' || (r.canEdit.deals === 'own' && target?.manager === currentUser.id);
   if (action === 'edit-client') return r.canEdit.clients === 'all' || (r.canEdit.clients === 'own' && target?.manager === currentUser.id);
   if (action === 'edit-product') return r.canEdit.products === true;
@@ -5375,8 +5375,8 @@ function renderShell() {
     ]);
     nav.appendChild(btn);
   });
-  // Архив (удалённые сделки/клиенты) — для директора
-  if (currentUser.roleKey === 'director') nav.appendChild(el('button', { 'data-view': 'archive' }, [el('span', { class: 'icon' }, '🗄'), ' Архив']));
+  // Архив (удалённые сделки/клиенты) — по праву доступа «Архив»
+  if (can('see-module', 'archive')) nav.appendChild(el('button', { 'data-view': 'archive' }, [el('span', { class: 'icon' }, '🗄'), ' Архив']));
   refreshPipelineNav();
 
   // Обработчики
