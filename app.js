@@ -1849,7 +1849,7 @@ VIEWS.dashboard = () => {
   const actList = el('div', { class: 'activity' });
   myTasks.slice(0, 5).forEach(t => {
     const u = userById(t.owner);
-    actList.append(el('div', { class: 'activity-item' }, [
+    actList.append(el('div', { class: 'activity-item clickable', title: 'Открыть задачу', onclick: () => openTaskDetail(t.id) }, [
       el('div', { class: 'avatar', style: `width:32px;height:32px;background:${u.color}` }, u.avatar),
       el('div', { class: 'av-body flex-1' }, [
         el('div', {}, t.title),

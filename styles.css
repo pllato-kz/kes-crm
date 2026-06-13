@@ -539,6 +539,11 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .activity-item {
   display: flex; gap: 12px;
 }
+.activity-item.clickable {
+  cursor: pointer; padding: 6px 8px; margin: 0 -8px;
+  border-radius: var(--radius-sm); transition: background .15s;
+}
+.activity-item.clickable:hover { background: var(--bg); }
 .activity-item .av-dot {
   width: 32px; height: 32px;
   border-radius: 50%;
