@@ -2724,7 +2724,7 @@ VIEWS.clients = () => {
     [el('option', { value:'' }, 'Все менеджеры')].concat(managers.map(u => el('option', { value: u.id }, u.name))));
   const fromI = el('input', { type:'date', title:'Последняя сделка с', style:'padding:6px', onchange: e => { filterState.from = e.target.value; refresh(); } });
   const toI = el('input', { type:'date', title:'Последняя сделка по', style:'padding:6px', onchange: e => { filterState.to = e.target.value; refresh(); } });
-  const resetBtn = el('button', { class:'btn btn-sm', style:'visibility:hidden', onclick: () => {
+  const resetBtn = el('button', { class:'btn btn-sm', style:'display:none', onclick: () => {
     Object.assign(filterState, { q:'', type:'', city:'', manager:'', from:'', to:'' });
     searchI.value = ''; typeS.value = ''; cityS.value = ''; mgrS.value = ''; fromI.value = ''; toI.value = '';
     refresh();
@@ -2748,26 +2748,24 @@ VIEWS.clients = () => {
   };
 
   const tw = el('div', { class: 'table-wrap' });
-  tw.append(el('div', { class: 'table-toolbar', style:'flex-wrap:nowrap;align-items:center' }, [
-    // Фильтры — слева, переносятся внутри своей колонки
-    el('div', { style:'display:flex;flex-wrap:wrap;gap:10px;align-items:center;flex:1;min-width:0' }, [
-      searchI, typeS, cityS, mgrS,
-      el('span', { class:'muted', style:'font-size:12px' }, 'Послед. сделка c:'), fromI,
-      el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
-    ]),
-    // Справа в одну строку: Сбросить (резервирует место) + Импорт + Экспорт — без переносов
-    el('div', { style:'display:flex;gap:8px;flex:none;align-items:center' }, [
-      resetBtn,
-      el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
-      el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
-    ]),
+  // Фильтры — на своих местах (обычный ряд)
+  tw.append(el('div', { class: 'table-toolbar' }, [
+    searchI, typeS, cityS, mgrS,
+    el('span', { class:'muted', style:'font-size:12px' }, 'Послед. сделка c:'), fromI,
+    el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
+    resetBtn,
+  ]));
+  // Импорт/Экспорт — ниже блока фильтров, справа
+  tw.append(el('div', { style:'display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-bottom:1px solid var(--border);background:#FAFBFC' }, [
+    el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
+    el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
   ]));
   tw.append(bulkBar);
 
   function refresh() {
     // «Сбросить» виден только если активен хотя бы один фильтр
     const anyActive = !!(filterState.q || filterState.type || filterState.city || filterState.manager || filterState.from || filterState.to);
-    resetBtn.style.visibility = anyActive ? 'visible' : 'hidden';
+    resetBtn.style.display = anyActive ? '' : 'none';
     const visible = state.clients.filter(c => {
       if (filterState.q && !(c.name+c.bin+c.contact).toLowerCase().includes(filterState.q)) return false;
       if (filterState.type && c.type !== filterState.type) return false;
