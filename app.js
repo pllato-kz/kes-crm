@@ -1660,6 +1660,7 @@ VIEWS.deals = () => {
   const wrap = el('div');
   const isList = DEALS_VIEW === 'list';
   const all = visibleDeals();
+  const selected = new Set(); // выбранные сделки (список) для массового редактирования
 
   const subEl = el('div', { class: 'sub' });
   wrap.append(el('div', { class: 'page-head' }, [
@@ -1717,6 +1718,7 @@ VIEWS.deals = () => {
   }
 
   function renderContent() {
+    selected.clear(); // при перестроении списка выбор сбрасывается
     const deals = filtered();
     subEl.textContent = `${deals.length} ${role().seeAllData ? 'сделок' : 'ваших сделок'} · сумма ${fmtMoneyK(deals.reduce((s, d) => s + d.amount, 0))}`;
     content.innerHTML = '';
@@ -1725,14 +1727,31 @@ VIEWS.deals = () => {
 
   function buildDealsTable(deals) {
     const tw = el('div', { class: 'table-wrap' });
+
+    // Панель массового редактирования (показывается при выборе)
+    const countSpan = el('span', { class:'strong' }, '');
+    const rowChecks = [];
+    const selAll = el('input', { type:'checkbox', title:'Выбрать все по фильтру' });
+    const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [
+      countSpan,
+      el('button', { class:'btn btn-sm btn-primary', onclick: () => openBulkEdit([...selected]) }, 'Массовое редактирование'),
+      el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); rowChecks.forEach(c => { c.checked = false; }); selAll.checked = false; refreshBulk(); } }, 'Снять выбор'),
+    ]);
+    function refreshBulk() { countSpan.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
+    selAll.onchange = () => { deals.forEach((d, i) => { if (selAll.checked) selected.add(d.id); else selected.delete(d.id); if (rowChecks[i]) rowChecks[i].checked = selAll.checked; }); refreshBulk(); };
+
     const t = el('table', { class:'data' });
     t.append(el('thead', {}, el('tr', {}, [
+      el('th', { style:'width:34px;text-align:center' }, selAll),
       el('th', {}, '№'), el('th', {}, 'Сделка'), el('th', {}, 'Клиент'), el('th', {}, 'Менеджер'),
       el('th', {}, 'Этап'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Создана'), el('th', {}, 'Срок'),
     ])));
-    t.append(el('tbody', {}, deals.length ? deals.map(d => {
+    t.append(el('tbody', {}, deals.length ? deals.map((d, i) => {
       const cl = clientById(d.client); const m = userById(d.manager); const s = stageById(d.stage);
+      const cb = el('input', { type:'checkbox', onclick: (e) => e.stopPropagation(), onchange: () => { if (cb.checked) selected.add(d.id); else selected.delete(d.id); selAll.checked = deals.length > 0 && deals.every(x => selected.has(x.id)); refreshBulk(); } });
+      rowChecks[i] = cb;
       return el('tr', { style:'cursor:pointer', onclick: () => openDealDetail(d.id) }, [
+        el('td', { style:'text-align:center', onclick: (e) => e.stopPropagation() }, cb),
         el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, '№' + d.no),
         el('td', { class:'strong' }, d.title),
         el('td', {}, cl ? cl.name : '—'),
@@ -1742,8 +1761,9 @@ VIEWS.deals = () => {
         el('td', { class:'muted' }, d.created ? fmtDate(d.created) : '—'),
         el('td', { class:'muted' }, d.target ? fmtDate(d.target) : '—'),
       ]);
-    }) : [el('tr', {}, el('td', { colspan:8, class:'muted', style:'text-align:center;padding:24px' }, 'Сделок не найдено'))]));
-    tw.append(t);
+    }) : [el('tr', {}, el('td', { colspan:9, class:'muted', style:'text-align:center;padding:24px' }, 'Сделок не найдено'))]));
+    tw.append(bulkBar, t);
+    refreshBulk();
     return tw;
   }
 
@@ -1865,6 +1885,55 @@ VIEWS.deals = () => {
   renderContent();
   return wrap;
 };
+
+// Массовое редактирование выбранных сделок: менеджер / этап / название
+function openBulkEdit(ids) {
+  const total = ids.length;
+  if (!total) { toast('Не выбрано ни одной сделки', 'warn'); return; }
+  const useMgr = el('input', { type:'checkbox' });
+  const mgrSel = el('select', {}, state.users.filter(u => u.active !== false).map(u => el('option', { value:u.id }, u.name)));
+  const useStage = el('input', { type:'checkbox' });
+  const stageSel = el('select', {}, STAGES.map(s => el('option', { value:s.id }, s.label)));
+  const useTitle = el('input', { type:'checkbox' });
+  const titleI = el('input', { placeholder:'Новое название' });
+  const fr = (chk, label, ctrl) => el('div', { class:'row', style:'gap:10px;align-items:center;margin-bottom:10px' }, [chk, el('span', { style:'flex:none;width:96px;font-size:13px' }, label), ctrl]);
+
+  const applyBtn = el('button', { class:'btn btn-primary', onclick: async () => {
+    const body = {};
+    if (useMgr.checked) body.manager_id = mgrSel.value;
+    if (useStage.checked) body.stage_id = stageSel.value;
+    if (useTitle.checked) { if (!titleI.value.trim()) { toast('Введите название', 'warn'); return; } body.title = titleI.value.trim(); }
+    if (!Object.keys(body).length) { toast('Отметьте хотя бы одно поле для изменения', 'warn'); return; }
+    if (!confirm(`Применить изменения к ${total} ${plural(total, 'сделке', 'сделкам', 'сделкам')}?`)) return;
+    applyBtn.disabled = true; applyBtn.textContent = 'Применение…';
+    let ok = 0, fail = 0;
+    for (let i = 0; i < ids.length; i += 8) {
+      await Promise.all(ids.slice(i, i + 8).map(async (id) => {
+        try {
+          await window.__API__.apiFetch('deals/' + id, { method:'PUT', body });
+          const d = byId(state.deals, id);
+          if (d) { if ('manager_id' in body) d.manager = body.manager_id; if ('stage_id' in body) d.stage = body.stage_id; if ('title' in body) d.title = body.title; }
+          ok++;
+        } catch (e) { fail++; }
+      }));
+    }
+    closeModal();
+    toast(`Изменено: ${ok}${fail ? ', ошибок ' + fail : ''}`, fail ? 'warn' : 'success');
+    navigate('deals');
+  } }, 'Применить');
+
+  openModal({
+    title: 'Массовое редактирование',
+    body: el('div', {}, [
+      el('p', { style:'font-size:13px;margin:0 0 4px' }, ['Будет изменено: ', el('b', {}, String(total)), ' ' + plural(total, 'сделка', 'сделки', 'сделок')]),
+      el('p', { class:'muted', style:'font-size:11.5px;margin:0 0 14px' }, 'Отметьте поля — изменения применятся ко всем выбранным сделкам одновременно.'),
+      fr(useMgr, 'Менеджер', mgrSel),
+      fr(useStage, 'Этап', stageSel),
+      fr(useTitle, 'Название', titleI),
+    ]),
+    foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), applyBtn],
+  });
+}
 
 // Управление этапами воронки (директор): «+» создаёт этап, имя сохраняется автоматически
 function openStageManager() {
