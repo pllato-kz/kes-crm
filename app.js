@@ -2721,12 +2721,36 @@ async function openDealDetail(id) {
   chatInputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendChat(); } });
   renderChat();
 
+  // Кнопка «Оплачено» ⇄ «Отменить оплату» — быстрая смена этапа (Оплачено ↔ предыдущий «Ожидает»)
+  const paidStage = dealStages.find(st => /оплач/i.test(st.label || ''));
+  const paidIdx = paidStage ? dealStages.indexOf(paidStage) : -1;
+  const awaitStage = paidIdx > 0 ? dealStages[paidIdx - 1] : null;
+  const payBtn = el('button', { class:'btn' });
+  function refreshPayBtn() {
+    const isPaid = paidStage && d.stage === paidStage.id;
+    payBtn.textContent = isPaid ? '↩ Отменить оплату' : '✓ Оплачено';
+    payBtn.style.cssText = isPaid ? '' : 'background:#10B981;color:#fff;border-color:#10B981';
+    payBtn.onclick = async () => {
+      const target = isPaid ? awaitStage : paidStage;
+      if (!target) { toast(isPaid ? 'В воронке нет этапа «Ожидает»' : 'В воронке нет этапа «Оплачено»', 'warn'); return; }
+      payBtn.disabled = true;
+      try {
+        await window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body: { stage_id: target.id } });
+        d.stage = target.id; chosenStage = target.id; renderFunnel();
+        toast(isPaid ? 'Оплата отменена — ожидает оплаты' : 'Сделка оплачена', 'success');
+      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+      payBtn.disabled = false; refreshPayBtn();
+    };
+  }
+  refreshPayBtn();
+
   openModal({
     wide: true,
     title: d.title,
     body: el('div', { class:'deal-modal' }, [funnel, el('div', { class:'deal-split' }, [left, right])]),
     foot: [
       el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
+      (canEdit && paidStage) ? payBtn : null,
       canEdit ? el('button', { class:'btn btn-primary', onclick: async () => {
         d.stage = chosenStage;
         d.title = titleI.value.trim() || d.title;
