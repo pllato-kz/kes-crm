@@ -1308,7 +1308,8 @@ function openShipmentDetail(id) {
   });
 }
 
-function openInvoiceDetail(id) {
+function openInvoiceDetail(id, opts) {
+  const allowPay = !!(opts && opts.allowPay); // кнопка оплаты — только в разделе «Документы», не в карточке сделки
   const iv = byId(state.invoices, id);
   if (!iv) return;
   const cl = clientById(iv.client);
@@ -1339,9 +1340,11 @@ function openInvoiceDetail(id) {
     ]),
     foot: [
       el('button', { class:'btn', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl); else toast('Сделка не найдена', 'warn'); } }, '🖨 PDF'),
-      isPaid
-        ? el('button', { class:'btn btn-danger', onclick: () => setStatus('pending', 'Оплата отменена — ожидает') }, '↩ Отменить оплату')
-        : el('button', { class:'btn btn-primary', onclick: () => setStatus('paid', 'Счёт оплачен') }, '✓ Оплачено'),
+      allowPay
+        ? (isPaid
+            ? el('button', { class:'btn btn-danger', onclick: () => setStatus('pending', 'Оплата отменена — ожидает') }, '↩ Отменить оплату')
+            : el('button', { class:'btn btn-primary', onclick: () => setStatus('paid', 'Счёт оплачен') }, '✓ Оплачено'))
+        : null,
     ],
   });
 }
@@ -3150,7 +3153,7 @@ async function openClientDetail(id) {
     tbl.append(el('thead', {}, el('tr', {}, [el('th', {}, '№ счёта'), el('th', {}, 'Дата'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Статус')])));
     tbl.append(el('tbody', {}, invs.map(iv => {
       const sp = stMap[iv.status] || ['pill-muted', iv.status || '—'];
-      return el('tr', { style:'cursor:pointer', onclick: () => { closeModal(); openInvoiceDetail(iv.id); } }, [
+      return el('tr', { style:'cursor:pointer', onclick: () => { closeModal(); openInvoiceDetail(iv.id, { allowPay: true }); } }, [
         el('td', { class:'strong' }, iv.no),
         el('td', { class:'muted' }, iv.date ? fmtDate(iv.date) : '—'),
         el('td', { class:'num strong' }, fmtMoneyK(iv.amount)),
@@ -4092,7 +4095,7 @@ VIEWS.invoices = () => {
         pending: el('span', { class:'pill pill-warn' }, '⏳ Ожидает'),
         overdue: el('span', { class:'pill pill-danger' }, '⚠ Просрочка'),
       };
-      return el('tr', { style:'cursor:pointer', onclick: () => openInvoiceDetail(iv.id) }, [
+      return el('tr', { style:'cursor:pointer', onclick: () => openInvoiceDetail(iv.id, { allowPay: true }) }, [
         el('td', { class:'strong' }, iv.no),
         el('td', {}, fmtDate(iv.date)),
         el('td', {}, cl.name),
