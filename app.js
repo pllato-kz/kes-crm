@@ -3981,25 +3981,45 @@ VIEWS.reports = () => {
     el('div', { class:'actions' }, [el('button', { class:'btn', onclick: () => exportReportPDF() }, '📥 Экспорт PDF')]),
   ]));
 
-  // ----- Блок фильтров: менеджер + диапазон дат + этап воронки (комбинируются) -----
-  const f = { manager: '', from: '', to: '', stage: '' };
+  // ----- Кнопка «Фильтр» (слева) + боковая панель фильтров -----
+  const f = { manager: '', from: '', to: '', stage: '', minSum: '', maxSum: '' };
   const mgrSel = el('select', { onchange: e => { f.manager = e.target.value; loadReports(); } },
     [el('option', { value:'' }, 'Все менеджеры')].concat(state.users.filter(u => u.active !== false).map(u => el('option', { value: u.id }, u.name))));
   const stageSel = el('select', { onchange: e => { f.stage = e.target.value; loadReports(); } },
     [el('option', { value:'' }, 'Все этапы')].concat(STAGES.map(s => el('option', { value: s.id }, s.label))));
-  const fromI = el('input', { type:'date', title:'Сделка создана с', style:'padding:6px', onchange: e => { f.from = e.target.value; loadReports(); } });
-  const toI = el('input', { type:'date', title:'Сделка создана по', style:'padding:6px', onchange: e => { f.to = e.target.value; loadReports(); } });
-  const resetBtn = el('button', { class:'btn btn-sm', style:'display:none', onclick: () => {
-    f.manager = ''; f.from = ''; f.to = ''; f.stage = '';
-    mgrSel.value = ''; stageSel.value = ''; fromI.value = ''; toI.value = '';
+  const fromI = el('input', { type:'date', onchange: e => { f.from = e.target.value; loadReports(); } });
+  const toI = el('input', { type:'date', onchange: e => { f.to = e.target.value; loadReports(); } });
+  const minI = el('input', { type:'number', placeholder:'от', onchange: e => { f.minSum = e.target.value; loadReports(); } });
+  const maxI = el('input', { type:'number', placeholder:'до', onchange: e => { f.maxSum = e.target.value; loadReports(); } });
+
+  const filterBadge = el('span', { class:'badge', style:'display:none;margin-left:2px;background:var(--brand);color:#fff' }, '');
+  const filterBtn = el('button', { class:'btn', onclick: () => openDrawer() }, ['🔍 Фильтр', filterBadge]);
+  const backdrop = el('div', { class:'drawer-backdrop', onclick: () => closeDrawer() });
+  const drawer = el('div', { class:'filter-drawer' }, [
+    el('div', { class:'fd-head' }, [
+      el('h3', { style:'margin:0;font-size:15px' }, 'Фильтры'),
+      el('button', { class:'fd-close', title:'Закрыть', onclick: () => closeDrawer() }, '×'),
+    ]),
+    el('div', { class:'fd-body' }, [
+      el('div', { class:'filter-group' }, [el('label', {}, 'Период (создание сделки)'), el('div', { class:'row2' }, [fromI, toI])]),
+      el('div', { class:'filter-group' }, [el('label', {}, 'Менеджер'), mgrSel]),
+      el('div', { class:'filter-group' }, [el('label', {}, 'Этап воронки'), stageSel]),
+      el('div', { class:'filter-group' }, [el('label', {}, 'Сумма сделки, ₸'), el('div', { class:'row2' }, [minI, maxI])]),
+    ]),
+    el('div', { class:'fd-foot' }, [
+      el('button', { class:'btn', style:'flex:1', onclick: () => resetFilters() }, 'Сбросить'),
+      el('button', { class:'btn btn-primary', style:'flex:1', onclick: () => closeDrawer() }, 'Готово'),
+    ]),
+  ]);
+  function openDrawer() { backdrop.classList.add('open'); drawer.classList.add('open'); }
+  function closeDrawer() { backdrop.classList.remove('open'); drawer.classList.remove('open'); }
+  function resetFilters() {
+    f.manager = ''; f.from = ''; f.to = ''; f.stage = ''; f.minSum = ''; f.maxSum = '';
+    mgrSel.value = ''; stageSel.value = ''; fromI.value = ''; toI.value = ''; minI.value = ''; maxI.value = '';
     loadReports();
-  } }, 'Сбросить');
-  wrap.append(el('div', { class:'table-toolbar', style:'border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px' }, [
-    mgrSel, stageSel,
-    el('span', { class:'muted', style:'font-size:12px' }, 'Период c:'), fromI,
-    el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
-    resetBtn,
-  ]));
+  }
+  wrap.append(el('div', { style:'margin-bottom:16px' }, [filterBtn]));
+  wrap.append(backdrop, drawer);
 
   // helper: «YYYY-MM» -> «мес ГГ»
   const MON = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
@@ -4067,13 +4087,16 @@ VIEWS.reports = () => {
 
   // Загрузка реальных агрегатов и отрисовка (перезапрашивается при смене фильтров)
   function loadReports() {
-    const anyActive = !!(f.manager || f.from || f.to || f.stage);
-    resetBtn.style.display = anyActive ? '' : 'none';
+    const activeCount = [f.manager, f.from, f.to, f.stage, f.minSum, f.maxSum].filter(v => v !== '' && v != null).length;
+    filterBadge.style.display = activeCount ? '' : 'none';
+    filterBadge.textContent = String(activeCount);
     const qp = new URLSearchParams();
     if (f.manager) qp.set('manager', f.manager);
     if (f.from) qp.set('from', f.from);
     if (f.to) qp.set('to', f.to);
     if (f.stage) qp.set('stages', f.stage);
+    if (f.minSum !== '') qp.set('minSum', f.minSum);
+    if (f.maxSum !== '') qp.set('maxSum', f.maxSum);
     const qs = qp.toString();
     [host1, host2, host3, mgrHost].forEach(h => { h.innerHTML = ''; h.append(noData('Загрузка…')); });
     window.__API__.apiFetch('reports/summary' + (qs ? '?' + qs : '')).then(rep => {

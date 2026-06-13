@@ -740,8 +740,10 @@ async function reportsSummary(env, url) {
   const from = (p.get('from') || '').trim();
   const to = (p.get('to') || '').trim();
   const stages = (p.get('stages') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const minSum = (p.get('minSum') || '').trim();
+  const maxSum = (p.get('maxSum') || '').trim();
 
-  // Конструктор условий WHERE с учётом фильтров (менеджер, диапазон дат, этапы).
+  // Конструктор условий WHERE с учётом фильтров (менеджер, диапазон дат, этапы, сумма).
   //   alias — префикс таблицы deals ('' или 'd'); mode 'won' добавляет фильтр выигранных,
   //   если этапы не выбраны; mode 'all' — без этого ограничения.
   const condsFor = (alias, mode) => {
@@ -751,6 +753,8 @@ async function reportsSummary(env, url) {
     if (manager) { conds.push(`${col('manager_id')} = ?`); args.push(manager); }
     if (from) { conds.push(`substr(${col('created')},1,10) >= ?`); args.push(from); }
     if (to) { conds.push(`substr(${col('created')},1,10) <= ?`); args.push(to); }
+    if (minSum !== '') { conds.push(`${col('amount')} >= ?`); args.push(Number(minSum) || 0); }
+    if (maxSum !== '') { conds.push(`${col('amount')} <= ?`); args.push(Number(maxSum) || 0); }
     if (stages.length) {
       conds.push(`${col('stage_id')} IN (${stages.map(() => '?').join(',')})`);
       args.push(...stages);
