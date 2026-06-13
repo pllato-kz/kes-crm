@@ -1336,21 +1336,44 @@ function openInvoiceDetail(id) {
 function openSupplierDetail(id) {
   const sp = byId(state.suppliers, id);
   if (!sp) return;
+  // Редактируемые поля поставщика
+  const fName = fInput('Наименование', sp.name || '');
+  const fContact = fInput('Контактное лицо', sp.contact || '');
+  const fPhone = fInput('Телефон', sp.phone || '');
+  const fEmail = fInput('Email', sp.email || '', { type: 'email' });
+  const fShare = fInput('Доля закупок, %', sp.share != null ? sp.share : '', { type: 'number' });
+  const fDelivery = fDateField('Последняя поставка', String(sp.lastDelivery || '').slice(0, 10));
+  const fNote = fTextarea('Комментарий', sp.note || '');
+  const fields = [fName, fContact, fPhone, fEmail, fShare, fDelivery, fNote];
+
+  async function save(btn) {
+    if (btn) btn.disabled = true;
+    const upd = {
+      id: sp.id, name: fName.get().trim() || sp.name, contact: fContact.get(), phone: fPhone.get(),
+      email: fEmail.get(), share: Number(fShare.get()) || 0, lastDelivery: fDelivery.getDate(), note: fNote.get(),
+    };
+    try {
+      const saved = await window.__API__.apiFetch('suppliers/' + sp.id, { method:'PUT', body: window.__API__.toApi.supplier(upd) });
+      Object.assign(sp, window.__API__.map.supplier(saved)); // sp — ссылка из state.suppliers → синхронно
+      closeModal(); toast('Поставщик сохранён', 'success'); navigate('suppliers');
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); if (btn) btn.disabled = false; }
+  }
+  async function del() {
+    if (!confirm(`Удалить поставщика «${sp.name}»?`)) return;
+    try {
+      await window.__API__.apiFetch('suppliers/' + sp.id, { method:'DELETE' });
+      const i = state.suppliers.findIndex(x => x.id === sp.id); if (i >= 0) state.suppliers.splice(i, 1);
+      closeModal(); toast('Поставщик удалён', 'success'); navigate('suppliers');
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+  }
+
   openModal({
-    title: sp.name,
-    body: el('div', {}, [
-      el('dl', { class:'kv' }, [
-        el('dt', {}, 'Контакт'),       el('dd', {}, sp.contact),
-        el('dt', {}, 'Телефон'),       el('dd', {}, sp.phone),
-        el('dt', {}, 'Email'),         el('dd', {}, sp.email),
-        el('dt', {}, 'Доля закупок'),   el('dd', { class:'strong' }, sp.share + '%'),
-        el('dt', {}, 'Последняя поставка'), el('dd', {}, fmtDate(sp.lastDelivery)),
-        el('dt', {}, 'Комментарий'),    el('dd', {}, sp.note),
-      ]),
-    ]),
+    title: 'Поставщик · ' + sp.name,
+    body: el('div', {}, fields.map(f => f.row)),
     foot: [
-      el('button', { class:'btn', onclick: () => stub('История поставок', 'Лента всех приходов от поставщика с суммами, позициями и сроками.') }, '📦 История'),
-      el('button', { class:'btn btn-primary', onclick: () => { closeModal(); toast('Создан заказ на поставщика', 'success'); } }, '+ Заказ'),
+      el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
+      el('button', { class:'btn btn-danger', onclick: del }, 'Удалить'),
+      el('button', { class:'btn btn-primary', onclick: (e) => save(e.currentTarget) }, 'Сохранить'),
     ],
   });
 }
@@ -3758,7 +3781,7 @@ VIEWS.suppliers = () => {
   ]));
   const grid = el('div', { class:'grid grid-3' });
   state.suppliers.forEach(s => {
-    grid.append(el('div', { class:'card', style:'cursor:pointer', onclick: () => openSupplierDetail(s.id) }, [
+    grid.append(el('div', { class:'card', style:'cursor:pointer', title:'Открыть и редактировать поставщика', onclick: () => openSupplierDetail(s.id) }, [
       el('div', { class:'row', style:'justify-content:space-between;margin-bottom:8px' }, [
         el('div', { class:'strong', style:'font-size:15px' }, s.name),
         el('span', { class:'pill pill-info' }, s.share + '% закупок'),
