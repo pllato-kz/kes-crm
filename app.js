@@ -425,12 +425,14 @@ const ROUTE_STATE = {
       if (TASKS_FROM) p.from = TASKS_FROM;
       if (TASKS_TO) p.to = TASKS_TO;
       if (TASKS_SHOWDONE) p.done = '1';
+      if (TASKS_STATUS) p.st = TASKS_STATUS;
       return p;
     },
     apply: (p) => {
       TASKS_VIEW = p.view === 'list' ? 'list' : 'kanban';
       TASKS_OWNER = p.owner || ''; TASKS_FROM = p.from || ''; TASKS_TO = p.to || '';
       TASKS_SHOWDONE = p.done === '1';
+      TASKS_STATUS = p.st || '';
     },
   },
 };
@@ -3564,8 +3566,9 @@ const taskStatusLabel = (s) => (TASK_STATUS.find(x => x.value === s) || {}).labe
 let TASKS_OWNER = '';      // фильтр по ответственному (id) или '' = все
 let TASKS_FROM = '';       // фильтр по диапазону срока: с (YYYY-MM-DD)
 let TASKS_TO = '';         // фильтр по диапазону срока: по (YYYY-MM-DD)
-let TASKS_SHOWDONE = false; // показывать выполненные
+let TASKS_SHOWDONE = false; // показывать выполненные (канбан)
 let TASKS_VIEW = 'kanban'; // 'kanban' | 'list'
+let TASKS_STATUS = '';     // фильтр по статусу в списке: '' | 'open' | 'overdue' | 'done'
 
 function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function parseDue(due) { return new Date(String(due || '').replace(' ', 'T')); }
@@ -3643,9 +3646,22 @@ VIEWS.tasks = () => {
   toI.onchange = () => { TASKS_TO = toI.value; navigate('tasks'); };
   toolbarKids.push(el('span', { class:'muted', style:'font-size:12px;margin-left:10px' }, 'Срок c:'), fromI, el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI);
   if (TASKS_FROM || TASKS_TO) toolbarKids.push(el('button', { class:'btn btn-sm', onclick: () => { TASKS_FROM = ''; TASKS_TO = ''; navigate('tasks'); } }, 'Сбросить'));
-  const doneChk = el('input', { type:'checkbox', checked: TASKS_SHOWDONE ? 'checked' : null });
-  doneChk.onchange = () => { TASKS_SHOWDONE = doneChk.checked; navigate('tasks'); };
-  toolbarKids.push(el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#374151;margin-left:10px' }, [doneChk, 'Показывать выполненные']));
+  if (isList) {
+    // Фильтр по статусу — только в режиме списка
+    const stSel = el('select', {}, [
+      el('option', { value:'' }, 'Все статусы'),
+      el('option', { value:'open' }, 'Открыта'),
+      el('option', { value:'overdue' }, 'Просрочена'),
+      el('option', { value:'done' }, 'Выполнена'),
+    ]);
+    stSel.value = TASKS_STATUS;
+    stSel.onchange = () => { TASKS_STATUS = stSel.value; navigate('tasks'); };
+    toolbarKids.push(el('span', { class:'muted', style:'font-size:12px;margin-left:10px' }, 'Статус:'), stSel);
+  } else {
+    const doneChk = el('input', { type:'checkbox', checked: TASKS_SHOWDONE ? 'checked' : null });
+    doneChk.onchange = () => { TASKS_SHOWDONE = doneChk.checked; navigate('tasks'); };
+    toolbarKids.push(el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#374151;margin-left:10px' }, [doneChk, 'Показывать выполненные']));
+  }
   wrap.append(el('div', { class:'row', style:'gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px' }, toolbarKids));
 
   const byDue = (a, b) => String(a.due || '').localeCompare(String(b.due || ''));
@@ -3700,7 +3716,11 @@ VIEWS.tasks = () => {
 
   // Режим списка: таблица с основными полями + массовое редактирование (как в «Сделках»)
   function buildTasksList() {
-    const rows = openFiltered.concat(TASKS_SHOWDONE ? doneFiltered : []).slice().sort(byDue);
+    // статус задачи: выполнена / просрочена / открыта
+    const statusOf = (t) => t.done ? 'done' : (taskDue(t).kind === 'overdue' ? 'overdue' : 'open');
+    const rows = base.filter(matchFilters)
+      .filter(t => !TASKS_STATUS || statusOf(t) === TASKS_STATUS)
+      .slice().sort(byDue);
     const tw = el('div', { class:'table-wrap' });
     const countSpan = el('span', { class:'strong' }, '');
     const rowChecks = [];
