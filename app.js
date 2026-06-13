@@ -1218,12 +1218,12 @@ function openNewShipment() {
   // Адрес сделки: из самой сделки, иначе из клиента
   const dealAddress = (d) => { if (!d) return ''; if (d.address) return d.address; const cl = clientById(d.client); return (cl && cl.address) || ''; };
 
-  // ----- Поле «Сделка» с live-поиском по названию/клиенту -----
+  // ----- Поле «Сделка»: поиск + список (как в карточке сделки, раздел «Товары») -----
   let selectedDealId = null;
-  const dealInput = el('input', { placeholder:'Начните вводить название сделки…', autocomplete:'off' });
-  const dealList = el('div', { style:'position:absolute;left:0;right:0;top:calc(100% + 2px);z-index:30;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.14);max-height:240px;overflow:auto;display:none' });
-  const dealWrap = el('div', { style:'position:relative' }, [dealInput, dealList]);
-  const dealRow = el('div', { class:'form-row' }, [el('label', {}, 'Сделка'), dealWrap]);
+  const dealSearch = el('input', { placeholder:'Поиск сделки по названию/клиенту…', style:'width:100%;padding:8px 10px;border:1px solid #E5E7EB;border-radius:6px;font-size:13px;outline:none' });
+  const dealListEl = el('div', { class:'product-picker' });
+  const selectedLabel = el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, 'Сделка не выбрана');
+  const dealRow = el('div', { class:'form-row' }, [el('label', {}, 'Сделка'), el('div', {}, [dealSearch, dealListEl, selectedLabel])]);
 
   const date = fInput('Дата', new Date().toISOString().slice(0,10), { type: 'date' });
   const transport = fSelect('Транспорт',
@@ -1237,37 +1237,30 @@ function openNewShipment() {
   function selectDeal(d) {
     selectedDealId = d.id;
     const cl = clientById(d.client);
-    dealInput.value = d.title + (cl && cl.name ? ' · ' + cl.name : '');
-    dealList.style.display = 'none';
+    selectedLabel.textContent = '✓ Выбрана: ' + (d.title || '—') + (cl && cl.name ? ' · ' + cl.name : '');
+    selectedLabel.style.cssText = 'font-size:12px;margin-top:6px;color:#10B981;font-weight:600';
     destInput.value = dealAddress(d); // автоподстановка адреса (пусто, если нет)
+    fillDeals(dealSearch.value);       // обновляем подсветку выбранной строки
   }
-  function renderDealList(term) {
-    const q = String(term || '').trim().toLowerCase();
-    dealList.innerHTML = '';
-    if (!q) { dealList.style.display = 'none'; return; }
-    const matches = state.deals.filter(d => {
+  function fillDeals(q = '') {
+    const ql = String(q || '').trim().toLowerCase();
+    dealListEl.innerHTML = '';
+    const rows = state.deals.filter(d => {
       const cl = clientById(d.client);
-      return String(d.title || '').toLowerCase().includes(q) || String(cl && cl.name || '').toLowerCase().includes(q);
-    }).slice(0, 20);
-    if (!matches.length) {
-      dealList.append(el('div', { class:'muted', style:'padding:10px 12px;font-size:13px' }, 'Сделки не найдены'));
-      dealList.style.display = 'block'; return;
-    }
-    matches.forEach(d => {
+      return !ql || String(d.title || '').toLowerCase().includes(ql) || String(cl && cl.name || '').toLowerCase().includes(ql);
+    }).slice(0, 50);
+    if (!rows.length) { dealListEl.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Сделки не найдены')); return; }
+    rows.forEach(d => {
       const cl = clientById(d.client); const addr = dealAddress(d);
-      const item = el('div', { style:'padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border)', onmousedown: (e) => { e.preventDefault(); selectDeal(d); } }, [
-        el('div', { class:'strong', style:'font-size:13px' }, d.title || '—'),
-        el('div', { class:'muted', style:'font-size:12px' }, (cl ? cl.name : '—') + (addr ? ' · ' + addr : '')),
-      ]);
-      item.onmouseenter = () => { item.style.background = '#F3F4F6'; };
-      item.onmouseleave = () => { item.style.background = ''; };
-      dealList.append(item);
+      const active = d.id === selectedDealId;
+      dealListEl.append(el('div', { class:'pp-item', style: active ? 'background:var(--brand-soft)' : '', onclick: () => selectDeal(d) }, [
+        el('div', {}, [el('div', {}, d.title || '—'), el('div', { class:'pp-sku' }, (cl ? cl.name : '—') + (addr ? ' · ' + addr : ''))]),
+        active ? el('span', { class:'pp-price', style:'color:#10B981' }, '✓') : null,
+      ]));
     });
-    dealList.style.display = 'block';
   }
-  dealInput.oninput = () => { selectedDealId = null; renderDealList(dealInput.value); };
-  dealInput.onfocus = () => { if (dealInput.value) renderDealList(dealInput.value); };
-  dealInput.onblur = () => { setTimeout(() => { dealList.style.display = 'none'; }, 150); };
+  let dt; dealSearch.oninput = (e) => { const v = e.target.value; clearTimeout(dt); dt = setTimeout(() => fillDeals(v), 200); };
+  fillDeals();
 
   openModal({
     title: 'Новая отгрузка',
