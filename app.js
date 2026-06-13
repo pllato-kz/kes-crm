@@ -3597,6 +3597,8 @@ function bucketTargetDue(key) {
 VIEWS.tasks = () => {
   const wrap = el('div');
   const base = visibleTasks(); // с учётом роли (менеджер — только свои)
+  const selected = new Set();   // выбранные задачи для массового редактирования
+  const checks = new Map();     // id -> чекбокс карточки (для «выбрать все»/«снять выбор»)
   const doneCount = base.filter(t => t.done).length;
   const inRange = (t) => {
     if (!TASKS_FROM && !TASKS_TO) return true;
@@ -3638,7 +3640,25 @@ VIEWS.tasks = () => {
   const doneChk = el('input', { type:'checkbox', checked: TASKS_SHOWDONE ? 'checked' : null });
   doneChk.onchange = () => { TASKS_SHOWDONE = doneChk.checked; navigate('tasks'); };
   toolbarKids.push(el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#374151;margin-left:10px' }, [doneChk, 'Показывать выполненные']));
+
+  // Массовое редактирование: панель действий + кнопка «выбрать все по фильтру»
+  const bulkCount = el('span', { class:'strong' }, '');
+  const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [
+    bulkCount,
+    el('button', { class:'btn btn-sm btn-primary', onclick: () => openTaskBulkEdit([...selected]) }, 'Массовое редактирование'),
+    el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); checks.forEach(c => { c.checked = false; }); refreshBulk(); } }, 'Снять выбор'),
+  ]);
+  function refreshBulk() { bulkCount.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
+  const bulkPool = () => openFiltered.concat(TASKS_SHOWDONE ? doneFiltered : []); // задачи под текущим фильтром
+  toolbarKids.push(el('button', { class:'btn btn-sm', onclick: () => {
+    const pool = bulkPool();
+    const allSel = pool.length > 0 && pool.every(t => selected.has(t.id));
+    pool.forEach(t => { if (allSel) selected.delete(t.id); else selected.add(t.id); const c = checks.get(t.id); if (c) c.checked = !allSel; });
+    refreshBulk();
+  } }, 'Выбрать все'));
+
   wrap.append(el('div', { class:'row', style:'gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px' }, toolbarKids));
+  wrap.append(bulkBar);
 
   const byDue = (a, b) => String(a.due || '').localeCompare(String(b.due || ''));
 
@@ -3649,11 +3669,16 @@ VIEWS.tasks = () => {
     const dateStr = t.due ? fmtDate(String(t.due).split(' ')[0]) : '—';
     const timeStr = String(t.due || '').slice(11, 16);
     const od = !t.done && taskDue(t).kind === 'overdue';
+    const cb = el('input', { type:'checkbox', checked: selected.has(t.id) ? 'checked' : null,
+      onclick: (e) => e.stopPropagation(),
+      onchange: () => { if (cb.checked) selected.add(t.id); else selected.delete(t.id); refreshBulk(); } });
+    checks.set(t.id, cb);
     return el('div', { class:'k-card', style:'cursor:pointer' + (od ? ';border-left:3px solid #EF4444' : ''), onclick: () => openTaskDetail(t.id) }, [
-      // приоритет — сверху
+      // приоритет + чекбокс выбора — сверху
       el('div', { style:'display:flex;align-items:center;gap:6px;margin-bottom:6px' }, [
         el('span', { class:'pill ' + prCls, style:'font-size:10px' }, prLabel[t.priority] || t.priority),
         od ? el('span', { class:'pill pill-danger', style:'font-size:10px' }, 'просрочено') : null,
+        el('label', { style:'margin-left:auto;display:flex;align-items:center', title:'Выбрать для массового редактирования', onclick: (e) => e.stopPropagation() }, cb),
       ]),
       // название
       el('div', { class:'k-card-title', style:'margin:0' + (t.done ? ';text-decoration:line-through;color:#9CA3AF' : '') }, t.title),
@@ -3709,12 +3734,9 @@ function openTaskDetail(id) {
   const prio = fSelect('Приоритет', [{value:'low',label:'низкий'},{value:'medium',label:'средний'},{value:'high',label:'высокий'}], t.priority || 'medium');
   const due = fDateField('Дата окончания', String(t.due || '').slice(0, 10));
   const time = fTimeField('Время выполнения', (String(t.due || '').slice(11, 16) || '18:00'));
-  const status = fSelect('Статус', TASK_STATUS, t.status || (t.done ? 'done' : 'new'));
-  const start = fDateField('Дата начала', String(t.startDate || '').slice(0, 10));
   const dealSel = fSelect('Связанная сделка', [{ value:'', label:'— Не связана —' }, ...state.deals.map(d => ({ value:d.id, label:d.title }))], t.deal || '');
-  const comments = fTextarea('Комментарии', t.comments || '');
 
-  const fields = [title, desc, status, prio, owner, dealSel, start, due, time, comments];
+  const fields = [title, desc, prio, owner, dealSel, due, time];
   if (!canEdit) fields.forEach(f => f.row.querySelectorAll('input,select,textarea').forEach(i => i.disabled = true));
 
   const foot = [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')];
@@ -3734,7 +3756,7 @@ function openTaskDetail(id) {
       const upd = {
         id: t.id, title: title.get().trim(), description: desc.get(), owner: owner.get(),
         due: due.getDate() + ' ' + (time.get() || '18:00'), priority: prio.get(),
-        status: status.get(), startDate: start.getDate(), deal: dealSel.get() || null, comments: comments.get(),
+        deal: dealSel.get() || null,
       };
       try {
         const saved = await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body: window.__API__.toApi.task(upd) });
@@ -3745,6 +3767,53 @@ function openTaskDetail(id) {
   }
 
   openModal({ title: 'Редактирование задачи', body: el('div', {}, fields.map(f => f.row)), foot });
+}
+
+// Массовое редактирование выбранных задач: заполните нужные поля (пустые — не меняются)
+function openTaskBulkEdit(ids) {
+  const total = ids.length;
+  if (!total) { toast('Не выбрано ни одной задачи', 'warn'); return; }
+  const ownerSel = el('select', {}, [el('option', { value:'' }, 'Не менять'), ...state.users.filter(u => u.active !== false).map(u => el('option', { value:u.id }, u.name))]);
+  const prioSel = el('select', {}, [el('option', { value:'' }, 'Не менять'), el('option', { value:'low' }, 'низкий'), el('option', { value:'medium' }, 'средний'), el('option', { value:'high' }, 'высокий')]);
+  const dealSel = el('select', {}, [el('option', { value:'' }, 'Не менять'), el('option', { value:'__none__' }, 'Отвязать от сделки'), ...state.deals.map(d => el('option', { value:d.id }, d.title))]);
+  const due = fDateField('Срок (дата окончания)', '');
+  const fieldRow = (label, ctrl) => el('div', { class:'form-row' }, [el('label', {}, label), ctrl]);
+
+  const applyBtn = el('button', { class:'btn btn-primary', onclick: async () => {
+    const body = {};
+    if (ownerSel.value) body.owner_id = ownerSel.value;
+    if (prioSel.value) body.priority_id = prioSel.value;
+    if (dealSel.value) body.deal_id = dealSel.value === '__none__' ? null : dealSel.value;
+    if (due.getDate()) body.due = due.getDate() + ' 18:00';
+    if (!Object.keys(body).length) { toast('Заполните хотя бы одно поле', 'warn'); return; }
+    applyBtn.disabled = true;
+    try {
+      for (let i = 0; i < ids.length; i += 8) { // батчами, чтобы не упереться в лимиты
+        await Promise.all(ids.slice(i, i + 8).map(id => window.__API__.apiFetch('tasks/' + id, { method:'PUT', body }).then(() => {
+          const t = byId(state.tasks, id);
+          if (t) {
+            if ('owner_id' in body) t.owner = body.owner_id;
+            if ('priority_id' in body) t.priority = body.priority_id;
+            if ('deal_id' in body) t.deal = body.deal_id;
+            if ('due' in body) t.due = body.due;
+          }
+        })));
+      }
+      closeModal(); toast(`Изменено задач: ${ids.length}`, 'success'); navigate('tasks');
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); applyBtn.disabled = false; }
+  } }, `Применить к ${total}`);
+
+  openModal({
+    title: `Массовое редактирование · ${total} ${plural(total, 'задача', 'задачи', 'задач')}`,
+    body: el('div', {}, [
+      el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Заполните только те поля, которые нужно изменить. Пустые поля остаются без изменений.'),
+      fieldRow('Ответственный', ownerSel),
+      fieldRow('Приоритет', prioSel),
+      fieldRow('Связанная сделка', dealSel),
+      due.row,
+    ]),
+    foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), applyBtn],
+  });
 }
 
 
