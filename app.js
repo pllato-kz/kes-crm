@@ -3153,7 +3153,7 @@ async function openClientDetail(id) {
     tbl.append(el('thead', {}, el('tr', {}, [el('th', {}, '№ счёта'), el('th', {}, 'Дата'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Статус')])));
     tbl.append(el('tbody', {}, invs.map(iv => {
       const sp = stMap[iv.status] || ['pill-muted', iv.status || '—'];
-      return el('tr', { style:'cursor:pointer', onclick: () => { closeModal(); openInvoiceDetail(iv.id, { allowPay: true }); } }, [
+      return el('tr', { style:'cursor:pointer', onclick: () => { closeModal(); openInvoiceDetail(iv.id); } }, [
         el('td', { class:'strong' }, iv.no),
         el('td', { class:'muted' }, iv.date ? fmtDate(iv.date) : '—'),
         el('td', { class:'num strong' }, fmtMoneyK(iv.amount)),
