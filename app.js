@@ -4021,9 +4021,16 @@ VIEWS.reports = () => {
   const f = { manager: '', from: '', to: '', stage: '', minSum: '', maxSum: '', pipeline: '' };
   const mgrSel = el('select', { onchange: e => { f.manager = e.target.value; loadReports(); } },
     [el('option', { value:'' }, 'Все менеджеры')].concat(state.users.filter(u => u.active !== false).map(u => el('option', { value: u.id }, u.name))));
-  // Воронка: при выборе список этапов зависит от неё
-  const pipeSel = el('select', { onchange: e => { f.pipeline = e.target.value; f.stage = ''; rebuildStages(); loadReports(); } },
-    [el('option', { value:'' }, 'Все воронки')].concat(PIPELINES.map(pp => el('option', { value: pp.id }, pp.name))));
+  // Воронка: при выборе список этапов зависит от неё (список воронок — из актуального источника)
+  const pipeSel = el('select', { onchange: e => { f.pipeline = e.target.value; f.stage = ''; rebuildStages(); loadReports(); } });
+  function rebuildPipes() {
+    pipeSel.innerHTML = '';
+    pipeSel.append(el('option', { value:'' }, 'Все воронки'));
+    PIPELINES.forEach(pp => pipeSel.append(el('option', { value: pp.id }, pp.name)));
+    if (!PIPELINES.some(pp => pp.id === f.pipeline)) f.pipeline = '';
+    pipeSel.value = f.pipeline;
+  }
+  rebuildPipes();
   const stageSel = el('select', { onchange: e => { f.stage = e.target.value; loadReports(); } });
   // Этапы из актуальных воронок (синхронно со «Сделками»): по выбранной воронке — её этапы;
   // без воронки — уникальные названия (без дублей), значение = все id этапов с этим названием.
@@ -4326,6 +4333,13 @@ VIEWS.reports = () => {
     });
   }
   loadReports();
+
+  // Динамика: подтягиваем актуальные воронки и этапы из БД (новые воронки/этапы сразу в фильтрах)
+  window.__API__.refreshDicts().then(d => {
+    STAGES = d.STAGES; PIPELINES = d.PIPELINES;
+    rebuildPipes(); rebuildStages();
+    loadReports(); // пересчёт статистики по актуальным данным
+  }).catch(() => {});
 
   return wrap;
 };
