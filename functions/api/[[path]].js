@@ -888,6 +888,25 @@ async function warehouseSummary(env) {
   return json(r || { sku: 0, units: 0, reserved: 0, value: 0 });
 }
 
+// Суммарный остаток товара по всем складам
+async function stockOf(env, productId) {
+  const row = await env.DB.prepare('SELECT COALESCE(SUM(stock),0) AS stock FROM product_stock WHERE product_id=?').bind(productId).first();
+  return row ? num(row.stock) : 0;
+}
+// Изменить остаток товара на delta (не ниже 0). Обновляем СУЩЕСТВУЮЩУЮ строку
+// (любой склад), иначе изменение не отразится в суммарном остатке.
+async function adjustStock(env, productId, delta) {
+  const row = await env.DB.prepare('SELECT warehouse_id, stock FROM product_stock WHERE product_id=? ORDER BY stock DESC LIMIT 1').bind(productId).first();
+  if (row) {
+    const newStock = Math.max(0, num(row.stock) + delta);
+    await env.DB.prepare('UPDATE product_stock SET stock=? WHERE product_id=? AND warehouse_id=?').bind(newStock, productId, row.warehouse_id).run();
+    return newStock;
+  }
+  const newStock = Math.max(0, delta);
+  try { await env.DB.prepare('INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?, ?, ?, 0)').bind(productId, 'w1', newStock).run(); } catch (e) {}
+  return newStock;
+}
+
 // --------------------------------------------------------------------------
 // Движения склада (приход/расход) — журнал + корректировка остатка product_stock.
 // --------------------------------------------------------------------------
@@ -990,20 +1009,15 @@ async function postStockDoc(env, id, auth) {
   const items = parseDoc({ ...d }).items;
   if (!items.length) return err(400, 'В документе нет позиций');
   const dir = d.type === 'receipt' ? 'in' : 'out';
-  const wh = 'w1';
   if (dir === 'out') {
     for (const it of items) {
-      const cur = await env.DB.prepare('SELECT stock FROM product_stock WHERE product_id=? AND warehouse_id=?').bind(it.product_id, wh).first();
-      const stock = cur ? num(cur.stock) : 0;
+      const stock = await stockOf(env, it.product_id);
       if (num(it.qty) > stock) return err(400, `Недостаточно остатка по «${it.product_name}»: на складе ${stock}`);
     }
   }
   const now = new Date().toISOString();
   for (const it of items) {
-    const cur = await env.DB.prepare('SELECT stock, reserved FROM product_stock WHERE product_id=? AND warehouse_id=?').bind(it.product_id, wh).first();
-    const stock = cur ? num(cur.stock) : 0, reserved = cur ? num(cur.reserved) : 0;
-    const newStock = dir === 'in' ? stock + num(it.qty) : stock - num(it.qty);
-    await env.DB.prepare('INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?,?,?,?) ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock').bind(it.product_id, wh, newStock, reserved).run();
+    await adjustStock(env, it.product_id, dir === 'in' ? num(it.qty) : -num(it.qty));
     await env.DB.prepare(`INSERT INTO stock_movements (id, product_id, direction, type, qty, date, doc_no, counterparty, note, created_by, created_at, doc_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
       .bind(genId(), it.product_id, dir, d.type, num(it.qty), d.date, d.no, d.counterparty, d.note, auth ? auth.sub : null, now, d.id).run();
   }
@@ -1016,13 +1030,9 @@ async function cancelStockDoc(env, id, auth) {
   if (d.status !== 'posted') return err(400, 'Отменить можно только проведённый документ');
   const items = parseDoc({ ...d }).items;
   const dir = d.type === 'receipt' ? 'in' : 'out';
-  const wh = 'w1';
   const now = new Date().toISOString();
-  for (const it of items) {
-    const cur = await env.DB.prepare('SELECT stock, reserved FROM product_stock WHERE product_id=? AND warehouse_id=?').bind(it.product_id, wh).first();
-    const stock = cur ? num(cur.stock) : 0, reserved = cur ? num(cur.reserved) : 0;
-    const newStock = dir === 'in' ? Math.max(0, stock - num(it.qty)) : stock + num(it.qty);
-    await env.DB.prepare('INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?,?,?,?) ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock').bind(it.product_id, wh, newStock, reserved).run();
+  for (const it of items) { // восстановление симметрично: приход → −, расход → +
+    await adjustStock(env, it.product_id, dir === 'in' ? -num(it.qty) : num(it.qty));
     await env.DB.prepare(`INSERT INTO stock_movements (id, product_id, direction, type, qty, date, doc_no, counterparty, note, created_by, created_at, doc_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
       .bind(genId(), it.product_id, dir === 'in' ? 'out' : 'in', d.type, num(it.qty), now.slice(0, 10), d.no, d.counterparty, 'Отмена документа', auth ? auth.sub : null, now, d.id).run();
   }
@@ -1056,12 +1066,8 @@ async function autoShipDeal(env, dealId, auth) {
      VALUES (?,?,?,?,?,?, 'posted', ?,?,?,?,?,?)`
   ).bind(id, 'writeoff', no, now.slice(0, 10), clientName || '', 'Отгрузка по сделке ' + (deal ? deal.no : ''), JSON.stringify(items), totalQty, dealId, auth ? auth.sub : null, now, now).run();
 
-  const wh = 'w1';
   for (const it of items) {
-    const cur = await env.DB.prepare('SELECT stock, reserved FROM product_stock WHERE product_id=? AND warehouse_id=?').bind(it.product_id, wh).first();
-    const stock = cur ? num(cur.stock) : 0, reserved = cur ? num(cur.reserved) : 0;
-    const newStock = Math.max(0, stock - it.qty); // не уходим в минус
-    await env.DB.prepare('INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?,?,?,?) ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock').bind(it.product_id, wh, newStock, reserved).run();
+    await adjustStock(env, it.product_id, -it.qty); // списываем со склада (не ниже 0)
     await env.DB.prepare(`INSERT INTO stock_movements (id, product_id, direction, type, qty, date, doc_no, counterparty, note, created_by, created_at, doc_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
       .bind(genId(), it.product_id, 'out', 'sale', it.qty, now.slice(0, 10), no, clientName || '', 'Отгрузка по сделке', auth ? auth.sub : null, now, id).run();
   }
@@ -1092,17 +1098,9 @@ async function createMovement(env, request, auth) {
   const prod = await env.DB.prepare('SELECT id FROM products WHERE id=?').bind(productId).first();
   if (!prod) return err(404, 'Товар не найден');
 
-  const warehouseId = 'w1'; // один склад
-  const cur = await env.DB.prepare('SELECT stock, reserved FROM product_stock WHERE product_id=? AND warehouse_id=?').bind(productId, warehouseId).first();
-  const stock = cur ? num(cur.stock) : 0;
-  const reserved = cur ? num(cur.reserved) : 0;
+  const stock = await stockOf(env, productId);
   if (direction === 'out' && qty > stock) return err(400, `Недостаточно остатка: на складе ${stock}`);
-  const newStock = direction === 'in' ? stock + qty : stock - qty;
-
-  await env.DB.prepare(
-    `INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?,?,?,?)
-     ON CONFLICT(product_id, warehouse_id) DO UPDATE SET stock=excluded.stock`
-  ).bind(productId, warehouseId, newStock, reserved).run();
+  const newStock = await adjustStock(env, productId, direction === 'in' ? qty : -qty);
 
   const id = genId();
   const now = new Date().toISOString();
