@@ -4057,11 +4057,20 @@ VIEWS.invoices = () => {
   const todayMs = new Date(new Date().toISOString().slice(0,10)).getTime();
   const daysUntil = (due) => { const s = String(due||'').slice(0,10); if (!s) return null; const t = new Date(s).getTime(); return isNaN(t) ? null : Math.round((t - todayMs)/86400000); };
 
-  // Единый список документов: счета + сделки на этапе «Оплачено»
-  const docs = [
-    ...state.invoices.map(iv => ({ no: iv.no, date: iv.date, client: iv.client, deal: iv.deal, amount: iv.amount, due: iv.due, status: iv.status, onopen: () => openInvoiceDetail(iv.id) })),
-    ...paidDeals.map(d => ({ no: 'по сделке', date: d.created, client: d.client, deal: d.id, amount: d.amount, due: '', status: 'paid', onopen: () => openDealDetail(d.id) })),
-  ];
+  // Единый список документов: счета + сделки на этапе «Оплачено» (пересчитывается, чтобы
+  // отражать массовые изменения статусов/удаление без перезагрузки)
+  function computeDocs() {
+    const paid = visibleDeals().filter(d => isPaidStage(d.stage) && !state.invoices.some(iv => iv.deal === d.id));
+    return [
+      ...state.invoices.map(iv => ({ invId: iv.id, no: iv.no, date: iv.date, client: iv.client, deal: iv.deal, amount: iv.amount, due: iv.due, status: iv.status, onopen: () => openInvoiceDetail(iv.id) })),
+      ...paid.map(d => ({ invId: null, no: 'по сделке', date: d.created, client: d.client, deal: d.id, amount: d.amount, due: '', status: 'paid', onopen: () => openDealDetail(d.id) })),
+    ];
+  }
+
+  // Массовое редактирование: выбор счетов (только реальные счета, не строки «по сделке»)
+  const isDirector = currentUser && currentUser.roleKey === 'director';
+  const selected = new Set();
+  let visibleInvIds = [];
 
   // Единый стиль для всех полей фильтра
   const inputCss = 'min-width:0;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;height:34px;box-sizing:border-box';
@@ -4109,9 +4118,15 @@ VIEWS.invoices = () => {
     overdue: () => el('span', { class:'pill pill-danger' }, '⚠ Просрочка'),
   };
   function buildTbody() {
-    const rows = docs.filter(matchesDoc).map(doc => {
+    const list = computeDocs().filter(matchesDoc);
+    visibleInvIds = list.filter(d => d.invId).map(d => d.invId);
+    const rows = list.map(doc => {
       const cl = clientById(doc.client); const dl = byId(state.deals, doc.deal);
+      const cb = doc.invId ? el('input', { type:'checkbox', checked: selected.has(doc.invId) ? 'checked' : null,
+        onclick: e => e.stopPropagation(),
+        onchange: () => { if (cb.checked) selected.add(doc.invId); else selected.delete(doc.invId); refreshBulk(); } }) : null;
       return el('tr', { style:'cursor:pointer', onclick: doc.onopen }, [
+        el('td', { style:'text-align:center', onclick: e => e.stopPropagation() }, cb),
         el('td', { class:'strong' }, doc.no),
         el('td', {}, doc.date ? fmtDate(doc.date) : '—'),
         el('td', {}, cl ? cl.name : '—'),
@@ -4121,7 +4136,59 @@ VIEWS.invoices = () => {
         el('td', {}, (stPill[doc.status] || (() => el('span', { class:'muted' }, '—')))()),
       ]);
     });
-    return el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 7, class:'muted', style:'text-align:center;padding:20px' }, 'Документов нет'))]);
+    return el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 8, class:'muted', style:'text-align:center;padding:20px' }, 'Документов нет'))]);
+  }
+
+  // --- Массовое редактирование ---
+  const selAll = el('input', { type:'checkbox', title:'Выбрать все счета', onchange: () => {
+    if (selAll.checked) visibleInvIds.forEach(id => selected.add(id)); else visibleInvIds.forEach(id => selected.delete(id));
+    refresh();
+  } });
+  const bulkCount = el('span', { class:'strong' }, '');
+  const bulkStatusSel = el('select', { style: inputCss + ';min-width:170px' }, [
+    el('option', { value:'' }, 'Сменить статус…'),
+    el('option', { value:'paid' }, 'Оплачено'),
+    el('option', { value:'pending' }, 'Ожидает'),
+    el('option', { value:'overdue' }, 'Просрочка'),
+  ]);
+  const applyStatusBtn = el('button', { class:'btn btn-sm btn-primary', onclick: () => bulkSetStatus(bulkStatusSel.value) }, 'Применить');
+  const delBtn = isDirector ? el('button', { class:'btn btn-sm btn-danger', onclick: bulkDelete }, '🗑 Удалить') : null;
+  const clearBtn = el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); refresh(); } }, 'Снять выбор');
+  const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [bulkCount, bulkStatusSel, applyStatusBtn, delBtn, clearBtn]);
+
+  function refreshBulk() {
+    bulkCount.textContent = `Выбрано: ${selected.size}`;
+    bulkBar.style.display = selected.size ? '' : 'none';
+    selAll.checked = visibleInvIds.length > 0 && visibleInvIds.every(id => selected.has(id));
+  }
+  async function bulkSetStatus(status) {
+    if (!status) { toast('Выберите новый статус', 'warn'); return; }
+    const ids = [...selected]; if (!ids.length) return;
+    applyStatusBtn.disabled = true;
+    try {
+      for (const id of ids) {
+        const saved = await window.__API__.apiFetch('invoices/' + id, { method:'PUT', body:{ status_id: status } });
+        const iv = byId(state.invoices, id);
+        if (iv) { if (saved) Object.assign(iv, window.__API__.map.invoice(saved)); else iv.status = status; }
+      }
+      toast(`Статус обновлён · счетов: ${ids.length}`, 'success');
+      selected.clear(); bulkStatusSel.value = ''; refresh();
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+    applyStatusBtn.disabled = false;
+  }
+  async function bulkDelete() {
+    const ids = [...selected]; if (!ids.length) return;
+    if (!confirm(`Удалить выбранные счета (${ids.length})? Действие необратимо.`)) return;
+    if (delBtn) delBtn.disabled = true;
+    try {
+      for (const id of ids) {
+        await window.__API__.apiFetch('invoices/' + id, { method:'DELETE' });
+        const i = state.invoices.findIndex(x => x.id === id); if (i >= 0) state.invoices.splice(i, 1);
+      }
+      toast(`Удалено счетов: ${ids.length}`, 'success');
+      selected.clear(); refresh();
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+    if (delBtn) delBtn.disabled = false;
   }
 
   const tw = el('div', { class:'mt-16 table-wrap' });
@@ -4133,18 +4200,22 @@ VIEWS.invoices = () => {
     el('span', { class:'muted', style:'font-size:12px' }, 'с:'), dueFromI,
     el('span', { class:'muted', style:'font-size:12px' }, 'по:'), dueToI,
   ]));
+  tw.append(bulkBar);
   const tab = el('table', { class:'data' });
   tab.append(el('thead', {}, el('tr', {}, [
+    el('th', { style:'text-align:center;width:36px' }, selAll),
     el('th', {}, '№ счёта'), el('th', {}, 'Дата'), el('th', {}, 'Клиент'),
     el('th', {}, 'Сделка'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Срок оплаты'), el('th', {}, 'Статус'),
   ])));
   tab.append(buildTbody());
   tw.append(tab);
   wrap.append(tw);
+  refreshBulk();
 
   function refresh() {
     const tb = tab.querySelector('tbody');
     if (tb) tb.replaceWith(buildTbody());
+    refreshBulk();
   }
   return wrap;
 };
