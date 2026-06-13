@@ -353,7 +353,7 @@ async function dataRoute({ request, env }, seg, url, auth) {
 
   // задачи: расширенные поля (описание/дата начала/статус/комментарии) — добавляем на лету
   if (resource === 'tasks') await ensureTaskColumns(env);
-  if (resource === 'deals' || resource === 'clients') await ensureArchiveColumns(env);
+  if (resource === 'deals' || resource === 'clients' || resource === 'invoices') await ensureArchiveColumns(env);
   if (resource === 'roles') await ensureArchiveRight(env); // выдать директору право «Архив»
   if (resource === 'deals') await ensureDealColumns(env);
   if (resource === 'company') await ensureCompanyColumns(env);
@@ -391,6 +391,8 @@ async function dataRoute({ request, env }, seg, url, auth) {
   if (resource === 'clients' && method === 'GET') return id ? getClient(env, id) : listClients(env, url);
   if (resource === 'clients' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeClient(env, request, method, id);
   if (resource === 'clients' && method === 'DELETE' && id) return deleteClient(env, id, auth);
+  if (resource === 'invoices' && method === 'GET' && !id) return listInvoices(env, url);
+  if (resource === 'invoices' && method === 'DELETE' && id) return deleteInvoice(env, id, auth);
   if (resource === 'leads' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeLead(env, request, method, id);
   if (resource === 'notifications' && id === 'scan-overdue' && method === 'POST') return scanOverdueTasks(env);
   if (resource === 'notifications' && method === 'GET' && !id) return listNotifications(env, auth);
@@ -1174,6 +1176,25 @@ async function deleteClient(env, id, auth) {
   return json({ archived: 1, id });
 }
 
+// Список счетов (без архивных)
+async function listInvoices(env, url) {
+  await ensureArchiveColumns(env);
+  const limit = clampInt(url.searchParams.get('limit'), 500, 1, 1000);
+  const offset = clampInt(url.searchParams.get('offset'), 0, 0, 1e9);
+  const r = await env.DB.prepare('SELECT * FROM invoices WHERE archived_at IS NULL LIMIT ? OFFSET ?').bind(limit, offset).all();
+  return json(r.results);
+}
+
+// «Удаление» счёта = мягкое перемещение в архив (можно восстановить)
+async function deleteInvoice(env, id, auth) {
+  const iv = await env.DB.prepare('SELECT id FROM invoices WHERE id=?').bind(id).first();
+  if (!iv) return err(404, 'Счёт не найден');
+  if (!auth || auth.role !== 'director') return err(403, 'Удалять счета может только директор');
+  await ensureArchiveColumns(env);
+  await env.DB.prepare('UPDATE invoices SET archived_at=? WHERE id=?').bind(new Date().toISOString(), id).run();
+  return json({ archived: 1, id });
+}
+
 // ----- Архив (сделки/клиенты) -----
 // Право доступа «Архив» — по модулю 'archive' в роли пользователя
 async function roleHasModule(env, auth, mod) {
@@ -1197,7 +1218,7 @@ async function ensureArchiveRight(env) {
 let ARCHIVE_SCHEMA_OK = false;
 async function ensureArchiveColumns(env) {
   if (ARCHIVE_SCHEMA_OK) return;
-  for (const ddl of ['ALTER TABLE deals ADD COLUMN archived_at TEXT', 'ALTER TABLE clients ADD COLUMN archived_at TEXT']) {
+  for (const ddl of ['ALTER TABLE deals ADD COLUMN archived_at TEXT', 'ALTER TABLE clients ADD COLUMN archived_at TEXT', 'ALTER TABLE invoices ADD COLUMN archived_at TEXT']) {
     try { await env.DB.prepare(ddl).run(); } catch (e) {}
   }
   ARCHIVE_SCHEMA_OK = true;
@@ -1205,12 +1226,13 @@ async function ensureArchiveColumns(env) {
 async function listArchive(env) {
   const deals = await env.DB.prepare('SELECT id, no, title, client_id, manager_id, stage_id, amount, archived_at FROM deals WHERE archived_at IS NOT NULL ORDER BY archived_at DESC').all();
   const clients = await env.DB.prepare('SELECT id, name, bin, type_key, city, manager_id, archived_at FROM clients WHERE archived_at IS NOT NULL ORDER BY archived_at DESC').all();
-  return json({ deals: deals.results, clients: clients.results });
+  const invoices = await env.DB.prepare('SELECT id, no, client_id, deal_id, amount, due, status_id, archived_at FROM invoices WHERE archived_at IS NOT NULL ORDER BY archived_at DESC').all();
+  return json({ deals: deals.results, clients: clients.results, invoices: invoices.results });
 }
 async function restoreArchive(env, request) {
   const b = await request.json().catch(() => ({}));
-  if (!b.id || !['deal', 'client'].includes(b.type)) return err(400, 'Некорректный запрос');
-  const table = b.type === 'deal' ? 'deals' : 'clients';
+  if (!b.id || !['deal', 'client', 'invoice'].includes(b.type)) return err(400, 'Некорректный запрос');
+  const table = b.type === 'deal' ? 'deals' : b.type === 'client' ? 'clients' : 'invoices';
   await env.DB.prepare(`UPDATE ${table} SET archived_at=NULL WHERE id=?`).bind(b.id).run();
   return json({ restored: 1, type: b.type, id: b.id });
 }
@@ -1235,6 +1257,11 @@ async function purgeExpiredArchive(env) {
       env.DB.prepare('DELETE FROM client_tags WHERE client_id=?').bind(c.id),
       env.DB.prepare('DELETE FROM clients WHERE id=?').bind(c.id),
     ]);
+  }
+  // Архивные счета старше 30 дней — окончательно удаляем
+  const oldInv = await env.DB.prepare('SELECT id FROM invoices WHERE archived_at IS NOT NULL AND archived_at < ?').bind(cutoff).all();
+  for (const iv of oldInv.results) {
+    await env.DB.prepare('DELETE FROM invoices WHERE id=?').bind(iv.id).run();
   }
 }
 
