@@ -4046,19 +4046,35 @@ VIEWS.reports = () => {
   const monLabel = (m) => { const [y, mm] = String(m).split('-'); return (MON[(+mm) - 1] || m) + ' ' + String(y).slice(2); };
   const noData = (text) => el('div', { class:'muted', style:'padding:28px;text-align:center' }, text);
 
-  // ----- Сводные счётчики: сделки (по фильтрам) + задачи -----
+  // ----- Сводные счётчики: сделки (по фильтрам) + задачи (период+менеджер) -----
   const dealsTotalVal = el('div', { class:'stat-value' }, '—');
   const dealsTotalCard = el('div', { class:'card stat' }, [
     el('div', { class:'stat-icon' }, '💼'), el('div', { class:'stat-label' }, 'Всего сделок'), dealsTotalVal,
   ]);
-  const myTasks = visibleTasks();
-  const tDone = myTasks.filter(t => t.done).length;
-  wrap.append(el('div', { class:'grid grid-4', style:'margin-bottom:16px' }, [
-    dealsTotalCard,
-    statCard('Всего задач', myTasks.length, '', '', '✅'),
-    statCard('Выполнено задач', tDone, '', '', '✓'),
-    statCard('Не выполнено', myTasks.length - tDone, '', '', '⏳'),
-  ]));
+  const statRef = (label, icon) => {
+    const v = el('div', { class:'stat-value' }, '—');
+    return { card: el('div', { class:'card stat' }, [el('div', { class:'stat-icon' }, icon), el('div', { class:'stat-label' }, label), v]), v };
+  };
+  const tTotal = statRef('Всего задач', '✅');
+  const tDoneC = statRef('Выполнено задач', '✓');
+  const tOpenC = statRef('Не выполнено', '⏳');
+  wrap.append(el('div', { class:'grid grid-4', style:'margin-bottom:16px' }, [dealsTotalCard, tTotal.card, tDoneC.card, tOpenC.card]));
+  // Пересчёт задач: фильтр по периоду (срок задачи) и менеджеру (исполнитель)
+  function updateTaskStats() {
+    let ts = visibleTasks();
+    if (f.manager) ts = ts.filter(t => t.owner === f.manager);
+    if (f.from || f.to) ts = ts.filter(t => {
+      const d = String(t.due || '').slice(0, 10);
+      if (!d) return false;
+      if (f.from && d < f.from) return false;
+      if (f.to && d > f.to) return false;
+      return true;
+    });
+    const done = ts.filter(t => t.done).length;
+    tTotal.v.textContent = String(ts.length);
+    tDoneC.v.textContent = String(done);
+    tOpenC.v.textContent = String(ts.length - done);
+  }
 
   // ----- Сделки по этапам (количество, с учётом фильтров) -----
   const stageCard = el('div', { class:'card' });
@@ -4131,6 +4147,7 @@ VIEWS.reports = () => {
     const activeCount = [f.manager, f.from, f.to, f.stage, f.minSum, f.maxSum, f.pipeline].filter(v => v !== '' && v != null).length;
     filterBadge.style.display = activeCount ? '' : 'none';
     filterBadge.textContent = String(activeCount);
+    updateTaskStats(); // задачи пересчитываются сразу (период + менеджер), не дожидаясь ответа сервера
     const qp = new URLSearchParams();
     if (f.manager) qp.set('manager', f.manager);
     if (f.from) qp.set('from', f.from);
@@ -4151,6 +4168,7 @@ VIEWS.reports = () => {
     }
 
     // 0) Сводка по сделкам + разбивка по этапам (с учётом фильтров)
+    updateTaskStats();
     const byStage = rep.byStage || [];
     dealsTotalVal.textContent = String(byStage.reduce((s, x) => s + (x.count || 0), 0));
     stageHost.innerHTML = '';
@@ -4162,7 +4180,17 @@ VIEWS.reports = () => {
         .sort((a, b) => (a.stg.sort || 0) - (b.stg.sort || 0));
       const st = el('table', { class:'data' });
       st.append(el('thead', {}, el('tr', {}, [el('th', {}, 'Этап'), el('th', { class:'num' }, 'Сделок'), el('th', { class:'num' }, 'Сумма')])));
-      st.append(el('tbody', {}, rows.map(x => el('tr', {}, [
+      st.append(el('tbody', {}, rows.map(x => el('tr', {
+        style:'cursor:pointer', title:`Открыть сделки этапа «${x.stg.label}»`,
+        onclick: () => {
+          const stg = STAGES.find(s => s.id === x.stage_id);
+          if (stg && stg.pipelineId) setDealsPipeline(stg.pipelineId); // переключаем воронку и сбрасываем этап
+          DEALS_STAGE = x.stage_id;            // фильтр по выбранному этапу
+          DEALS_MGR = f.manager; DEALS_FROM = f.from; DEALS_TO = f.to; DEALS_Q = ''; // переносим фильтры отчёта
+          DEALS_VIEW = 'list';
+          navigate('deals');
+        },
+      }, [
         el('td', {}, el('span', { class:'pill', style:`background:${x.stg.color}22;color:${x.stg.color}` }, x.stg.label)),
         el('td', { class:'num strong' }, x.count),
         el('td', { class:'num muted' }, fmtMoneyK(x.sum)),
