@@ -1215,27 +1215,73 @@ function openNewSupplier() {
 
 // ---------- New Shipment ----------
 function openNewShipment() {
-  const deal = fSelect('Сделка',
-    state.deals.filter(d => ['paid','agreed','invoice'].includes(d.stage)).map(d => ({ value: d.id, label: d.title })),
-    null);
+  // Адрес сделки: из самой сделки, иначе из клиента
+  const dealAddress = (d) => { if (!d) return ''; if (d.address) return d.address; const cl = clientById(d.client); return (cl && cl.address) || ''; };
+
+  // ----- Поле «Сделка» с live-поиском по названию/клиенту -----
+  let selectedDealId = null;
+  const dealInput = el('input', { placeholder:'Начните вводить название сделки…', autocomplete:'off' });
+  const dealList = el('div', { style:'position:absolute;left:0;right:0;top:calc(100% + 2px);z-index:30;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.14);max-height:240px;overflow:auto;display:none' });
+  const dealWrap = el('div', { style:'position:relative' }, [dealInput, dealList]);
+  const dealRow = el('div', { class:'form-row' }, [el('label', {}, 'Сделка'), dealWrap]);
+
   const date = fInput('Дата', new Date().toISOString().slice(0,10), { type: 'date' });
   const transport = fSelect('Транспорт',
     ['Газель собственная','Самовывоз','Транспортная Astana Trans','Курьер','Other'].map(v => ({ value: v, label: v })),
     'Газель собственная');
   const driver = fInput('Водитель', 'Куаныш А.');
-  const dest = fInput('Адрес доставки');
+  // Адрес — редактируемое поле, автозаполняется из выбранной сделки
+  const destInput = el('input', { placeholder:'Адрес доставки' });
+  const destRow = el('div', { class:'form-row' }, [el('label', {}, 'Адрес доставки'), destInput]);
+
+  function selectDeal(d) {
+    selectedDealId = d.id;
+    const cl = clientById(d.client);
+    dealInput.value = d.title + (cl && cl.name ? ' · ' + cl.name : '');
+    dealList.style.display = 'none';
+    destInput.value = dealAddress(d); // автоподстановка адреса (пусто, если нет)
+  }
+  function renderDealList(term) {
+    const q = String(term || '').trim().toLowerCase();
+    dealList.innerHTML = '';
+    if (!q) { dealList.style.display = 'none'; return; }
+    const matches = state.deals.filter(d => {
+      const cl = clientById(d.client);
+      return String(d.title || '').toLowerCase().includes(q) || String(cl && cl.name || '').toLowerCase().includes(q);
+    }).slice(0, 20);
+    if (!matches.length) {
+      dealList.append(el('div', { class:'muted', style:'padding:10px 12px;font-size:13px' }, 'Сделки не найдены'));
+      dealList.style.display = 'block'; return;
+    }
+    matches.forEach(d => {
+      const cl = clientById(d.client); const addr = dealAddress(d);
+      const item = el('div', { style:'padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border)', onmousedown: (e) => { e.preventDefault(); selectDeal(d); } }, [
+        el('div', { class:'strong', style:'font-size:13px' }, d.title || '—'),
+        el('div', { class:'muted', style:'font-size:12px' }, (cl ? cl.name : '—') + (addr ? ' · ' + addr : '')),
+      ]);
+      item.onmouseenter = () => { item.style.background = '#F3F4F6'; };
+      item.onmouseleave = () => { item.style.background = ''; };
+      dealList.append(item);
+    });
+    dealList.style.display = 'block';
+  }
+  dealInput.oninput = () => { selectedDealId = null; renderDealList(dealInput.value); };
+  dealInput.onfocus = () => { if (dealInput.value) renderDealList(dealInput.value); };
+  dealInput.onblur = () => { setTimeout(() => { dealList.style.display = 'none'; }, 150); };
+
   openModal({
     title: 'Новая отгрузка',
-    body: el('div', {}, [deal.row, date.row, transport.row, driver.row, dest.row]),
+    body: el('div', {}, [dealRow, date.row, transport.row, driver.row, destRow]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
       el('button', { class: 'btn btn-primary', onclick: async () => {
-        const d = byId(state.deals, deal.get());
+        if (!selectedDealId) { toast('Выберите сделку из списка', 'warn'); dealInput.focus(); return; }
+        const d = byId(state.deals, selectedDealId);
         const sh = {
           no: 'ТТН-0' + (515 + state.shipments.length),
-          deal: deal.get(), client: (d && d.client) || (state.clients[0] && state.clients[0].id),
+          deal: selectedDealId, client: (d && d.client) || (state.clients[0] && state.clients[0].id),
           date: date.get(), items: (d && d.items) || 1, weight: 0,
-          transport: transport.get(), driver: driver.get(), status: 'planned', destination: dest.get(),
+          transport: transport.get(), driver: driver.get(), status: 'planned', destination: destInput.value.trim(),
         };
         try {
           const saved = await window.__API__.apiFetch('shipments', { method: 'POST', body: window.__API__.toApi.shipment(sh) });
