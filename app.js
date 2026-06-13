@@ -234,8 +234,7 @@ function buildDealsNavGroup(it, isActive) {
   const group = el('div', { class: 'nav-group open', id: 'nav-deals-group' });
   const mainBtn = el('button', { 'data-view': 'deals', class: 'nav-group-main' + (isActive ? ' active' : '') }, [
     el('span', { class: 'icon' }, it.icon),
-    ' ' + it.label + ' ',
-    it.badge ? el('span', { class: 'badge' }, String(it.badge)) : null,
+    ' ' + it.label,
   ]);
   const toggle = el('button', { class: 'nav-group-toggle', id: 'pipeToggle', title: 'Воронки', 'aria-label': 'Воронки' }, '▸');
   group.append(el('div', { class: 'nav-group-row' }, [mainBtn, toggle]), el('div', { class: 'nav-sub', id: 'nav-pipelines' }));
@@ -4982,8 +4981,7 @@ function renderShell() {
     if (it.v === 'deals') { nav.appendChild(buildDealsNavGroup(it, idx === 0)); return; }
     const btn = el('button', { 'data-view': it.v, class: idx === 0 ? 'active' : '' }, [
       el('span', { class: 'icon' }, it.icon),
-      ' ' + it.label + ' ',
-      it.badge ? el('span', { class: 'badge' }, String(it.badge)) : null,
+      ' ' + it.label,
     ]);
     nav.appendChild(btn);
   });
