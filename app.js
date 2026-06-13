@@ -3007,15 +3007,15 @@ VIEWS.clients = () => {
   const filterState = { q: '', type: '', city: '', manager: '', from: '', to: '' };
   const cities = Array.from(new Set(state.clients.map(c => c.city).filter(Boolean))).sort();
   const managers = state.users.filter(u => u.active !== false);
-  const searchI = el('input', { placeholder:'Поиск клиента или БИН…', oninput: e => { filterState.q = e.target.value.toLowerCase(); refresh(); } });
-  const typeS = el('select', { onchange: e => { filterState.type = e.target.value; refresh(); } },
+  const searchI = el('input', { placeholder:'Поиск клиента или БИН…', oninput: e => { filterState.q = e.target.value.toLowerCase(); applyFilter(); } });
+  const typeS = el('select', { onchange: e => { filterState.type = e.target.value; applyFilter(); } },
     [el('option', { value:'' }, 'Все типы'), el('option', { value:'opt' }, 'Опт'), el('option', { value:'rozn' }, 'Розница'), el('option', { value:'dilr' }, 'Дилер')]);
-  const cityS = el('select', { onchange: e => { filterState.city = e.target.value; refresh(); } },
+  const cityS = el('select', { onchange: e => { filterState.city = e.target.value; applyFilter(); } },
     [el('option', { value:'' }, 'Все города')].concat(cities.map(c => el('option', { value: c }, c))));
-  const mgrS = el('select', { onchange: e => { filterState.manager = e.target.value; refresh(); } },
+  const mgrS = el('select', { onchange: e => { filterState.manager = e.target.value; applyFilter(); } },
     [el('option', { value:'' }, 'Все менеджеры')].concat(managers.map(u => el('option', { value: u.id }, u.name))));
-  const fromI = el('input', { type:'date', onchange: e => { filterState.from = e.target.value; refresh(); } });
-  const toI = el('input', { type:'date', onchange: e => { filterState.to = e.target.value; refresh(); } });
+  const fromI = el('input', { type:'date', onchange: e => { filterState.from = e.target.value; applyFilter(); } });
+  const toI = el('input', { type:'date', onchange: e => { filterState.to = e.target.value; applyFilter(); } });
   const drawer = buildFilterDrawer({
     groups: [
       filterGroup('Тип', typeS),
@@ -3023,9 +3023,12 @@ VIEWS.clients = () => {
       filterGroup('Менеджер', mgrS),
       filterGroup('Последняя сделка', el('div', { class:'row2' }, [fromI, toI])),
     ],
-    onReset: () => { Object.assign(filterState, { type:'', city:'', manager:'', from:'', to:'' }); typeS.value=''; cityS.value=''; mgrS.value=''; fromI.value=''; toI.value=''; refresh(); },
+    onReset: () => { Object.assign(filterState, { type:'', city:'', manager:'', from:'', to:'' }); typeS.value=''; cityS.value=''; mgrS.value=''; fromI.value=''; toI.value=''; applyFilter(); },
     countActive: () => ['type','city','manager','from','to'].filter(k => filterState[k]).length,
   });
+  // Пагинация (клиентская — по отфильтрованному списку)
+  let page = 1; const PAGE_SIZE = 50;
+  function applyFilter() { page = 1; refresh(); }
 
   // Массовое редактирование: выбор клиентов
   const selected = new Set();
@@ -3038,7 +3041,7 @@ VIEWS.clients = () => {
     bulkCount,
     el('button', { class:'btn btn-sm btn-primary', onclick: () => openClientBulkEdit([...selected]) }, 'Массовое редактирование'),
     delBtn,
-    el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); selAll.checked = false; const tb = tw.querySelector('tbody'); if (tb) tb.replaceWith(buildTbody(visibleNow)); refreshBulk(); } }, 'Снять выбор'),
+    el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); selAll.checked = false; refresh(); } }, 'Снять выбор'),
   ]);
   function refreshBulk() { bulkCount.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
   async function bulkDeleteClients() {
@@ -3056,8 +3059,7 @@ VIEWS.clients = () => {
   }
   selAll.onchange = () => {
     visibleNow.forEach(c => { if (selAll.checked) selected.add(c.id); else selected.delete(c.id); });
-    const tb = tw.querySelector('tbody'); if (tb) tb.replaceWith(buildTbody(visibleNow));
-    refreshBulk();
+    refresh();
   };
 
   const tw = el('div', { class: 'table-wrap' });
@@ -3088,10 +3090,27 @@ VIEWS.clients = () => {
       return true;
     });
     visibleNow = visible;
+    const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+    if (page > pages) page = pages;
+    const pageItems = visible.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
     const tb = tw.querySelector('tbody');
-    if (tb) tb.replaceWith(buildTbody(visible));
+    if (tb) tb.replaceWith(buildTbody(pageItems));
+    renderPager(visible.length, pages);
     selAll.checked = visible.length > 0 && visible.every(x => selected.has(x.id));
     refreshBulk();
+  }
+  function renderPager(total, pages) {
+    pager.innerHTML = '';
+    if (!total) return;
+    const from = (page - 1) * PAGE_SIZE + 1;
+    const to = Math.min(total, page * PAGE_SIZE);
+    pager.append(
+      el('div', { class:'muted', style:'font-size:12px' }, `Показано ${from}–${to} из ${total} · стр. ${page} из ${pages}`),
+      el('div', { class:'row', style:'gap:6px' }, [
+        el('button', { class:'btn btn-sm', disabled: page <= 1 ? 'disabled' : null, onclick: () => { if (page > 1) { page--; refresh(); } } }, '← Назад'),
+        el('button', { class:'btn btn-sm', disabled: page >= pages ? 'disabled' : null, onclick: () => { if (page < pages) { page++; refresh(); } } }, 'Вперёд →'),
+      ]),
+    );
   }
   function buildTbody(list) {
     return el('tbody', {}, list.map(c => {
@@ -3133,11 +3152,14 @@ VIEWS.clients = () => {
     el('th', { class: 'num' }, 'Баланс'),
     el('th', {}, 'Последняя сделка'),
   ])));
-  t.append(buildTbody(state.clients));
+  t.append(buildTbody([]));
 
   tw.append(t);
   wrap.append(tw);
+  const pager = el('div', { class:'row', style:'justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px' });
+  wrap.append(pager);
   wrap.append(drawer.backdrop, drawer.drawer);
+  refresh(); // первичная отрисовка с пагинацией
   return wrap;
 };
 
