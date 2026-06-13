@@ -883,8 +883,12 @@ async function writeDeal(env, request, method, id, auth) {
   }
   // сумма и количество пересчитываются по позициям (как в мокапе)
   if (lineItems) {
-    data.amount = lineItems.reduce((s, it) => s + num(it.qty) * num(it.price_used != null ? it.price_used : it.priceUsed), 0);
     data.items = lineItems.reduce((s, it) => s + num(it.qty), 0);
+    // сумму считаем сами только если клиент её не прислал; иначе уважаем общую сумму
+    // сделки (база + позиции), которую посчитал фронт
+    if (data.amount == null || data.amount === '') {
+      data.amount = lineItems.reduce((s, it) => s + num(it.qty) * num(it.price_used != null ? it.price_used : it.priceUsed), 0);
+    }
   }
   const keys = Object.keys(data).filter((k) => cols.includes(k));
 
