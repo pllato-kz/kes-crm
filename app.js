@@ -4662,11 +4662,11 @@ VIEWS.settings = () => {
   pt.append(el('thead', {}, el('tr', {}, [
     el('th', {}, 'Модуль'),
     ...roleCols.map(([rk, label]) => el('th', { class:'num' },
-      (canEditUsers && !CORE_ROLES.includes(rk))
+      (canEditUsers && rk !== currentUser.roleKey)
         ? el('span', { class:'role-head' }, [
             el('span', {}, label),
             el('button', { class:'role-del', title:'Удалить роль', onclick: async () => {
-              if (!confirm(`Удалить роль «${label}»?`)) return;
+              if (!confirm(`Удалить роль «${label}»? Пользователи с этой ролью потеряют доступ.`)) return;
               try { await window.__API__.apiFetch('roles/' + encodeURIComponent(rk), { method:'DELETE' }); await loadData(); navigate('settings'); toast('Роль удалена', 'success'); }
               catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
             } }, '×'),
@@ -4694,17 +4694,39 @@ VIEWS.settings = () => {
   permsCard.append(el('div', { style:'overflow-x:auto' }, pt));
   wrap.append(permsCard);
 
-  // Прочее
+  // О компании — редактируемые реквизиты (директор сохраняет в БД)
+  const m = state.meta || {};
+  const cLegal = fInput('Юридическое наименование', m.legalName || '');
+  const cTenant = fInput('Бренд (короткое имя)', m.tenant || '');
+  const cBin = fInput('БИН', m.bin || '');
+  const cCity = fInput('Город', m.city || '');
+  const cAddr = fInput('Адрес', m.address || '');
+  const cHours = fInput('Время работы', m.workHours || '');
+  const cSite = fInput('Сайт', m.website || '');
+  const cCurr = fInput('Валюта', m.currency || '₸');
+  const cNote = fTextarea('Заметка / статус', m.note || '');
+  const cFields = [cLegal, cTenant, cBin, cCity, cAddr, cHours, cSite, cCurr, cNote];
+  if (!canEditUsers) cFields.forEach(f => f.row.querySelectorAll('input,textarea').forEach(i => i.disabled = true));
+
+  const saveCompanyBtn = canEditUsers ? el('button', { class:'btn btn-sm btn-primary', onclick: async (e) => {
+    const b = e.currentTarget; b.disabled = true; const o = b.textContent; b.textContent = 'Сохранение…';
+    const body = {
+      tenant: cTenant.get().trim(), city: cCity.get(), currency: cCurr.get().trim() || '₸',
+      legal_name: cLegal.get(), bin: cBin.get(), address: cAddr.get(),
+      work_hours: cHours.get(), website: cSite.get(), note: cNote.get(),
+    };
+    try {
+      await window.__API__.apiFetch('company/' + (m.id || 1), { method:'PUT', body });
+      Object.assign(state.meta, { tenant: body.tenant, city: body.city, currency: body.currency,
+        legalName: body.legal_name, bin: body.bin, address: body.address, workHours: body.work_hours, website: body.website, note: body.note });
+      toast('Реквизиты компании сохранены', 'success');
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+    b.disabled = false; b.textContent = o;
+  } }, '💾 Сохранить') : null;
+
   const info = el('div', { class:'card mt-16' });
-  info.append(el('div', { class:'card-head' }, el('h3', {}, 'О компании')));
-  info.append(el('dl', { class:'kv' }, [
-    el('dt', {}, 'Юридическое наименование'), el('dd', {}, 'ТОО «KazEnergoSnab»'),
-    el('dt', {}, 'БИН'),                       el('dd', {}, '180440099887'),
-    el('dt', {}, 'Адрес'),                     el('dd', {}, 'Караганда, ул. Бытовая, 13/1'),
-    el('dt', {}, 'Время работы'),              el('dd', {}, 'Пн–Пт 9:00–18:00, обед 13:00–14:00'),
-    el('dt', {}, 'Сайт'),                      el('dd', {}, 'snabenergo.kz'),
-    el('dt', {}, 'Статус EKF'),                el('dd', {}, 'Сертифицированный субдилер по РК с 2018'),
-  ]));
+  info.append(el('div', { class:'card-head' }, [el('h3', {}, 'О компании'), saveCompanyBtn]));
+  info.append(el('div', { style:'padding:4px 4px 0' }, cFields.map(f => f.row)));
   wrap.append(info);
 
   // Сброс
