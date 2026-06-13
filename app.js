@@ -5050,14 +5050,6 @@ VIEWS.settings = () => {
   info.append(el('div', { style:'padding:4px 4px 0' }, cFields.map(f => f.row)));
   wrap.append(info);
 
-  // Сброс
-  const reset = el('div', { class:'card mt-16' });
-  reset.append(el('div', { class:'card-head' }, el('h3', {}, 'Демо-данные')));
-  reset.append(el('div', {}, [
-    el('p', { class:'muted', style:'margin-top:0' }, 'Этот мокап хранит данные в localStorage. Все изменения (создание сделок, отметки задач) сохраняются между перезагрузками.'),
-    el('button', { class:'btn btn-danger', onclick: () => { if (confirm('Сбросить все демо-данные?')) resetState(); } }, '↺ Сбросить к исходным'),
-  ]));
-  wrap.append(reset);
   return wrap;
 };
 
