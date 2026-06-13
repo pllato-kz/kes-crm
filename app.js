@@ -77,6 +77,7 @@ const ICONS = {
   'tool': '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
   'archive': '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/>',
   'sliders': '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
+  'filter': '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
   'ruler': '<path d="M21.3 8.7 8.7 21.3a1 1 0 0 1-1.4 0l-4.6-4.6a1 1 0 0 1 0-1.4L15.3 2.7a1 1 0 0 1 1.4 0l4.6 4.6a1 1 0 0 1 0 1.4Z"/><path d="m7.5 10.5 2 2M10.5 7.5l2 2M13.5 4.5l2 2M4.5 13.5l2 2"/>',
   'thermometer': '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>',
   'antenna': '<path d="M2 12 7 2M7 12l5-10M12 12l5-10M17 12l5-10M4.5 7h15"/><path d="M12 16v6"/>',
@@ -3977,7 +3978,7 @@ VIEWS.reports = () => {
   const now = new Date();
   const monthName = now.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
   wrap.append(el('div', { class:'page-head' }, [
-    el('div', {}, [el('h1', {}, 'Отчёты'), el('div', { class:'sub' }, `${monthName} · по данным CRM (выигранные сделки: оплата/отгрузка/закрытие)`)]),
+    el('div', {}, [el('h1', {}, 'Отчёты'), el('div', { class:'sub' }, `${monthName} · по реальным данным CRM (используйте фильтр для уточнения)`)]),
     el('div', { class:'actions' }, [el('button', { class:'btn', onclick: () => exportReportPDF() }, '📥 Экспорт PDF')]),
   ]));
 
@@ -3993,7 +3994,7 @@ VIEWS.reports = () => {
   const maxI = el('input', { type:'number', placeholder:'до', onchange: e => { f.maxSum = e.target.value; loadReports(); } });
 
   const filterBadge = el('span', { class:'badge', style:'display:none;margin-left:2px;background:var(--brand);color:#fff' }, '');
-  const filterBtn = el('button', { class:'btn', onclick: () => openDrawer() }, ['🔍 Фильтр', filterBadge]);
+  const filterBtn = el('button', { class:'btn', onclick: () => openDrawer() }, [svgIconEl('filter', 16), ' Фильтр', filterBadge]);
   const backdrop = el('div', { class:'drawer-backdrop', onclick: () => closeDrawer() });
   const drawer = el('div', { class:'filter-drawer' }, [
     el('div', { class:'fd-head' }, [
@@ -4112,7 +4113,7 @@ VIEWS.reports = () => {
     const months = rep.byMonth || [];
     host1.innerHTML = '';
     if (!window.Chart || !months.length) {
-      host1.append(noData(months.length ? 'График недоступен' : 'Нет выигранных сделок с датой'));
+      host1.append(noData(months.length ? 'График недоступен' : 'Нет сделок с датой по выбранным фильтрам'));
     } else {
       const cv1 = el('canvas', { style:'max-height:260px' }); host1.append(cv1);
       new Chart(cv1.getContext('2d'), {
@@ -4147,7 +4148,7 @@ VIEWS.reports = () => {
       .sort((a, b) => b.sum - a.sum);
     host3.innerHTML = '';
     if (!window.Chart || !mgr.length) {
-      host3.append(noData('Нет выигранных сделок'));
+      host3.append(noData('Нет сделок по выбранным фильтрам'));
     } else {
       const cv3 = el('canvas', { style:'max-height:260px' }); host3.append(cv3);
       new Chart(cv3.getContext('2d'), {
@@ -4161,7 +4162,7 @@ VIEWS.reports = () => {
     const totalFact = mgr.reduce((s, m) => s + m.sum, 0);
     mgrHost.innerHTML = '';
     if (!mgr.length) {
-      mgrHost.append(noData('Нет выигранных сделок'));
+      mgrHost.append(noData('Нет сделок по выбранным фильтрам'));
     } else {
       const mt = el('table', { class:'data' });
       mt.append(el('thead', {}, el('tr', {}, [

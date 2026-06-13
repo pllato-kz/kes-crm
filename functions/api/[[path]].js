@@ -734,7 +734,6 @@ async function greenapiSend(env, request, auth) {
 // Агрегаты раздела «Отчёты» — считаются в SQL по данным CRM (сделки/позиции).
 // «Выигранные» сделки: этапы paid/shipped/closed.
 async function reportsSummary(env, url) {
-  const WON = "('paid','shipped','closed')";
   const p = (url && url.searchParams) || new URLSearchParams();
   const manager = (p.get('manager') || '').trim();
   const from = (p.get('from') || '').trim();
@@ -744,9 +743,9 @@ async function reportsSummary(env, url) {
   const maxSum = (p.get('maxSum') || '').trim();
 
   // Конструктор условий WHERE с учётом фильтров (менеджер, диапазон дат, этапы, сумма).
-  //   alias — префикс таблицы deals ('' или 'd'); mode 'won' добавляет фильтр выигранных,
-  //   если этапы не выбраны; mode 'all' — без этого ограничения.
-  const condsFor = (alias, mode) => {
+  //   alias — префикс таблицы deals ('' или 'd'). Без выбранных этапов берём ВСЕ сделки
+  //   (реальные данные CRM); этап-фильтр сужает выборку до выбранных этапов.
+  const condsFor = (alias) => {
     const col = (c) => (alias ? `${alias}.${c}` : c);
     const conds = [];
     const args = [];
@@ -758,24 +757,22 @@ async function reportsSummary(env, url) {
     if (stages.length) {
       conds.push(`${col('stage_id')} IN (${stages.map(() => '?').join(',')})`);
       args.push(...stages);
-    } else if (mode === 'won') {
-      conds.push(`${col('stage_id')} IN ${WON}`);
     }
     return { where: conds.length ? 'WHERE ' + conds.join(' AND ') : '', args };
   };
 
-  const cStage = condsFor('', 'all');
+  const cStage = condsFor('');
   const byStage = await env.DB.prepare(
     `SELECT stage_id, COUNT(*) AS count, COALESCE(SUM(amount),0) AS sum FROM deals ${cStage.where} GROUP BY stage_id`
   ).bind(...cStage.args).all();
 
-  const cMgr = condsFor('', 'won');
+  const cMgr = condsFor('');
   const byManager = await env.DB.prepare(
     `SELECT manager_id, COUNT(*) AS count, COALESCE(SUM(amount),0) AS sum
        FROM deals ${cMgr.where} GROUP BY manager_id`
   ).bind(...cMgr.args).all();
 
-  const cCat = condsFor('d', 'won');
+  const cCat = condsFor('d');
   const byCategory = await env.DB.prepare(
     `SELECT COALESCE(c.name,'Без категории') AS category, COALESCE(SUM(di.qty * di.price_used),0) AS sum
        FROM deal_items di
@@ -786,7 +783,7 @@ async function reportsSummary(env, url) {
       GROUP BY c.name HAVING sum > 0 ORDER BY sum DESC`
   ).bind(...cCat.args).all();
 
-  const cMon = condsFor('', 'won');
+  const cMon = condsFor('');
   const monWhere = cMon.where
     ? `${cMon.where} AND created IS NOT NULL AND created <> ''`
     : `WHERE created IS NOT NULL AND created <> ''`;
