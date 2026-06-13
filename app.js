@@ -2307,6 +2307,13 @@ async function openDealDetail(id) {
   if (dpid && pipelineById(dpid) && dpid !== DEALS_PIPELINE) setDealsPipeline(dpid, true);
   setEntityHash('deals', d.id); // уникальный URL карточки
   if (!d.lineItems) d.lineItems = [];
+  // Синхронизация с каталогом: дозагрузим товары позиций, которых нет в памяти
+  const missingPids = [...new Set(d.lineItems.map(it => it.product).filter(pid => pid && !byId(state.products, pid)))];
+  if (missingPids.length) {
+    await Promise.all(missingPids.map(pid => window.__API__.apiFetch('products/' + encodeURIComponent(pid))
+      .then(row => { const p = window.__API__.map.product(row); if (p && p.id && !byId(state.products, p.id)) state.products.push(p); })
+      .catch(() => {})));
+  }
   let history = [];
   try { history = await window.__API__.apiFetch('deals/' + id + '/history'); } catch (e) {}
   const cl = clientById(d.client);
@@ -2371,24 +2378,37 @@ async function openDealDetail(id) {
     if (!canEdit) return;
     const search = el('input', { placeholder:'Поиск товара по артикулу/названию…', style:'width:100%;padding:8px 10px;border:1px solid #E5E7EB;border-radius:6px;font-size:13px;outline:none' });
     const list = el('div', { class:'product-picker' });
-    function fill(q = '') {
+    let seq = 0;
+    // Поиск идёт по живому каталогу (актуальные товары и цены), а не по кешу в памяти
+    async function fill(q = '') {
+      const my = ++seq;
+      const ql = q.trim();
       list.innerHTML = '';
-      const ql = q.toLowerCase().trim();
-      const matched = state.products.filter(p => !ql || (p.name + p.sku).toLowerCase().includes(ql)).slice(0, 12);
-      matched.forEach(p => {
+      list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Поиск…'));
+      let rows;
+      try {
+        const resp = await window.__API__.apiFetch('products?limit=12' + (ql ? '&q=' + encodeURIComponent(ql) : ''));
+        rows = (resp.data || resp || []).map(window.__API__.map.product);
+        rows.forEach(p => { const ex = byId(state.products, p.id); if (ex) Object.assign(ex, p); else state.products.push(p); }); // держим каталог в памяти актуальным
+      } catch (e) {
+        rows = state.products.filter(p => !ql || (p.name + p.sku).toLowerCase().includes(ql.toLowerCase())).slice(0, 12);
+      }
+      if (my !== seq) return; // пришёл более свежий запрос
+      list.innerHTML = '';
+      rows.forEach(p => {
         list.append(el('div', { class:'pp-item', onclick: () => {
           const existing = d.lineItems.find(it => it.product === p.id);
           if (existing) { existing.qty += 1; toast('Количество увеличено', 'info'); }
           else { d.lineItems.push({ product: p.id, qty: 1, priceUsed: p.priceWholesale }); toast('Товар добавлен', 'success'); }
           recomputeAmount(); renderItems();
         } }, [
-          el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku + ' · ' + p.brand)]),
+          el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku + (p.brand ? ' · ' + p.brand : ''))]),
           el('span', { class:'pp-price' }, fmtMoney(p.priceWholesale)),
         ]));
       });
-      if (!matched.length) list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено'));
+      if (!rows.length) list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено'));
     }
-    search.oninput = (e) => fill(e.target.value);
+    let dt; search.oninput = (e) => { const v = e.target.value; clearTimeout(dt); dt = setTimeout(() => fill(v), 250); };
     fill();
     pickerHost.append(
       el('div', { style:'font-weight:600;font-size:12px;margin:14px 0 6px;color:#6B7280;text-transform:uppercase;letter-spacing:.5px' }, 'Добавить товар из каталога'),
