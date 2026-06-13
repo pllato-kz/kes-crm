@@ -1308,21 +1308,21 @@ function openShipmentDetail(id) {
   });
 }
 
-function openInvoiceDetail(id, opts) {
-  const allowPay = !!(opts && opts.allowPay); // кнопка оплаты — только в разделе «Документы», не в карточке сделки
+function openInvoiceDetail(id) {
   const iv = byId(state.invoices, id);
   if (!iv) return;
   const cl = clientById(iv.client);
   const d = byId(state.deals, iv.deal);
   // Статус документа синхронизируется только через сами документы (общий state.invoices),
-  // этапы сделки на статус не влияют.
+  // этапы сделки на статус не влияют. Объект iv — ссылка из state, поэтому статус
+  // сразу актуален во всех разделах.
   const setStatus = async (status, msg) => {
     const prev = iv.status; iv.status = status;
     try {
       const saved = await window.__API__.apiFetch('invoices/' + iv.id, { method: 'PUT', body: { status_id: status } });
       if (saved) Object.assign(iv, window.__API__.map.invoice(saved)); // объект из state синхронизируется с сервером
       closeModal(); toast(msg, 'success');
-      if (CURRENT_VIEW === 'invoices') navigate('invoices'); // открыт общий раздел «Документы» — перерисовать
+      if (CURRENT_VIEW) navigate(CURRENT_VIEW); // перерисовать открытый раздел, чтобы статус обновился везде
     } catch (err) { iv.status = prev; toast('Не удалось сохранить', 'error'); }
   };
   const isPaid = iv.status === 'paid';
@@ -1340,11 +1340,9 @@ function openInvoiceDetail(id, opts) {
     ]),
     foot: [
       el('button', { class:'btn', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl); else toast('Сделка не найдена', 'warn'); } }, '🖨 PDF'),
-      allowPay
-        ? (isPaid
-            ? el('button', { class:'btn btn-danger', onclick: () => setStatus('pending', 'Оплата отменена — ожидает') }, '↩ Отменить оплату')
-            : el('button', { class:'btn btn-primary', onclick: () => setStatus('paid', 'Счёт оплачен') }, '✓ Оплачено'))
-        : null,
+      isPaid
+        ? el('button', { class:'btn btn-danger', onclick: () => setStatus('pending', 'Оплата отменена — ожидает') }, '↩ Отменить оплату')
+        : el('button', { class:'btn btn-primary', onclick: () => setStatus('paid', 'Счёт оплачен') }, '✓ Оплачено'),
     ],
   });
 }
@@ -4073,7 +4071,7 @@ VIEWS.invoices = () => {
         pending: el('span', { class:'pill pill-warn' }, '⏳ Ожидает'),
         overdue: el('span', { class:'pill pill-danger' }, '⚠ Просрочка'),
       };
-      return el('tr', { style:'cursor:pointer', onclick: () => openInvoiceDetail(iv.id, { allowPay: true }) }, [
+      return el('tr', { style:'cursor:pointer', onclick: () => openInvoiceDetail(iv.id) }, [
         el('td', { class:'strong' }, iv.no),
         el('td', {}, fmtDate(iv.date)),
         el('td', {}, cl.name),
