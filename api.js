@@ -155,7 +155,7 @@
     return out;
   }
   const buildStages = (rows) => rows.slice().sort((a, b) => (a.sort || 0) - (b.sort || 0))
-    .map((s) => ({ id: s.id, label: s.label, color: s.color, sort: s.sort, pipelineId: s.pipeline_id || 'default' }));
+    .map((s) => ({ id: s.id, label: s.label, color: s.color, sort: s.sort, pipelineId: s.pipeline_id || 'default', protected: !!s.protected }));
   const buildPipelines = (rows) => (rows || []).slice().sort((a, b) => (a.sort || 0) - (b.sort || 0))
     .map((p) => ({ id: p.id, name: p.name, sort: p.sort }));
   function buildClientTypes(rows) {
