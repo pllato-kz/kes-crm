@@ -340,7 +340,7 @@ const categoryById = (id) => byId(state.categories, id) || { name: '—', icon: 
 const VIEWS = {};
 const ROUTES = [
   'dashboard','leads','deals','clients','catalog','warehouse',
-  'shipments','invoices','suppliers','tasks','reports','settings'
+  'shipments','invoices','suppliers','tasks','reports','settings','archive'
 ];
 
 function navigate(view, params = {}, noHash = false) {
@@ -2606,11 +2606,11 @@ async function openDealDetail(id) {
   const fieldRow = (label, input) => el('div', { class:'form-row' }, [el('label', {}, label), input]);
   const printBtn = el('button', { class:'btn btn-sm', onclick: () => printInvoice(d) }, '🖨 Печать СФ');
   const delBtn = (currentUser && currentUser.roleKey === 'director') ? el('button', { class:'btn btn-sm btn-danger', onclick: async () => {
-    if (!confirm(`Удалить сделку «${d.title}»? Действие необратимо.`)) return;
+    if (!confirm(`Удалить сделку «${d.title}»? Она переместится в архив на 30 дней, затем удалится навсегда.`)) return;
     try {
       await window.__API__.apiFetch('deals/' + d.id, { method:'DELETE' });
       const i = state.deals.findIndex(x => x.id === d.id); if (i >= 0) state.deals.splice(i, 1);
-      closeModal(); toast('Сделка удалена', 'success'); navigate('deals');
+      closeModal(); toast('Сделка перемещена в архив', 'success'); navigate('deals');
     } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
   } }, 'Удалить') : null;
 
@@ -3125,6 +3125,14 @@ async function openClientDetail(id) {
     foot: [
       el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
       el('button', { class:'btn', onclick: () => { closeModal(); openNewDeal(); toast('Подставлю клиента в новую сделку', 'info'); } }, '+ Сделка'),
+      (currentUser.roleKey === 'director') ? el('button', { class:'btn btn-danger', onclick: async () => {
+        if (!confirm(`Удалить клиента «${c.name}»? Он переместится в архив на 30 дней, затем удалится навсегда.`)) return;
+        try {
+          await window.__API__.apiFetch('clients/' + c.id, { method:'DELETE' });
+          const i = state.clients.findIndex(x => x.id === c.id); if (i >= 0) state.clients.splice(i, 1);
+          closeModal(); toast('Клиент перемещён в архив', 'success'); navigate('clients');
+        } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+      } }, 'Удалить') : null,
       canEdit ? el('button', { class:'btn btn-primary', onclick: (e) => saveClient(e.currentTarget) }, 'Сохранить') : null,
     ],
   });
@@ -4773,6 +4781,56 @@ VIEWS.reports = () => {
   return wrap;
 };
 
+// ============================================================
+// VIEW: ARCHIVE (удалённые сделки/клиенты, хранятся 30 дней)
+// ============================================================
+VIEWS.archive = () => {
+  const wrap = el('div');
+  wrap.append(el('div', { class:'page-head' }, [
+    el('div', {}, [el('h1', {}, 'Архив'), el('div', { class:'sub' }, 'Удалённые сделки и клиенты · хранятся 30 дней, затем удаляются навсегда')]),
+  ]));
+  const host = el('div', {}, el('div', { class:'muted', style:'padding:14px' }, 'Загрузка…'));
+  wrap.append(host);
+
+  const daysLeft = (at) => { const ms = 30*24*3600*1000 - (Date.now() - new Date(at).getTime()); return Math.max(0, Math.ceil(ms / (24*3600*1000))); };
+  async function restore(type, id) {
+    try {
+      await window.__API__.apiFetch('archive/restore', { method:'POST', body: { type, id } });
+      toast(type === 'deal' ? 'Сделка восстановлена' : 'Клиент восстановлен', 'success');
+      await loadData(); navigate('archive');
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+  }
+  function section(title, rows, emptyText) {
+    const tw = el('div', { class:'table-wrap' });
+    tw.append(el('table', { class:'data' }, [
+      el('thead', {}, el('tr', {}, [el('th', {}, title.col), el('th', {}, title.mid), el('th', {}, 'Удалено'), el('th', {}, 'Осталось'), el('th', {}, '')])),
+      el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan:5, class:'muted', style:'text-align:center;padding:16px' }, emptyText))]),
+    ]));
+    return tw;
+  }
+  window.__API__.apiFetch('archive').then(data => {
+    host.innerHTML = '';
+    const deals = data.deals || [], clients = data.clients || [];
+    host.append(el('div', { style:'font-weight:600;margin:8px 0 10px' }, `Сделки в архиве (${deals.length})`));
+    host.append(section({ col:'Сделка', mid:'Сумма' }, deals.map(d => el('tr', {}, [
+      el('td', { class:'strong' }, d.title || '—'),
+      el('td', { class:'num strong' }, fmtMoneyK(d.amount || 0)),
+      el('td', { class:'muted' }, d.archived_at ? fmtDate(d.archived_at) : '—'),
+      el('td', {}, daysLeft(d.archived_at) + ' дн.'),
+      el('td', {}, el('button', { class:'btn btn-sm btn-primary', onclick: () => restore('deal', d.id) }, '↩ Восстановить')),
+    ])), 'Архив сделок пуст'));
+    host.append(el('div', { style:'font-weight:600;margin:24px 0 10px' }, `Клиенты в архиве (${clients.length})`));
+    host.append(section({ col:'Клиент', mid:'Город' }, clients.map(c => el('tr', {}, [
+      el('td', { class:'strong' }, c.name || '—'),
+      el('td', { class:'muted' }, c.city || '—'),
+      el('td', { class:'muted' }, c.archived_at ? fmtDate(c.archived_at) : '—'),
+      el('td', {}, daysLeft(c.archived_at) + ' дн.'),
+      el('td', {}, el('button', { class:'btn btn-sm btn-primary', onclick: () => restore('client', c.id) }, '↩ Восстановить')),
+    ])), 'Архив клиентов пуст'));
+  }).catch(err => { host.innerHTML = ''; host.append(el('div', { class:'pill pill-danger', style:'margin:12px' }, 'Ошибка: ' + ((err && err.message) || err))); });
+  return wrap;
+};
+
 // Создание новой роли (директор) — появляется колонкой в матрице доступа
 function openNewRole() {
   const nameI = el('input', { placeholder: 'Например: Логист' });
@@ -5159,7 +5217,7 @@ function logout() {
 function role() { return ROLES[currentUser?.roleKey] || ROLES.manager; }
 function can(action, target) {
   const r = role();
-  if (action === 'see-module')  return r.modules.includes(target);
+  if (action === 'see-module')  return target === 'archive' ? (currentUser && currentUser.roleKey === 'director') : r.modules.includes(target);
   if (action === 'edit-deal')   return r.canEdit.deals === 'all' || (r.canEdit.deals === 'own' && target?.manager === currentUser.id);
   if (action === 'edit-client') return r.canEdit.clients === 'all' || (r.canEdit.clients === 'own' && target?.manager === currentUser.id);
   if (action === 'edit-product') return r.canEdit.products === true;
@@ -5296,6 +5354,8 @@ function renderShell() {
     ]);
     nav.appendChild(btn);
   });
+  // Архив (удалённые сделки/клиенты) — для директора
+  if (currentUser.roleKey === 'director') nav.appendChild(el('button', { 'data-view': 'archive' }, [el('span', { class: 'icon' }, '🗄'), ' Архив']));
   refreshPipelineNav();
 
   // Обработчики

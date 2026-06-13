@@ -164,6 +164,16 @@ export async function onRequest(context) {
     // агрегаты для раздела «Отчёты» (всё из данных CRM)
     if (seg[0] === 'reports' && seg[1] === 'summary' && request.method === 'GET') return reportsSummary(env, url);
 
+    // архив: удалённые сделки/клиенты (мягкое удаление, авто-очистка через 30 дней)
+    if (seg[0] === 'archive') {
+      if (!auth || auth.role !== 'director') return err(403, 'Архив доступен директору');
+      await ensureArchiveColumns(env);
+      await purgeExpiredArchive(env);
+      if (seg[1] === 'restore' && request.method === 'POST') return restoreArchive(env, request);
+      if (request.method === 'GET' && !seg[1]) return listArchive(env);
+      return err(404, 'Неизвестный метод архива');
+    }
+
     // интеграция WhatsApp через Green API (сообщения по сделке/клиенту)
     if (seg[0] === 'greenapi') {
       if (seg[1] === 'status' && request.method === 'GET') return greenapiStatus(env);
@@ -335,6 +345,7 @@ async function dataRoute({ request, env }, seg, url, auth) {
 
   // задачи: расширенные поля (описание/дата начала/статус/комментарии) — добавляем на лету
   if (resource === 'tasks') await ensureTaskColumns(env);
+  if (resource === 'deals' || resource === 'clients') await ensureArchiveColumns(env);
   if (resource === 'deals') await ensureDealColumns(env);
   if (resource === 'company') await ensureCompanyColumns(env);
   if (['pipelines', 'deal_stages', 'deals'].includes(resource)) await ensurePipelineSchema(env);
@@ -365,10 +376,12 @@ async function dataRoute({ request, env }, seg, url, auth) {
   if (resource === 'products' && method === 'GET' && !id) return listProducts(env, url);
   if (resource === 'deals' && id && seg[2] === 'history' && method === 'GET') return dealHistory(env, id);
   if (resource === 'deals' && method === 'GET' && id) return getDeal(env, id);
+  if (resource === 'deals' && method === 'GET' && !id) return listDeals(env, url);
   if (resource === 'deals' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeDeal(env, request, method, id, auth);
   if (resource === 'deals' && method === 'DELETE' && id) return deleteDeal(env, id, auth);
   if (resource === 'clients' && method === 'GET') return id ? getClient(env, id) : listClients(env, url);
   if (resource === 'clients' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeClient(env, request, method, id);
+  if (resource === 'clients' && method === 'DELETE' && id) return deleteClient(env, id, auth);
   if (resource === 'leads' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeLead(env, request, method, id);
   if (resource === 'notifications' && id === 'scan-overdue' && method === 'POST') return scanOverdueTasks(env);
   if (resource === 'notifications' && method === 'GET' && !id) return listNotifications(env, auth);
@@ -805,6 +818,7 @@ async function greenapiSend(env, request, auth) {
 // Агрегаты раздела «Отчёты» — считаются в SQL по данным CRM (сделки/позиции).
 // «Выигранные» сделки: этапы paid/shipped/closed.
 async function reportsSummary(env, url) {
+  await ensureArchiveColumns(env); // архивные (удалённые) сделки в отчёты не попадают
   const p = (url && url.searchParams) || new URLSearchParams();
   const manager = (p.get('manager') || '').trim();
   const from = (p.get('from') || '').trim();
@@ -819,7 +833,7 @@ async function reportsSummary(env, url) {
   //   (реальные данные CRM); этап/воронка сужают выборку.
   const condsFor = (alias) => {
     const col = (c) => (alias ? `${alias}.${c}` : c);
-    const conds = [];
+    const conds = [`${col('archived_at')} IS NULL`];
     const args = [];
     if (manager) { conds.push(`${col('manager_id')} = ?`); args.push(manager); }
     if (from) { conds.push(`substr(${col('created')},1,10) >= ?`); args.push(from); }
@@ -1122,19 +1136,78 @@ async function createMovement(env, request, auth) {
 // --------------------------------------------------------------------------
 // Удаление сделки: отвязываем счета/отгрузки/задачи, чистим позиции и историю.
 // Доступ: только директор.
+// Список сделок (без архивных)
+async function listDeals(env, url) {
+  await ensureArchiveColumns(env);
+  const limit = clampInt(url.searchParams.get('limit'), 500, 1, 1000);
+  const offset = clampInt(url.searchParams.get('offset'), 0, 0, 1e9);
+  const r = await env.DB.prepare('SELECT * FROM deals WHERE archived_at IS NULL LIMIT ? OFFSET ?').bind(limit, offset).all();
+  return json(r.results);
+}
+
+// «Удаление» сделки = мягкое перемещение в архив (связи и позиции сохраняются)
 async function deleteDeal(env, id, auth) {
-  const d = await env.DB.prepare(`SELECT id, manager_id FROM deals WHERE id=?`).bind(id).first();
+  const d = await env.DB.prepare(`SELECT id FROM deals WHERE id=?`).bind(id).first();
   if (!d) return err(404, 'Сделка не найдена');
   if (auth.role !== 'director') return err(403, 'Удалять сделки может только директор');
-  await env.DB.batch([
-    env.DB.prepare(`UPDATE invoices SET deal_id=NULL WHERE deal_id=?`).bind(id),
-    env.DB.prepare(`UPDATE shipments SET deal_id=NULL WHERE deal_id=?`).bind(id),
-    env.DB.prepare(`UPDATE tasks SET deal_id=NULL WHERE deal_id=?`).bind(id),
-    env.DB.prepare(`DELETE FROM deal_items WHERE deal_id=?`).bind(id),
-    env.DB.prepare(`DELETE FROM deal_stage_history WHERE deal_id=?`).bind(id),
-    env.DB.prepare(`DELETE FROM deals WHERE id=?`).bind(id),
-  ]);
-  return json({ deleted: 1, id });
+  await ensureArchiveColumns(env);
+  await env.DB.prepare('UPDATE deals SET archived_at=? WHERE id=?').bind(new Date().toISOString(), id).run();
+  return json({ archived: 1, id });
+}
+
+// «Удаление» клиента = мягкое перемещение в архив
+async function deleteClient(env, id, auth) {
+  const c = await env.DB.prepare('SELECT id FROM clients WHERE id=?').bind(id).first();
+  if (!c) return err(404, 'Клиент не найден');
+  if (!auth || auth.role !== 'director') return err(403, 'Удалять клиентов может только директор');
+  await ensureArchiveColumns(env);
+  await env.DB.prepare('UPDATE clients SET archived_at=? WHERE id=?').bind(new Date().toISOString(), id).run();
+  return json({ archived: 1, id });
+}
+
+// ----- Архив (сделки/клиенты) -----
+let ARCHIVE_SCHEMA_OK = false;
+async function ensureArchiveColumns(env) {
+  if (ARCHIVE_SCHEMA_OK) return;
+  for (const ddl of ['ALTER TABLE deals ADD COLUMN archived_at TEXT', 'ALTER TABLE clients ADD COLUMN archived_at TEXT']) {
+    try { await env.DB.prepare(ddl).run(); } catch (e) {}
+  }
+  ARCHIVE_SCHEMA_OK = true;
+}
+async function listArchive(env) {
+  const deals = await env.DB.prepare('SELECT id, no, title, client_id, manager_id, stage_id, amount, archived_at FROM deals WHERE archived_at IS NOT NULL ORDER BY archived_at DESC').all();
+  const clients = await env.DB.prepare('SELECT id, name, bin, type_key, city, manager_id, archived_at FROM clients WHERE archived_at IS NOT NULL ORDER BY archived_at DESC').all();
+  return json({ deals: deals.results, clients: clients.results });
+}
+async function restoreArchive(env, request) {
+  const b = await request.json().catch(() => ({}));
+  if (!b.id || !['deal', 'client'].includes(b.type)) return err(400, 'Некорректный запрос');
+  const table = b.type === 'deal' ? 'deals' : 'clients';
+  await env.DB.prepare(`UPDATE ${table} SET archived_at=NULL WHERE id=?`).bind(b.id).run();
+  return json({ restored: 1, type: b.type, id: b.id });
+}
+// По истечении 30 дней — окончательное удаление с очисткой связей
+async function purgeExpiredArchive(env) {
+  const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const oldDeals = await env.DB.prepare('SELECT id FROM deals WHERE archived_at IS NOT NULL AND archived_at < ?').bind(cutoff).all();
+  for (const d of oldDeals.results) {
+    await env.DB.batch([
+      env.DB.prepare('UPDATE invoices SET deal_id=NULL WHERE deal_id=?').bind(d.id),
+      env.DB.prepare('UPDATE shipments SET deal_id=NULL WHERE deal_id=?').bind(d.id),
+      env.DB.prepare('UPDATE tasks SET deal_id=NULL WHERE deal_id=?').bind(d.id),
+      env.DB.prepare('DELETE FROM deal_items WHERE deal_id=?').bind(d.id),
+      env.DB.prepare('DELETE FROM deal_stage_history WHERE deal_id=?').bind(d.id),
+      env.DB.prepare('DELETE FROM deals WHERE id=?').bind(d.id),
+    ]);
+  }
+  const oldClients = await env.DB.prepare('SELECT id FROM clients WHERE archived_at IS NOT NULL AND archived_at < ?').bind(cutoff).all();
+  for (const c of oldClients.results) {
+    await env.DB.batch([
+      env.DB.prepare('UPDATE deals SET client_id=NULL WHERE client_id=?').bind(c.id),
+      env.DB.prepare('DELETE FROM client_tags WHERE client_id=?').bind(c.id),
+      env.DB.prepare('DELETE FROM clients WHERE id=?').bind(c.id),
+    ]);
+  }
 }
 
 // Удаление этапа воронки: сделки этого этапа переносим на другой этап (по сортировке).
@@ -1272,10 +1345,10 @@ async function listClients(env, url) {
   const limit = clampInt(url.searchParams.get('limit'), 500, 1, 1000);
   const offset = clampInt(url.searchParams.get('offset'), 0, 0, 1e9);
   const manager = url.searchParams.get('manager');
-  const where = [];
+  const where = ['archived_at IS NULL']; // архивные клиенты в обычном списке не показываем
   const args = [];
   if (manager) { where.push('manager_id=?'); args.push(manager); }
-  const ws = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const ws = 'WHERE ' + where.join(' AND ');
   const rows = await env.DB.prepare(`SELECT * FROM clients ${ws} LIMIT ? OFFSET ?`).bind(...args, limit, offset).all();
 
   // теги одним запросом, без N+1
