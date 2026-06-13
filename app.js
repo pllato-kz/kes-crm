@@ -660,6 +660,34 @@ function messageModal(opts = {}) {
   });
 }
 
+// ---------- Единая выезжающая панель фильтров (как в «Отчётах») ----------
+// groups — массив DOM-узлов (обычно .filter-group). countActive() → число активных фильтров (для бейджа).
+function buildFilterDrawer({ title = 'Фильтры', groups = [], onReset, countActive } = {}) {
+  const badge = el('span', { style:'display:none;margin-left:6px;background:var(--brand);color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:600' }, '');
+  const btn = el('button', { class:'btn', onclick: () => open() }, [svgIconEl('filter', 16), ' Фильтры', badge]);
+  const backdrop = el('div', { class:'drawer-backdrop', onclick: () => close() });
+  const drawer = el('div', { class:'filter-drawer' }, [
+    el('div', { class:'fd-head' }, [
+      el('h3', { style:'margin:0;font-size:15px' }, title),
+      el('button', { class:'fd-close', title:'Закрыть', onclick: () => close() }, '×'),
+    ]),
+    el('div', { class:'fd-body' }, groups),
+    el('div', { class:'fd-foot' }, [
+      el('button', { class:'btn', style:'flex:1', onclick: () => { if (onReset) onReset(); refreshBadge(); } }, 'Сбросить'),
+      el('button', { class:'btn btn-primary', style:'flex:1', onclick: () => close() }, 'Готово'),
+    ]),
+  ]);
+  function open() { backdrop.classList.add('open'); drawer.classList.add('open'); }
+  function close() { backdrop.classList.remove('open'); drawer.classList.remove('open'); }
+  function refreshBadge() { const n = countActive ? countActive() : 0; badge.textContent = n; badge.style.display = n ? '' : 'none'; }
+  refreshBadge();
+  return { btn, backdrop, drawer, open, close, refreshBadge };
+}
+// Хелпер группы фильтра для выезжающей панели
+function filterGroup(label, control) {
+  return el('div', { class:'filter-group' }, [el('label', {}, label), control]);
+}
+
 // ============================================================
 // FORM HELPERS — компактные конструкторы полей
 // ============================================================
@@ -2143,27 +2171,33 @@ VIEWS.deals = () => {
     ]),
   ]));
 
-  // Тулбар: поиск + этап + менеджер + диапазон дат создания
+  // Тулбар: поиск всегда виден, остальные фильтры — за кнопкой «Фильтры»
   const searchI = el('input', { placeholder:'Поиск по названию, клиенту…', value: DEALS_Q, style:'flex:1;min-width:160px' });
   const stageSel = el('select', {}, [el('option', { value:'' }, 'Все этапы'), ...activeStages().map(s => el('option', { value:s.id }, s.label))]);
   stageSel.value = DEALS_STAGE;
-  const toolbarKids = [searchI, stageSel];
+  stageSel.onchange = () => { DEALS_STAGE = stageSel.value; renderContent(); };
   let mgrSel = null;
   if (role().seeAllData) {
     mgrSel = el('select', {}, [el('option', { value:'' }, 'Все менеджеры'), ...state.users.filter(u => u.active !== false).map(u => el('option', { value:u.id }, u.name))]);
     mgrSel.value = DEALS_MGR;
     mgrSel.onchange = () => { DEALS_MGR = mgrSel.value; renderContent(); };
-    toolbarKids.push(mgrSel);
   }
-  const fromI = el('input', { type:'date', value: DEALS_FROM, title:'Создана с', style:'padding:6px' });
-  const toI = el('input', { type:'date', value: DEALS_TO, title:'Создана по', style:'padding:6px' });
+  const fromI = el('input', { type:'date', value: DEALS_FROM });
+  const toI = el('input', { type:'date', value: DEALS_TO });
   fromI.onchange = () => { DEALS_FROM = fromI.value; renderContent(); };
   toI.onchange = () => { DEALS_TO = toI.value; renderContent(); };
-  toolbarKids.push(el('span', { class:'muted', style:'font-size:12px' }, 'Период c:'), fromI, el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI);
-  toolbarKids.push(el('button', { class:'btn btn-sm', onclick: () => { DEALS_Q = ''; DEALS_STAGE = ''; DEALS_MGR = ''; DEALS_FROM = ''; DEALS_TO = ''; navigate('deals'); } }, 'Сбросить'));
-  stageSel.onchange = () => { DEALS_STAGE = stageSel.value; renderContent(); };
+  const drawer = buildFilterDrawer({
+    groups: [
+      filterGroup('Этап', stageSel),
+      ...(mgrSel ? [filterGroup('Менеджер', mgrSel)] : []),
+      filterGroup('Период создания', el('div', { class:'row2' }, [fromI, toI])),
+    ],
+    onReset: () => { DEALS_STAGE=''; DEALS_MGR=''; DEALS_FROM=''; DEALS_TO=''; stageSel.value=''; if (mgrSel) mgrSel.value=''; fromI.value=''; toI.value=''; renderContent(); },
+    countActive: () => [DEALS_STAGE, DEALS_MGR, DEALS_FROM, DEALS_TO].filter(Boolean).length,
+  });
   let sd; searchI.oninput = () => { clearTimeout(sd); sd = setTimeout(() => { DEALS_Q = searchI.value; renderContent(); }, 200); };
-  wrap.append(el('div', { class:'table-toolbar', style:'margin-bottom:12px' }, toolbarKids));
+  wrap.append(el('div', { class:'table-toolbar', style:'margin-bottom:12px' }, [ searchI, el('div', { style:'margin-left:auto' }, drawer.btn) ]));
+  wrap.append(drawer.backdrop, drawer.drawer);
 
   const content = el('div');
   wrap.append(content);
@@ -2193,6 +2227,7 @@ VIEWS.deals = () => {
   function renderContent() {
     selected.clear(); // при перестроении списка выбор сбрасывается
     updateHash('deals', true); // отражаем фильтры в URL (без записи в историю)
+    drawer.refreshBadge();
     const deals = filtered();
     subEl.textContent = `${deals.length} ${role().seeAllData ? 'сделок' : 'ваших сделок'} · сумма ${fmtMoneyK(deals.reduce((s, d) => s + d.amount, 0))}`;
     content.innerHTML = '';
@@ -2958,18 +2993,23 @@ VIEWS.clients = () => {
   const managers = state.users.filter(u => u.active !== false);
   const searchI = el('input', { placeholder:'Поиск клиента или БИН…', oninput: e => { filterState.q = e.target.value.toLowerCase(); refresh(); } });
   const typeS = el('select', { onchange: e => { filterState.type = e.target.value; refresh(); } },
-    [el('option', { value:'' }, 'Тип'), el('option', { value:'opt' }, 'Опт'), el('option', { value:'rozn' }, 'Розница'), el('option', { value:'dilr' }, 'Дилер')]);
+    [el('option', { value:'' }, 'Все типы'), el('option', { value:'opt' }, 'Опт'), el('option', { value:'rozn' }, 'Розница'), el('option', { value:'dilr' }, 'Дилер')]);
   const cityS = el('select', { onchange: e => { filterState.city = e.target.value; refresh(); } },
-    [el('option', { value:'' }, 'Город')].concat(cities.map(c => el('option', { value: c }, c))));
+    [el('option', { value:'' }, 'Все города')].concat(cities.map(c => el('option', { value: c }, c))));
   const mgrS = el('select', { onchange: e => { filterState.manager = e.target.value; refresh(); } },
     [el('option', { value:'' }, 'Все менеджеры')].concat(managers.map(u => el('option', { value: u.id }, u.name))));
-  const fromI = el('input', { type:'date', title:'Последняя сделка с', style:'padding:6px', onchange: e => { filterState.from = e.target.value; refresh(); } });
-  const toI = el('input', { type:'date', title:'Последняя сделка по', style:'padding:6px', onchange: e => { filterState.to = e.target.value; refresh(); } });
-  const resetBtn = el('button', { class:'btn btn-sm', style:'display:none', onclick: () => {
-    Object.assign(filterState, { q:'', type:'', city:'', manager:'', from:'', to:'' });
-    searchI.value = ''; typeS.value = ''; cityS.value = ''; mgrS.value = ''; fromI.value = ''; toI.value = '';
-    refresh();
-  } }, 'Сбросить');
+  const fromI = el('input', { type:'date', onchange: e => { filterState.from = e.target.value; refresh(); } });
+  const toI = el('input', { type:'date', onchange: e => { filterState.to = e.target.value; refresh(); } });
+  const drawer = buildFilterDrawer({
+    groups: [
+      filterGroup('Тип', typeS),
+      filterGroup('Город', cityS),
+      filterGroup('Менеджер', mgrS),
+      filterGroup('Последняя сделка', el('div', { class:'row2' }, [fromI, toI])),
+    ],
+    onReset: () => { Object.assign(filterState, { type:'', city:'', manager:'', from:'', to:'' }); typeS.value=''; cityS.value=''; mgrS.value=''; fromI.value=''; toI.value=''; refresh(); },
+    countActive: () => ['type','city','manager','from','to'].filter(k => filterState[k]).length,
+  });
 
   // Массовое редактирование: выбор клиентов
   const selected = new Set();
@@ -2989,15 +3029,10 @@ VIEWS.clients = () => {
   };
 
   const tw = el('div', { class: 'table-wrap' });
-  // Фильтры — на своих местах (обычный ряд)
-  tw.append(el('div', { class: 'table-toolbar' }, [
-    searchI, typeS, cityS, mgrS,
-    el('span', { class:'muted', style:'font-size:12px' }, 'Послед. сделка c:'), fromI,
-    el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
-  ]));
-  // Ниже фильтров: слева «Сбросить» (при активном фильтре), справа — Импорт/Экспорт
+  // Поиск виден всегда, остальные фильтры — за кнопкой «Фильтры»
+  tw.append(el('div', { class: 'table-toolbar' }, [ searchI, el('div', { style:'margin-left:auto' }, drawer.btn) ]));
+  // Импорт/Экспорт
   tw.append(el('div', { style:'display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--border);background:#FAFBFC' }, [
-    resetBtn,
     el('div', { style:'display:flex;gap:8px;margin-left:auto' }, [
       el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
       el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
@@ -3006,9 +3041,7 @@ VIEWS.clients = () => {
   tw.append(bulkBar);
 
   function refresh() {
-    // «Сбросить» виден только если активен хотя бы один фильтр
-    const anyActive = !!(filterState.q || filterState.type || filterState.city || filterState.manager || filterState.from || filterState.to);
-    resetBtn.style.display = anyActive ? '' : 'none';
+    drawer.refreshBadge();
     const visible = state.clients.filter(c => {
       if (filterState.q && !(c.name+c.bin+c.contact).toLowerCase().includes(filterState.q)) return false;
       if (filterState.type && c.type !== filterState.type) return false;
@@ -3072,6 +3105,7 @@ VIEWS.clients = () => {
 
   tw.append(t);
   wrap.append(tw);
+  wrap.append(drawer.backdrop, drawer.drawer);
   return wrap;
 };
 
@@ -3275,7 +3309,7 @@ VIEWS.catalog = () => {
     el('option', { value:'price_asc' }, 'Цена: по возрастанию'),
     el('option', { value:'price_desc' }, 'Цена: по убыванию'),
   ]);
-  sortSel.onchange = (e) => { q.sort = e.target.value; q.page = 1; loadProducts(); };
+  sortSel.onchange = (e) => { q.sort = e.target.value; q.page = 1; loadProducts(); drawer.refreshBadge(); };
 
   // Панель массового редактирования
   const bulkCount = el('span', { class:'strong' }, '');
@@ -3286,8 +3320,14 @@ VIEWS.catalog = () => {
   ]);
   function refreshBulk() { bulkCount.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
 
+  const drawer = buildFilterDrawer({
+    groups: [ filterGroup('Бренд', brandSel), filterGroup('Сортировка', sortSel) ],
+    onReset: () => { q.brand=''; q.sort=''; brandSel.value=''; sortSel.value=''; q.page=1; loadProducts(); },
+    countActive: () => [q.brand, q.sort].filter(Boolean).length,
+  });
   const tw = el('div', { class: 'table-wrap' });
-  tw.append(el('div', { class: 'table-toolbar' }, [searchI, brandSel, sortSel]));
+  tw.append(el('div', { class: 'table-toolbar' }, [ searchI, el('div', { style:'margin-left:auto' }, drawer.btn) ]));
+  tw.append(drawer.backdrop, drawer.drawer);
   tw.append(bulkBar);
   const tableHost = el('div');
   tw.append(tableHost);
@@ -3297,7 +3337,7 @@ VIEWS.catalog = () => {
 
   let deb;
   searchI.oninput = (e) => { clearTimeout(deb); const v = e.target.value; deb = setTimeout(() => { q.q = v; q.page = 1; loadProducts(); }, 300); };
-  brandSel.onchange = (e) => { q.brand = e.target.value; q.page = 1; loadProducts(); };
+  brandSel.onchange = (e) => { q.brand = e.target.value; q.page = 1; loadProducts(); drawer.refreshBadge(); };
 
   async function loadCats() {
     try {
@@ -3573,8 +3613,14 @@ VIEWS.warehouse = () => {
   const searchI = el('input', { placeholder:'Поиск по артикулу или названию…' });
   const lowChk = el('input', { type:'checkbox', style:'min-width:0;width:16px;height:16px;padding:0;margin:0;flex:none' });
   const lowLabel = el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#374151;white-space:nowrap' }, [lowChk, 'Только низкие остатки (<50)']);
+  const drawer = buildFilterDrawer({
+    groups: [ el('div', { class:'filter-group' }, lowLabel) ],
+    onReset: () => { q.low = false; lowChk.checked = false; q.page = 1; loadStock(); },
+    countActive: () => q.low ? 1 : 0,
+  });
   const tw = el('div', { class: 'table-wrap' });
-  tw.append(el('div', { class: 'table-toolbar' }, [searchI, lowLabel]));
+  tw.append(el('div', { class: 'table-toolbar' }, [ searchI, el('div', { style:'margin-left:auto' }, drawer.btn) ]));
+  tw.append(drawer.backdrop, drawer.drawer);
   const tableHost = el('div');
   tw.append(tableHost);
   wrap.append(tw);
@@ -3583,7 +3629,7 @@ VIEWS.warehouse = () => {
 
   let deb;
   searchI.oninput = (e) => { clearTimeout(deb); const v = e.target.value; deb = setTimeout(() => { q.q = v; q.page = 1; loadStock(); }, 300); };
-  lowChk.onchange = (e) => { q.low = e.target.checked; q.page = 1; loadStock(); };
+  lowChk.onchange = (e) => { q.low = e.target.checked; q.page = 1; loadStock(); drawer.refreshBadge(); };
 
   async function loadStock() {
     tableHost.innerHTML = ''; tableHost.append(el('div', { class:'muted', style:'padding:14px' }, 'Загрузка…'));
@@ -4133,24 +4179,28 @@ VIEWS.invoices = () => {
   // Единый стиль для всех полей фильтра
   const inputCss = 'min-width:0;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;height:34px;box-sizing:border-box';
   const searchI = el('input', { placeholder:'Поиск по № счёта, клиенту или сделке…', style: inputCss + ';flex:1;min-width:240px', oninput: e => { fs.q = e.target.value.toLowerCase().trim(); refresh(); } });
-  const statusS = el('select', { style: inputCss + ';min-width:140px', onchange: e => { fs.status = e.target.value; refresh(); } }, [
-    el('option', { value:'' }, 'Статус'),
+  const statusS = el('select', { onchange: e => { fs.status = e.target.value; refresh(); } }, [
+    el('option', { value:'' }, 'Все статусы'),
     el('option', { value:'paid' }, 'Оплачено'),
     el('option', { value:'pending' }, 'Ожидает'),
     el('option', { value:'overdue' }, 'Просрочка'),
   ]);
-  const dueS = el('select', { style: inputCss + ';min-width:200px', onchange: e => { fs.due = e.target.value; refresh(); } }, [
+  const dueS = el('select', { onchange: e => { fs.due = e.target.value; refresh(); } }, [
     el('option', { value:'' }, 'Все'),
     el('option', { value:'soon' }, 'Скоро к оплате (1–7 дн.)'),
     el('option', { value:'overdue' }, 'Просроченные'),
   ]);
-  const dueFromI = el('input', { type:'date', title:'Срок оплаты с', style: inputCss + ';min-width:150px', onchange: e => { fs.dueFrom = e.target.value; refresh(); } });
-  const dueToI = el('input', { type:'date', title:'Срок оплаты по', style: inputCss + ';min-width:150px', onchange: e => { fs.dueTo = e.target.value; refresh(); } });
-  const resetBtn = el('button', { class:'btn btn-sm', style:'height:34px', onclick: () => {
-    Object.assign(fs, { q:'', status:'', due:'', dueFrom:'', dueTo:'' });
-    searchI.value=''; statusS.value=''; dueS.value=''; dueFromI.value=''; dueToI.value='';
-    refresh();
-  } }, '✕ Сбросить');
+  const dueFromI = el('input', { type:'date', onchange: e => { fs.dueFrom = e.target.value; refresh(); } });
+  const dueToI = el('input', { type:'date', onchange: e => { fs.dueTo = e.target.value; refresh(); } });
+  const drawer = buildFilterDrawer({
+    groups: [
+      filterGroup('Статус', statusS),
+      filterGroup('Срок оплаты', dueS),
+      filterGroup('Период срока оплаты', el('div', { class:'row2' }, [dueFromI, dueToI])),
+    ],
+    onReset: () => { Object.assign(fs, { status:'', due:'', dueFrom:'', dueTo:'' }); statusS.value=''; dueS.value=''; dueFromI.value=''; dueToI.value=''; refresh(); },
+    countActive: () => ['status','due','dueFrom','dueTo'].filter(k => fs[k]).length,
+  });
 
   function matchesDoc(doc) {
     if (fs.q) {
@@ -4250,14 +4300,8 @@ VIEWS.invoices = () => {
   }
 
   const tw = el('div', { class:'mt-16 table-wrap' });
-  // Ряд 1: поиск + статус + кнопка «Сбросить»
-  tw.append(el('div', { class:'table-toolbar' }, [ searchI, statusS, el('div', { style:'margin-left:auto' }, resetBtn) ]));
-  // Ряд 2: отдельный блок — срок оплаты (диапазон + быстрые фильтры)
-  tw.append(el('div', { class:'table-toolbar', style:'border-top:1px solid var(--border)' }, [
-    el('span', { class:'muted', style:'font-size:12px' }, 'Срок оплаты:'), dueS,
-    el('span', { class:'muted', style:'font-size:12px' }, 'с:'), dueFromI,
-    el('span', { class:'muted', style:'font-size:12px' }, 'по:'), dueToI,
-  ]));
+  // Поиск всегда виден, остальные фильтры — за кнопкой «Фильтры»
+  tw.append(el('div', { class:'table-toolbar' }, [ searchI, el('div', { style:'margin-left:auto' }, drawer.btn) ]));
   tw.append(bulkBar);
   const tab = el('table', { class:'data' });
   tab.append(el('thead', {}, el('tr', {}, [
@@ -4268,12 +4312,14 @@ VIEWS.invoices = () => {
   tab.append(buildTbody());
   tw.append(tab);
   wrap.append(tw);
+  wrap.append(drawer.backdrop, drawer.drawer);
   refreshBulk();
 
   function refresh() {
     const tb = tab.querySelector('tbody');
     if (tb) tb.replaceWith(buildTbody());
     refreshBulk();
+    drawer.refreshBadge();
   }
   return wrap;
 };
@@ -4431,23 +4477,22 @@ VIEWS.tasks = () => {
     ]),
   ]));
 
-  // Тулбар: фильтр по сотруднику + диапазон срока + показывать выполненные
-  const toolbarKids = [];
+  // Фильтры (сотрудник, срок, статус/выполненные) — за кнопкой «Фильтры»
+  const groups = [];
+  let ownerSel = null;
   if (role().seeAllData) {
-    const ownerSel = el('select', {}, [el('option', { value:'' }, 'Все сотрудники'),
+    ownerSel = el('select', {}, [el('option', { value:'' }, 'Все сотрудники'),
       ...state.users.filter(u => u.active !== false).map(u => el('option', { value:u.id }, u.name))]);
     ownerSel.value = TASKS_OWNER;
     ownerSel.onchange = () => { TASKS_OWNER = ownerSel.value; navigate('tasks'); };
-    toolbarKids.push(el('span', { class:'muted', style:'font-size:12px' }, 'Сотрудник:'), ownerSel);
+    groups.push(filterGroup('Сотрудник', ownerSel));
   }
-  const fromI = el('input', { type:'date', value: TASKS_FROM, title:'Срок с', style:'padding:6px' });
-  const toI = el('input', { type:'date', value: TASKS_TO, title:'Срок по', style:'padding:6px' });
+  const fromI = el('input', { type:'date', value: TASKS_FROM });
+  const toI = el('input', { type:'date', value: TASKS_TO });
   fromI.onchange = () => { TASKS_FROM = fromI.value; navigate('tasks'); };
   toI.onchange = () => { TASKS_TO = toI.value; navigate('tasks'); };
-  toolbarKids.push(el('span', { class:'muted', style:'font-size:12px;margin-left:10px' }, 'Срок c:'), fromI, el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI);
-  if (TASKS_FROM || TASKS_TO) toolbarKids.push(el('button', { class:'btn btn-sm', onclick: () => { TASKS_FROM = ''; TASKS_TO = ''; navigate('tasks'); } }, 'Сбросить'));
+  groups.push(filterGroup('Срок', el('div', { class:'row2' }, [fromI, toI])));
   if (isList) {
-    // Фильтр по статусу — только в режиме списка
     const stSel = el('select', {}, [
       el('option', { value:'' }, 'Все статусы'),
       el('option', { value:'open' }, 'Открыта'),
@@ -4456,13 +4501,19 @@ VIEWS.tasks = () => {
     ]);
     stSel.value = TASKS_STATUS;
     stSel.onchange = () => { TASKS_STATUS = stSel.value; navigate('tasks'); };
-    toolbarKids.push(el('span', { class:'muted', style:'font-size:12px;margin-left:10px' }, 'Статус:'), stSel);
+    groups.push(filterGroup('Статус', stSel));
   } else {
-    const doneChk = el('input', { type:'checkbox', checked: TASKS_SHOWDONE ? 'checked' : null });
+    const doneChk = el('input', { type:'checkbox', checked: TASKS_SHOWDONE ? 'checked' : null, style:'width:16px;height:16px' });
     doneChk.onchange = () => { TASKS_SHOWDONE = doneChk.checked; navigate('tasks'); };
-    toolbarKids.push(el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#374151;margin-left:10px' }, [doneChk, 'Показывать выполненные']));
+    groups.push(el('div', { class:'filter-group' }, el('label', { style:'display:inline-flex;align-items:center;gap:8px;margin:0;font-size:13px;color:var(--ink)' }, [doneChk, 'Показывать выполненные'])));
   }
-  wrap.append(el('div', { class:'row', style:'gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px' }, toolbarKids));
+  const drawer = buildFilterDrawer({
+    groups,
+    onReset: () => { TASKS_OWNER=''; TASKS_FROM=''; TASKS_TO=''; TASKS_STATUS=''; navigate('tasks'); },
+    countActive: () => [TASKS_OWNER, TASKS_FROM, TASKS_TO, (isList ? TASKS_STATUS : '')].filter(Boolean).length,
+  });
+  wrap.append(el('div', { class:'table-toolbar', style:'margin-bottom:12px' }, [ el('div', { style:'margin-left:auto' }, drawer.btn) ]));
+  wrap.append(drawer.backdrop, drawer.drawer);
 
   const byDue = (a, b) => String(a.due || '').localeCompare(String(b.due || ''));
 
@@ -4718,7 +4769,7 @@ VIEWS.reports = () => {
   const maxI = el('input', { type:'number', placeholder:'до', onchange: e => { f.maxSum = e.target.value; loadReports(); } });
 
   const filterBadge = el('span', { class:'badge', style:'display:none;margin-left:2px;background:var(--brand);color:#fff' }, '');
-  const filterBtn = el('button', { class:'btn', onclick: () => openDrawer() }, [svgIconEl('filter', 16), ' Фильтр', filterBadge]);
+  const filterBtn = el('button', { class:'btn', onclick: () => openDrawer() }, [svgIconEl('filter', 16), ' Фильтры', filterBadge]);
   const backdrop = el('div', { class:'drawer-backdrop', onclick: () => closeDrawer() });
   const drawer = el('div', { class:'filter-drawer' }, [
     el('div', { class:'fd-head' }, [
@@ -5022,13 +5073,17 @@ VIEWS.archive = () => {
   let ARCH = { deals: [], clients: [], invoices: [] };
   let q = '', sort = 'desc';
   const searchI = el('input', { placeholder:'Поиск в архиве…', oninput: (e) => { q = e.target.value.toLowerCase().trim(); render(); } });
-  const sortSel = el('select', { style:'padding-right:20px', onchange: (e) => { sort = e.target.value; render(); } }, [
+  const sortSel = el('select', { onchange: (e) => { sort = e.target.value; render(); drawer.refreshBadge(); } }, [
     el('option', { value:'desc' }, 'Сначала новые'),
     el('option', { value:'asc' }, 'Сначала старые'),
   ]);
-  wrap.append(el('div', { class:'table-toolbar', style:'border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px' }, [
-    searchI, el('span', { class:'muted', style:'font-size:12px' }, 'По времени:'), sortSel,
-  ]));
+  const drawer = buildFilterDrawer({
+    groups: [ filterGroup('Сортировка по времени удаления', sortSel) ],
+    onReset: () => { sort = 'desc'; sortSel.value = 'desc'; render(); },
+    countActive: () => sort !== 'desc' ? 1 : 0,
+  });
+  wrap.append(el('div', { class:'table-toolbar', style:'margin-bottom:16px' }, [ searchI, el('div', { style:'margin-left:auto' }, drawer.btn) ]));
+  wrap.append(drawer.backdrop, drawer.drawer);
 
   const host = el('div', {}, el('div', { class:'muted', style:'padding:14px' }, 'Загрузка…'));
   wrap.append(host);
