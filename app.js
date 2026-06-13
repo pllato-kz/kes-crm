@@ -5402,9 +5402,9 @@ function renderShell() {
   const overdueCount = visibleTasks().filter(t => !t.done && taskDue(t).kind === 'overdue').length;
   if (overdueCount) setTimeout(() => toast(`У вас ${overdueCount} ${plural(overdueCount, 'просроченная задача', 'просроченные задачи', 'просроченных задач')}`, 'warn'), 700);
 
-  // Фоновая авто-синхронизация с 1С, пока CRM открыта (директор): запускаем «просроченные»
-  // синки по расписанию. Интервалы соблюдаются на сервере (runDueSyncs по sync_state).
-  if (currentUser && currentUser.roleKey === 'director') {
+  // Фоновая авто-синхронизация с 1С, пока CRM открыта у любого сотрудника: запускаем
+  // «просроченные» синки. Интервалы соблюдаются на сервере (runDueSyncs по sync_state).
+  if (currentUser) {
     if (window.__syncTimer) clearInterval(window.__syncTimer);
     const tick = () => { window.__API__.apiFetch('sync/run', { method: 'POST' }).catch(() => {}); };
     setTimeout(tick, 5000);                       // первый запуск вскоре после входа

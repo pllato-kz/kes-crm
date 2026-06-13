@@ -101,10 +101,10 @@ export async function onRequest(context) {
 
     // синхронизация с 1С
     if (seg[0] === 'sync') {
-      // авто-запуск по расписанию: токен внешнего планировщика ИЛИ директор
+      // авто-запуск по расписанию: токен внешнего планировщика ИЛИ любой авторизованный сотрудник
       if (seg[1] === 'run' && request.method === 'POST') {
         const token = url.searchParams.get('token');
-        const ok = (token && env.CRON_SECRET && token === env.CRON_SECRET) || (auth && auth.role === 'director');
+        const ok = (token && env.CRON_SECRET && token === env.CRON_SECRET) || !!auth;
         if (!ok) return err(403, 'Нет доступа к авто-синхронизации');
         return json(await runDueSyncs(env));
       }
