@@ -3346,7 +3346,7 @@ VIEWS.catalog = () => {
     ]),
   ]));
 
-  const q = { q: '', category: '', brand: '', sort: '', page: 1, limit: 50, total: 0 };
+  const q = { q: '', category: '', brand: '', sort: '', stockMin: '', stockMax: '', costMin: '', costMax: '', page: 1, limit: 50, total: 0 };
   const selected = new Set(); // выбранные товары для массового редактирования
 
   // Категории (серверный подсчёт)
@@ -3364,6 +3364,10 @@ VIEWS.catalog = () => {
     el('option', { value:'price_desc' }, 'Цена: по убыванию'),
   ]);
   sortSel.onchange = (e) => { q.sort = e.target.value; q.page = 1; loadProducts(); drawer.refreshBadge(); };
+  const stockMinI = el('input', { type:'number', placeholder:'от', onchange: e => { q.stockMin = e.target.value; q.page = 1; loadProducts(); drawer.refreshBadge(); } });
+  const stockMaxI = el('input', { type:'number', placeholder:'до', onchange: e => { q.stockMax = e.target.value; q.page = 1; loadProducts(); drawer.refreshBadge(); } });
+  const costMinI = el('input', { type:'number', placeholder:'от', onchange: e => { q.costMin = e.target.value; q.page = 1; loadProducts(); drawer.refreshBadge(); } });
+  const costMaxI = el('input', { type:'number', placeholder:'до', onchange: e => { q.costMax = e.target.value; q.page = 1; loadProducts(); drawer.refreshBadge(); } });
 
   // Панель массового редактирования
   const bulkCount = el('span', { class:'strong' }, '');
@@ -3375,11 +3379,20 @@ VIEWS.catalog = () => {
   function refreshBulk() { bulkCount.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
 
   const drawer = buildFilterDrawer({
-    groups: [ filterGroup('Бренд', brandSel), filterGroup('Сортировка', sortSel) ],
-    onReset: () => { q.brand=''; q.sort=''; brandSel.value=''; sortSel.value=''; q.page=1; loadProducts(); },
-    countActive: () => [q.brand, q.sort].filter(Boolean).length,
+    groups: [
+      filterGroup('Бренд', brandSel),
+      filterGroup('Сортировка', sortSel),
+      filterGroup('Остаток, шт', el('div', { class:'row2' }, [stockMinI, stockMaxI])),
+      filterGroup('Закупочная цена, ₸', el('div', { class:'row2' }, [costMinI, costMaxI])),
+    ],
+    onReset: () => {
+      Object.assign(q, { brand:'', sort:'', stockMin:'', stockMax:'', costMin:'', costMax:'', page:1 });
+      brandSel.value=''; sortSel.value=''; stockMinI.value=''; stockMaxI.value=''; costMinI.value=''; costMaxI.value='';
+      loadProducts();
+    },
+    countActive: () => [q.brand, q.sort].filter(Boolean).length + [q.stockMin, q.stockMax, q.costMin, q.costMax].filter(v => v !== '' && v != null).length,
   });
-  const tw = el('div', { class: 'table-wrap' });
+  const tw = el('div', { class: 'table-wrap', style:'margin-top:24px' });
   tw.append(el('div', { class: 'table-toolbar' }, [ searchI, el('div', { style:'margin-left:auto' }, drawer.btn) ]));
   tw.append(drawer.backdrop, drawer.drawer);
   tw.append(bulkBar);
@@ -3410,7 +3423,11 @@ VIEWS.catalog = () => {
   async function loadProducts() {
     tableHost.innerHTML = ''; tableHost.append(el('div', { class:'muted', style:'padding:14px' }, 'Загрузка…'));
     try {
-      const qs = `q=${encodeURIComponent(q.q)}&category=${encodeURIComponent(q.category)}&brand=${encodeURIComponent(q.brand)}&sort=${encodeURIComponent(q.sort)}&page=${q.page}&limit=${q.limit}`;
+      let qs = `q=${encodeURIComponent(q.q)}&category=${encodeURIComponent(q.category)}&brand=${encodeURIComponent(q.brand)}&sort=${encodeURIComponent(q.sort)}&page=${q.page}&limit=${q.limit}`;
+      if (q.stockMin !== '') qs += '&stock_min=' + encodeURIComponent(q.stockMin);
+      if (q.stockMax !== '') qs += '&stock_max=' + encodeURIComponent(q.stockMax);
+      if (q.costMin !== '') qs += '&cost_min=' + encodeURIComponent(q.costMin);
+      if (q.costMax !== '') qs += '&cost_max=' + encodeURIComponent(q.costMax);
       const r = await window.__API__.apiFetch('products?' + qs);
       q.total = r.total || 0;
       sub.textContent = `${q.total} позиций` + (q.category ? ' в категории' : '');
