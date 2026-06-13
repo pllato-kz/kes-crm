@@ -1406,6 +1406,29 @@ function openEditStock(p) {
   });
 }
 
+// Двусторонняя синхронизация: статус отгрузки → этап связанной сделки.
+// (обратное направление — этап сделки → статус отгрузки — делает бэкенд writeDeal)
+async function setShipmentStatus(s, status) {
+  const prev = s.status;
+  s.status = status; // s — ссылка из state.shipments, обновляется сразу везде
+  try {
+    const saved = await window.__API__.apiFetch('shipments/' + s.id, { method: 'PUT', body: { status_id: status } });
+    if (saved) Object.assign(s, window.__API__.map.shipment(saved));
+    const d = byId(state.deals, s.deal);
+    if (d) {
+      const stages = pipelineStages(stagePipeline(d.stage)) || [];
+      let target = null;
+      if (status === 'delivered') target = stages.find(st => /достав|закры|выполн|заверш/i.test(st.label || ''));
+      else if (status === 'shipped') target = stages.find(st => /отгруж/i.test(st.label || ''));
+      if (target && target.id !== d.stage) {
+        d.stage = target.id;
+        await window.__API__.apiFetch('deals/' + d.id, { method: 'PUT', body: { stage_id: target.id } });
+      }
+    }
+    return true;
+  } catch (err) { s.status = prev; toast('Не удалось обновить статус отгрузки', 'error'); return false; }
+}
+
 function openShipmentDetail(id) {
   const s = byId(state.shipments, id);
   if (!s) return;
@@ -1428,7 +1451,7 @@ function openShipmentDetail(id) {
     ]),
     foot: [
       el('button', { class:'btn', onclick: () => printShipment(s) }, '🖨 Печать ТТН'),
-      el('button', { class:'btn btn-primary', onclick: async () => { s.status = 'delivered'; try { await window.__API__.apiFetch('shipments/' + s.id, { method: 'PUT', body: { status_id: 'delivered' } }); closeModal(); toast('Отгрузка отмечена доставленной', 'success'); navigate('shipments'); } catch (err) { toast('Не удалось сохранить', 'error'); } } }, '✓ Доставлено'),
+      el('button', { class:'btn btn-primary', onclick: async () => { if (await setShipmentStatus(s, 'delivered')) { closeModal(); toast('Отгрузка доставлена · сделка синхронизирована', 'success'); if (CURRENT_VIEW) navigate(CURRENT_VIEW); } } }, '✓ Доставлено'),
     ],
   });
 }
@@ -2851,15 +2874,58 @@ async function openDealDetail(id) {
   })();
   const paneDocs = el('div', { class:'chat-pane', 'data-pane':'docs' }, [el('div', { class:'section-title', style:'padding:12px 14px 6px' }, 'Счета клиента'), docsList]);
 
+  // ----- Отгрузка: связанная отгрузка сделки (двусторонняя синхронизация статуса) -----
+  const shipList = el('div', { style:'padding:8px 14px 14px;overflow-y:auto' });
+  function renderShip() {
+    const ships = state.shipments.filter(s => s.deal === d.id);
+    shipList.innerHTML = '';
+    if (!ships.length) {
+      shipList.append(el('div', { class:'muted', style:'font-size:12px;padding:8px 0' }, 'Отгрузка по сделке не создана'));
+      shipList.append(el('button', { class:'btn btn-sm btn-primary', style:'margin-top:8px', onclick: () => { closeModal(); openNewShipment(); } }, '+ Создать отгрузку'));
+      return;
+    }
+    const stMap = { delivered:['pill-success','✓ Доставлена'], planned:['pill-info','⏱ Запланирована'], shipped:['pill-warn','🚚 В пути'] };
+    ships.forEach(s => {
+      const sp = stMap[s.status] || ['pill-muted', s.status || '—'];
+      const sel = el('select', {}, [
+        el('option', { value:'planned' }, 'Запланирована'),
+        el('option', { value:'shipped' }, 'В пути'),
+        el('option', { value:'delivered' }, 'Доставлена'),
+      ]);
+      sel.value = s.status;
+      sel.onchange = async () => {
+        if (await setShipmentStatus(s, sel.value)) { chosenStage = d.stage; renderFunnel(); renderShip(); toast('Статус отгрузки и сделки синхронизированы', 'success'); }
+        else sel.value = s.status;
+      };
+      shipList.append(el('div', { class:'card', style:'padding:12px;margin-bottom:10px' }, [
+        el('div', { style:'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px' }, [
+          el('div', { class:'strong' }, s.no),
+          el('span', { class:'pill ' + sp[0] }, sp[1]),
+        ]),
+        el('dl', { class:'kv', style:'margin:0' }, [
+          el('dt', {}, 'Дата'), el('dd', {}, s.date ? fmtDate(s.date) : '—'),
+          el('dt', {}, 'Адрес'), el('dd', {}, s.destination || '—'),
+          el('dt', {}, 'Транспорт'), el('dd', {}, s.transport || '—'),
+          el('dt', {}, 'Водитель'), el('dd', {}, s.driver || '—'),
+          el('dt', {}, 'Позиций'), el('dd', {}, s.items != null ? s.items : '—'),
+        ]),
+        canEdit ? el('div', { style:'margin-top:8px' }, [el('label', { class:'muted', style:'font-size:12px;display:block;margin-bottom:4px' }, 'Статус отгрузки'), sel]) : null,
+        el('button', { class:'btn btn-sm', style:'margin-top:8px', onclick: () => printShipment(s) }, '🖨 Печать ТТН'),
+      ]));
+    });
+  }
+  renderShip();
+  const paneShip = el('div', { class:'chat-pane', 'data-pane':'shipment' }, [el('div', { class:'section-title', style:'padding:12px 14px 6px' }, 'Отгрузка'), shipList]);
+
   const tabs = el('div', { class:'chat-tabs' });
   function switchTab(key) {
     tabs.querySelectorAll('.chat-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === key));
-    [paneItems, paneWhats, paneComments, paneDocs, paneHist].forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
+    [paneItems, paneWhats, paneComments, paneDocs, paneShip, paneHist].forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
   }
-  [['items','Товары'],['whatsapp','WhatsApp'],['comments','Комментарии'],['docs','Документы'],['history','История']].forEach(([k, label]) =>
+  [['items','Товары'],['whatsapp','WhatsApp'],['comments','Комментарии'],['docs','Документы'],['shipment','Отгрузка'],['history','История']].forEach(([k, label]) =>
     tabs.append(el('div', { class:'chat-tab' + (k === 'whatsapp' ? ' active' : ''), 'data-tab':k, onclick: () => switchTab(k) }, label)));
 
-  const right = el('div', { class:'deal-right' }, [tabs, paneItems, paneWhats, paneComments, paneDocs, paneHist]);
+  const right = el('div', { class:'deal-right' }, [tabs, paneItems, paneWhats, paneComments, paneDocs, paneShip, paneHist]);
 
   // ----- Чат (Green API) -----
   function bubble(mm) {
@@ -4225,7 +4291,8 @@ VIEWS.shipments = () => {
   ])));
   const shipRows = state.shipments.map(s => {
     const cl = clientById(s.client);
-    return el('tr', { style:'cursor:pointer', onclick: () => openShipmentDetail(s.id) }, [
+    // Если отгрузка привязана к сделке — открываем карточку сделки (раздел «Отгрузка»)
+    return el('tr', { style:'cursor:pointer', onclick: () => { const dl = byId(state.deals, s.deal); if (dl) openDealDetail(dl.id); else openShipmentDetail(s.id); } }, [
       el('td', { class:'strong' }, s.no),
       el('td', {}, fmtDate(s.date)),
       el('td', {}, cl.name),
