@@ -3890,10 +3890,14 @@ function printInventoryAct(doc, items, kind) {
 // ============================================================
 VIEWS.shipments = () => {
   const wrap = el('div');
+  // Сделки на этапе «Отгружено» показываем как отгрузки (без дублей с реальными ТТН)
+  const isShippedStage = (sid) => /отгруж/i.test((stageById(sid) || {}).label || '');
+  const shippedDeals = visibleDeals().filter(d => isShippedStage(d.stage) && !state.shipments.some(s => s.deal === d.id));
+
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Отгрузки'),
-      el('div', { class: 'sub' }, `${state.shipments.length} отгрузок в работе`),
+      el('div', { class: 'sub' }, `${state.shipments.length + shippedDeals.length} отгрузок · ${shippedDeals.length} по сделкам`),
     ]),
     el('div', { class: 'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewShipment }, '+ Отгрузка')]),
   ]));
@@ -3901,7 +3905,7 @@ VIEWS.shipments = () => {
   const t = el('div', { class:'table-wrap' });
   const tab = el('table', { class:'data' });
   tab.append(el('thead', {}, el('tr', {}, [
-    el('th', {}, '№ ТТН'),
+    el('th', {}, '№ ТТН / Сделка'),
     el('th', {}, 'Дата'),
     el('th', {}, 'Клиент'),
     el('th', {}, 'Куда'),
@@ -3910,9 +3914,9 @@ VIEWS.shipments = () => {
     el('th', { class:'num' }, 'Вес, кг'),
     el('th', {}, 'Статус'),
   ])));
-  tab.append(el('tbody', {}, state.shipments.map(s => {
+  const shipRows = state.shipments.map(s => {
     const cl = clientById(s.client);
-    return el('tr', { onclick: () => openShipmentDetail(s.id) }, [
+    return el('tr', { style:'cursor:pointer', onclick: () => openShipmentDetail(s.id) }, [
       el('td', { class:'strong' }, s.no),
       el('td', {}, fmtDate(s.date)),
       el('td', {}, cl.name),
@@ -3926,7 +3930,19 @@ VIEWS.shipments = () => {
           ? el('span', { class:'pill pill-info' }, '⏱ Запланировано')
           : el('span', { class:'pill pill-warn' }, '🚚 В пути')),
     ]);
-  })));
+  });
+  const dealRows = shippedDeals.map(d => el('tr', { style:'cursor:pointer', onclick: () => openDealDetail(d.id) }, [
+    el('td', { class:'strong' }, d.title),
+    el('td', {}, d.target ? fmtDate(d.target) : (d.created ? fmtDate(d.created) : '—')),
+    el('td', {}, clientById(d.client).name),
+    el('td', { class:'muted' }, d.address || '—'),
+    el('td', { class:'muted', style:'font-size:11.5px' }, 'по сделке'),
+    el('td', { class:'num' }, d.items || 0),
+    el('td', { class:'num' }, '—'),
+    el('td', {}, el('span', { class:'pill pill-warn' }, '🚚 Отгружена')),
+  ]));
+  const allRows = [...shipRows, ...dealRows];
+  tab.append(el('tbody', {}, allRows.length ? allRows : [el('tr', {}, el('td', { colspan: 8, class:'muted', style:'text-align:center;padding:20px' }, 'Отгрузок нет'))]));
   t.append(tab);
   wrap.append(t);
   return wrap;
