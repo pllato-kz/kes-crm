@@ -4053,43 +4053,37 @@ VIEWS.invoices = () => {
   ]));
 
   // --- Поиск и фильтры ---
-  const fs = { q:'', status:'', client:'', manager:'', due:'', dueFrom:'', dueTo:'' };
-  const managersList = state.users.filter(u => u.active !== false);
-  const clientsList = [...state.clients].sort((a,b) => String(a.name).localeCompare(String(b.name), 'ru'));
+  const fs = { q:'', status:'', due:'', dueFrom:'', dueTo:'' };
   const todayMs = new Date(new Date().toISOString().slice(0,10)).getTime();
   const daysUntil = (due) => { const s = String(due||'').slice(0,10); if (!s) return null; const t = new Date(s).getTime(); return isNaN(t) ? null : Math.round((t - todayMs)/86400000); };
-  // Менеджер документа: из сделки, иначе из клиента
-  const docManager = (clientId, dealId) => { const dl = byId(state.deals, dealId); if (dl && dl.manager) return dl.manager; const cl = clientById(clientId); return cl ? cl.manager : ''; };
 
   // Единый список документов: счета + сделки на этапе «Оплачено»
   const docs = [
-    ...state.invoices.map(iv => ({ no: iv.no, date: iv.date, client: iv.client, deal: iv.deal, amount: iv.amount, due: iv.due, status: iv.status, manager: docManager(iv.client, iv.deal), onopen: () => openInvoiceDetail(iv.id) })),
-    ...paidDeals.map(d => ({ no: 'по сделке', date: d.created, client: d.client, deal: d.id, amount: d.amount, due: '', status: 'paid', manager: d.manager, onopen: () => openDealDetail(d.id) })),
+    ...state.invoices.map(iv => ({ no: iv.no, date: iv.date, client: iv.client, deal: iv.deal, amount: iv.amount, due: iv.due, status: iv.status, onopen: () => openInvoiceDetail(iv.id) })),
+    ...paidDeals.map(d => ({ no: 'по сделке', date: d.created, client: d.client, deal: d.id, amount: d.amount, due: '', status: 'paid', onopen: () => openDealDetail(d.id) })),
   ];
 
-  const searchI = el('input', { placeholder:'Поиск по № счёта, клиенту или сделке…', oninput: e => { fs.q = e.target.value.toLowerCase().trim(); refresh(); } });
-  const statusS = el('select', { onchange: e => { fs.status = e.target.value; refresh(); } }, [
+  // Единый стиль для всех полей фильтра
+  const inputCss = 'min-width:0;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;height:34px;box-sizing:border-box';
+  const searchI = el('input', { placeholder:'Поиск по № счёта, клиенту или сделке…', style: inputCss + ';flex:1;min-width:240px', oninput: e => { fs.q = e.target.value.toLowerCase().trim(); refresh(); } });
+  const statusS = el('select', { style: inputCss + ';min-width:140px', onchange: e => { fs.status = e.target.value; refresh(); } }, [
     el('option', { value:'' }, 'Статус'),
     el('option', { value:'paid' }, 'Оплачено'),
     el('option', { value:'pending' }, 'Ожидает'),
     el('option', { value:'overdue' }, 'Просрочка'),
   ]);
-  const clientS = el('select', { onchange: e => { fs.client = e.target.value; refresh(); } },
-    [el('option', { value:'' }, 'Клиент')].concat(clientsList.map(c => el('option', { value: c.id }, c.name))));
-  const mgrS = el('select', { onchange: e => { fs.manager = e.target.value; refresh(); } },
-    [el('option', { value:'' }, 'Менеджер')].concat(managersList.map(u => el('option', { value: u.id }, u.name))));
-  const dueS = el('select', { onchange: e => { fs.due = e.target.value; refresh(); } }, [
+  const dueS = el('select', { style: inputCss + ';min-width:200px', onchange: e => { fs.due = e.target.value; refresh(); } }, [
     el('option', { value:'' }, 'Все'),
     el('option', { value:'soon' }, 'Скоро к оплате (1–7 дн.)'),
     el('option', { value:'overdue' }, 'Просроченные'),
   ]);
-  const dueFromI = el('input', { type:'date', title:'Срок оплаты с', style:'padding:6px', onchange: e => { fs.dueFrom = e.target.value; refresh(); } });
-  const dueToI = el('input', { type:'date', title:'Срок оплаты по', style:'padding:6px', onchange: e => { fs.dueTo = e.target.value; refresh(); } });
-  const resetBtn = el('button', { class:'btn btn-sm', style:'display:none', onclick: () => {
-    Object.assign(fs, { q:'', status:'', client:'', manager:'', due:'', dueFrom:'', dueTo:'' });
-    searchI.value=''; statusS.value=''; clientS.value=''; mgrS.value=''; dueS.value=''; dueFromI.value=''; dueToI.value='';
+  const dueFromI = el('input', { type:'date', title:'Срок оплаты с', style: inputCss + ';min-width:150px', onchange: e => { fs.dueFrom = e.target.value; refresh(); } });
+  const dueToI = el('input', { type:'date', title:'Срок оплаты по', style: inputCss + ';min-width:150px', onchange: e => { fs.dueTo = e.target.value; refresh(); } });
+  const resetBtn = el('button', { class:'btn btn-sm', style:'height:34px', onclick: () => {
+    Object.assign(fs, { q:'', status:'', due:'', dueFrom:'', dueTo:'' });
+    searchI.value=''; statusS.value=''; dueS.value=''; dueFromI.value=''; dueToI.value='';
     refresh();
-  } }, 'Сбросить');
+  } }, '✕ Сбросить');
 
   function matchesDoc(doc) {
     if (fs.q) {
@@ -4098,8 +4092,6 @@ VIEWS.invoices = () => {
       if (!hay.includes(fs.q)) return false;
     }
     if (fs.status && doc.status !== fs.status) return false;
-    if (fs.client && doc.client !== fs.client) return false;
-    if (fs.manager && doc.manager !== fs.manager) return false;
     if (fs.due === 'soon') { const du = daysUntil(doc.due); if (du === null || du < 0 || du > 7) return false; }
     else if (fs.due === 'overdue') { const du = daysUntil(doc.due); const over = (du !== null && du < 0) || doc.status === 'overdue'; if (!over) return false; }
     if (fs.dueFrom || fs.dueTo) {
@@ -4133,14 +4125,13 @@ VIEWS.invoices = () => {
   }
 
   const tw = el('div', { class:'mt-16 table-wrap' });
-  // Ряд 1: поиск + основные фильтры
-  tw.append(el('div', { class:'table-toolbar' }, [ searchI, statusS, clientS, mgrS ]));
+  // Ряд 1: поиск + статус + кнопка «Сбросить»
+  tw.append(el('div', { class:'table-toolbar' }, [ searchI, statusS, el('div', { style:'margin-left:auto' }, resetBtn) ]));
   // Ряд 2: отдельный блок — срок оплаты (диапазон + быстрые фильтры)
   tw.append(el('div', { class:'table-toolbar', style:'border-top:1px solid var(--border)' }, [
     el('span', { class:'muted', style:'font-size:12px' }, 'Срок оплаты:'), dueS,
     el('span', { class:'muted', style:'font-size:12px' }, 'с:'), dueFromI,
     el('span', { class:'muted', style:'font-size:12px' }, 'по:'), dueToI,
-    el('div', { style:'margin-left:auto' }, resetBtn),
   ]));
   const tab = el('table', { class:'data' });
   tab.append(el('thead', {}, el('tr', {}, [
@@ -4152,8 +4143,6 @@ VIEWS.invoices = () => {
   wrap.append(tw);
 
   function refresh() {
-    const anyActive = !!(fs.q || fs.status || fs.client || fs.manager || fs.due || fs.dueFrom || fs.dueTo);
-    resetBtn.style.display = anyActive ? '' : 'none';
     const tb = tab.querySelector('tbody');
     if (tb) tb.replaceWith(buildTbody());
   }
