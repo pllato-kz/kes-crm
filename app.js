@@ -386,12 +386,15 @@ document.addEventListener('click', (e) => {
   const navBtn = e.target.closest('#nav button[data-view]');
   if (navBtn) {
     if (navBtn.dataset.view === 'deals') { const g = document.getElementById('nav-deals-group'); if (g) g.classList.add('open'); }
+    if (navBtn.dataset.view === 'tasks') TASKS_VIEW = 'kanban'; // при входе в раздел — всегда канбан
     navigate(navBtn.dataset.view); document.body.classList.remove('nav-open'); return;
   }
   const navLink = e.target.closest('[data-nav]');
   if (navLink) {
     e.preventDefault();
-    navigate(navLink.dataset.nav, JSON.parse(navLink.dataset.params || '{}'));
+    const params = JSON.parse(navLink.dataset.params || '{}');
+    if (navLink.dataset.nav === 'tasks' && !params.view) TASKS_VIEW = 'kanban';
+    navigate(navLink.dataset.nav, params);
     document.body.classList.remove('nav-open');
   }
 });
