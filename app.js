@@ -2241,12 +2241,28 @@ VIEWS.deals = () => {
     const countSpan = el('span', { class:'strong' }, '');
     const rowChecks = [];
     const selAll = el('input', { type:'checkbox', title:'Выбрать все по фильтру' });
+    const isDir = currentUser && currentUser.roleKey === 'director';
+    const delBtn = isDir ? el('button', { class:'btn btn-sm btn-danger', onclick: () => bulkDeleteDeals() }, '🗑 Удалить') : null;
     const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [
       countSpan,
       el('button', { class:'btn btn-sm btn-primary', onclick: () => openBulkEdit([...selected]) }, 'Массовое редактирование'),
+      delBtn,
       el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); rowChecks.forEach(c => { c.checked = false; }); selAll.checked = false; refreshBulk(); } }, 'Снять выбор'),
     ]);
     function refreshBulk() { countSpan.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
+    async function bulkDeleteDeals() {
+      const ids = [...selected]; if (!ids.length) return;
+      if (!(await confirmModal({ title:'Подтверждение удаления', message:'Вы уверены, что хотите удалить выбранные элементы? Они будут перемещены в архив на 30 дней.', confirmText:'Удалить', cancelText:'Отмена', danger:true }))) return;
+      if (delBtn) delBtn.disabled = true;
+      try {
+        for (const id of ids) {
+          await window.__API__.apiFetch('deals/' + id, { method:'DELETE' });
+          const idx = state.deals.findIndex(x => x.id === id); if (idx >= 0) state.deals.splice(idx, 1);
+        }
+        toast(`Перемещено в архив: ${ids.length}`, 'success');
+        selected.clear(); navigate('deals');
+      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); if (delBtn) delBtn.disabled = false; }
+    }
     selAll.onchange = () => { deals.forEach((d, i) => { if (selAll.checked) selected.add(d.id); else selected.delete(d.id); if (rowChecks[i]) rowChecks[i].checked = selAll.checked; }); refreshBulk(); };
 
     const t = el('table', { class:'data' });
@@ -3016,12 +3032,28 @@ VIEWS.clients = () => {
   let visibleNow = state.clients;
   const selAll = el('input', { type:'checkbox', title:'Выбрать всех (по фильтру)' });
   const bulkCount = el('span', { class:'strong' }, '');
+  const isDir = currentUser && currentUser.roleKey === 'director';
+  const delBtn = isDir ? el('button', { class:'btn btn-sm btn-danger', onclick: () => bulkDeleteClients() }, '🗑 Удалить') : null;
   const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [
     bulkCount,
     el('button', { class:'btn btn-sm btn-primary', onclick: () => openClientBulkEdit([...selected]) }, 'Массовое редактирование'),
+    delBtn,
     el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); selAll.checked = false; const tb = tw.querySelector('tbody'); if (tb) tb.replaceWith(buildTbody(visibleNow)); refreshBulk(); } }, 'Снять выбор'),
   ]);
   function refreshBulk() { bulkCount.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
+  async function bulkDeleteClients() {
+    const ids = [...selected]; if (!ids.length) return;
+    if (!(await confirmModal({ title:'Подтверждение удаления', message:'Вы уверены, что хотите удалить выбранные элементы? Они будут перемещены в архив на 30 дней.', confirmText:'Удалить', cancelText:'Отмена', danger:true }))) return;
+    if (delBtn) delBtn.disabled = true;
+    try {
+      for (const id of ids) {
+        await window.__API__.apiFetch('clients/' + id, { method:'DELETE' });
+        const idx = state.clients.findIndex(x => x.id === id); if (idx >= 0) state.clients.splice(idx, 1);
+      }
+      toast(`Перемещено в архив: ${ids.length}`, 'success');
+      selected.clear(); navigate('clients');
+    } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); if (delBtn) delBtn.disabled = false; }
+  }
   selAll.onchange = () => {
     visibleNow.forEach(c => { if (selAll.checked) selected.add(c.id); else selected.delete(c.id); });
     const tb = tw.querySelector('tbody'); if (tb) tb.replaceWith(buildTbody(visibleNow));
