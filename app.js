@@ -2363,7 +2363,9 @@ async function openDealDetail(id) {
           el('td', { class:'num' }, canEdit
             ? el('input', { class:'qty', type:'number', min:'1', value: it.qty, oninput: (e) => { it.qty = Math.max(1, +e.target.value || 1); recalc(); } })
             : String(it.qty)),
-          el('td', { class:'num muted' }, fmtMoney(it.priceUsed)),
+          el('td', { class:'num' }, canEdit
+            ? el('input', { class:'qty', type:'number', min:'0', value: Math.round(it.priceUsed || 0), title:'Цена за единицу', oninput: (e) => { it.priceUsed = Math.max(0, +e.target.value || 0); recalc(); } })
+            : el('span', { class:'muted' }, fmtMoney(it.priceUsed))),
           sumCell,
           el('td', {}, canEdit ? el('button', { class:'x-btn', title:'Удалить', onclick: () => { d.lineItems.splice(idx, 1); recomputeAmount(); renderItems(); } }, '×') : null),
         ]));
@@ -2387,11 +2389,11 @@ async function openDealDetail(id) {
       list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Поиск…'));
       let rows;
       try {
-        const resp = await window.__API__.apiFetch('products?limit=12' + (ql ? '&q=' + encodeURIComponent(ql) : ''));
+        const resp = await window.__API__.apiFetch('products?limit=50' + (ql ? '&q=' + encodeURIComponent(ql) : ''));
         rows = (resp.data || resp || []).map(window.__API__.map.product);
         rows.forEach(p => { const ex = byId(state.products, p.id); if (ex) Object.assign(ex, p); else state.products.push(p); }); // держим каталог в памяти актуальным
       } catch (e) {
-        rows = state.products.filter(p => !ql || (p.name + p.sku).toLowerCase().includes(ql.toLowerCase())).slice(0, 12);
+        rows = state.products.filter(p => !ql || (p.name + p.sku).toLowerCase().includes(ql.toLowerCase())).slice(0, 50);
       }
       if (my !== seq) return; // пришёл более свежий запрос
       list.innerHTML = '';
