@@ -166,7 +166,8 @@ export async function onRequest(context) {
 
     // архив: удалённые сделки/клиенты (мягкое удаление, авто-очистка через 30 дней)
     if (seg[0] === 'archive') {
-      if (!auth || auth.role !== 'director') return err(403, 'Архив доступен директору');
+      await ensureArchiveRight(env);
+      if (!(await roleHasModule(env, auth, 'archive'))) return err(403, 'Нет права доступа «Архив»');
       await ensureArchiveColumns(env);
       await purgeExpiredArchive(env);
       if (seg[1] === 'restore' && request.method === 'POST') return restoreArchive(env, request);
@@ -346,6 +347,7 @@ async function dataRoute({ request, env }, seg, url, auth) {
   // задачи: расширенные поля (описание/дата начала/статус/комментарии) — добавляем на лету
   if (resource === 'tasks') await ensureTaskColumns(env);
   if (resource === 'deals' || resource === 'clients') await ensureArchiveColumns(env);
+  if (resource === 'roles') await ensureArchiveRight(env); // выдать директору право «Архив»
   if (resource === 'deals') await ensureDealColumns(env);
   if (resource === 'company') await ensureCompanyColumns(env);
   if (['pipelines', 'deal_stages', 'deals'].includes(resource)) await ensurePipelineSchema(env);
@@ -1166,6 +1168,25 @@ async function deleteClient(env, id, auth) {
 }
 
 // ----- Архив (сделки/клиенты) -----
+// Право доступа «Архив» — по модулю 'archive' в роли пользователя
+async function roleHasModule(env, auth, mod) {
+  if (!auth) return false;
+  const r = await env.DB.prepare('SELECT modules FROM roles WHERE key=?').bind(auth.role).first();
+  if (!r) return false;
+  try { return JSON.parse(r.modules || '[]').includes(mod); } catch (e) { return false; }
+}
+// Одноразово выдаём право «Архив» директору (чтобы он не потерял доступ при вводе права)
+let ARCHIVE_RIGHT_OK = false;
+async function ensureArchiveRight(env) {
+  if (ARCHIVE_RIGHT_OK) return;
+  const dir = await env.DB.prepare("SELECT modules FROM roles WHERE key='director'").first();
+  if (dir) {
+    let mods = []; try { mods = JSON.parse(dir.modules || '[]'); } catch (e) {}
+    if (!mods.includes('archive')) { mods.push('archive'); await env.DB.prepare("UPDATE roles SET modules=? WHERE key='director'").bind(JSON.stringify(mods)).run(); }
+  }
+  ARCHIVE_RIGHT_OK = true;
+}
+
 let ARCHIVE_SCHEMA_OK = false;
 async function ensureArchiveColumns(env) {
   if (ARCHIVE_SCHEMA_OK) return;
