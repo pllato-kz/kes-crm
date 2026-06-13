@@ -3220,17 +3220,18 @@ async function openStockDoc(type, docId, onDone) {
     let seq = 0;
     async function fill(q = '') {
       const my = ++seq; const ql = q.trim();
-      list.innerHTML = ''; list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Поиск…'));
-      let rows; try { const resp = await window.__API__.apiFetch('products?limit=20' + (ql ? '&q=' + encodeURIComponent(ql) : '')); rows = (resp.data || []).map(window.__API__.map.product); } catch (e) { rows = []; }
+      list.innerHTML = ''; list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Загрузка…'));
+      let rows; try { const resp = await window.__API__.apiFetch('products?limit=100' + (ql ? '&q=' + encodeURIComponent(ql) : '')); rows = (resp.data || []).map(window.__API__.map.product); } catch (e) { rows = []; }
       if (my !== seq) return;
       list.innerHTML = '';
       rows.forEach(p => list.append(el('div', { class:'pp-item', onclick: () => {
         const ex = items.find(x => x.product_id === p.id); if (ex) ex.qty += 1; else items.push({ product_id: p.id, product_name: p.name, product_sku: p.sku, qty: 1 });
-        renderItems(); search.value = ''; list.innerHTML = '';
+        renderItems();
       } }, [el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku)]), el('span', { class:'pp-price' }, 'ост. ' + p.stock)])));
       if (!rows.length) list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено'));
     }
-    let dt; search.oninput = (e) => { const v = e.target.value; clearTimeout(dt); if (!v.trim()) { list.innerHTML = ''; return; } dt = setTimeout(() => fill(v), 250); };
+    let dt; search.oninput = (e) => { const v = e.target.value; clearTimeout(dt); dt = setTimeout(() => fill(v), 250); };
+    fill(); // показываем все товары сразу
     pickerHost.append(search, list);
   }
 
