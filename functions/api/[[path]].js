@@ -322,11 +322,12 @@ async function dataRoute({ request, env }, seg, url, auth) {
   if (resource === 'roles' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     if (!auth || auth.role !== 'director') return err(403, 'Менять доступы по ролям может только директор');
   }
-  // управлять этапами воронки может только директор; paid/shipped/lost защищены
+  // управлять этапами воронки может только директор; защищённые этапы (protected) нельзя менять/удалять
   if (resource === 'deal_stages' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     if (!auth || auth.role !== 'director') return err(403, 'Только директор может управлять этапами');
-    if (['PUT', 'PATCH', 'DELETE'].includes(method) && ['paid', 'shipped', 'lost'].includes(id)) {
-      return err(403, 'Этот этап нельзя изменять или удалять');
+    if (['PUT', 'PATCH', 'DELETE'].includes(method) && id) {
+      const st = await env.DB.prepare('SELECT protected FROM deal_stages WHERE id=?').bind(id).first();
+      if (st && st.protected) return err(403, 'Этот этап нельзя изменять или удалять');
     }
     if (method === 'DELETE' && id) return deleteStage(env, id);
   }
@@ -523,6 +524,9 @@ async function ensurePipelineSchema(env) {
   if (PIPELINES_SCHEMA_OK) return;
   try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS pipelines (id TEXT PRIMARY KEY, name TEXT, sort INTEGER)').run(); } catch (e) {}
   try { await env.DB.prepare('ALTER TABLE deal_stages ADD COLUMN pipeline_id TEXT').run(); } catch (e) { /* уже есть */ }
+  try { await env.DB.prepare('ALTER TABLE deal_stages ADD COLUMN protected INTEGER DEFAULT 0').run(); } catch (e) { /* уже есть */ }
+  // защищённые этапы основной воронки (нельзя переименовать/удалить)
+  try { await env.DB.prepare("UPDATE deal_stages SET protected=1 WHERE id IN ('paid','shipped','lost')").run(); } catch (e) {}
   // дефолтная воронка, если ни одной нет — в неё попадают существующие этапы
   try {
     const cnt = (await env.DB.prepare('SELECT COUNT(*) AS n FROM pipelines').first()).n;
@@ -541,16 +545,16 @@ async function createPipeline(env, request) {
   const row = await env.DB.prepare('SELECT MAX(sort) AS m FROM pipelines').first();
   const sort = (row && row.m != null ? row.m : 0) + 1;
   await env.DB.prepare('INSERT INTO pipelines (id, name, sort) VALUES (?,?,?)').bind(id, name, sort).run();
-  // стандартный набор этапов — как в основной воронке
+  // стандартный набор этапов — как в основной воронке; Оплачено/Отгружено/Отказ защищены
   const starter = [
-    ['Новая', '#9CA3AF'], ['КП отправлено', '#3B82F6'], ['Согласовано', '#8B5CF6'],
-    ['Счёт выставлен', '#F59E0B'], ['Оплачено', '#10B981'], ['Отгружено', '#06B6D4'],
-    ['Закрыта', '#22C55E'], ['Отказ', '#EF4444'],
+    ['Новая', '#9CA3AF', 0], ['КП отправлено', '#3B82F6', 0], ['Согласовано', '#8B5CF6', 0],
+    ['Счёт выставлен', '#F59E0B', 0], ['Оплачено', '#10B981', 1], ['Отгружено', '#06B6D4', 1],
+    ['Закрыта', '#22C55E', 0], ['Отказ', '#EF4444', 1],
   ];
   let i = 0;
-  for (const [label, color] of starter) {
-    await env.DB.prepare('INSERT INTO deal_stages (id, label, color, sort, pipeline_id) VALUES (?,?,?,?,?)')
-      .bind(genId(), label, color, i++, id).run();
+  for (const [label, color, prot] of starter) {
+    await env.DB.prepare('INSERT INTO deal_stages (id, label, color, sort, pipeline_id, protected) VALUES (?,?,?,?,?,?)')
+      .bind(genId(), label, color, i++, id, prot).run();
   }
   return json({ id, name, sort }, 201);
 }

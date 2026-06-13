@@ -2097,8 +2097,8 @@ VIEWS.deals = () => {
         }
         body.appendChild(card);
       });
-      // Заголовок этапа. paid/shipped/lost защищены: без правки, удаления и «+».
-      const protectedStage = STAGE_PROTECTED.has(s.id);
+      // Заголовок этапа. Защищённые (Оплачено/Отгружено/Отказ) — без правки, удаления и «+».
+      const protectedStage = !!s.protected || STAGE_PROTECTED.has(s.id);
       const canManageThis = canStages && !protectedStage;
       let labelEl;
       if (canManageThis) {
