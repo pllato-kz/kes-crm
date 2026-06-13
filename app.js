@@ -2723,7 +2723,7 @@ VIEWS.clients = () => {
     [el('option', { value:'' }, 'Все менеджеры')].concat(managers.map(u => el('option', { value: u.id }, u.name))));
   const fromI = el('input', { type:'date', title:'Последняя сделка с', style:'padding:6px', onchange: e => { filterState.from = e.target.value; refresh(); } });
   const toI = el('input', { type:'date', title:'Последняя сделка по', style:'padding:6px', onchange: e => { filterState.to = e.target.value; refresh(); } });
-  const resetBtn = el('button', { class:'btn btn-sm', onclick: () => {
+  const resetBtn = el('button', { class:'btn btn-sm', style:'display:none', onclick: () => {
     Object.assign(filterState, { q:'', type:'', city:'', manager:'', from:'', to:'' });
     searchI.value = ''; typeS.value = ''; cityS.value = ''; mgrS.value = ''; fromI.value = ''; toI.value = '';
     refresh();
@@ -2741,6 +2741,9 @@ VIEWS.clients = () => {
   ]));
 
   function refresh() {
+    // «Сбросить» виден только если активен хотя бы один фильтр
+    const anyActive = !!(filterState.q || filterState.type || filterState.city || filterState.manager || filterState.from || filterState.to);
+    resetBtn.style.display = anyActive ? '' : 'none';
     const visible = state.clients.filter(c => {
       if (filterState.q && !(c.name+c.bin+c.contact).toLowerCase().includes(filterState.q)) return false;
       if (filterState.type && c.type !== filterState.type) return false;
