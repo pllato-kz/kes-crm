@@ -3029,11 +3029,11 @@ VIEWS.clients = () => {
   };
 
   const tw = el('div', { class: 'table-wrap' });
-  // Поиск виден всегда; справа в одном ряду — «Фильтры», Импорт и Экспорт
+  // «Фильтры» — справа от поиска; Импорт/Экспорт прижаты к правому краю
   tw.append(el('div', { class: 'table-toolbar' }, [
     searchI,
+    drawer.btn,
     el('div', { style:'display:flex;gap:8px;margin-left:auto' }, [
-      drawer.btn,
       el('button', { class: 'btn', onclick: () => openImport('clients') }, '📥 Импорт'),
       el('button', { class: 'btn', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
     ]),
