@@ -3426,7 +3426,6 @@ VIEWS.warehouse = () => {
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Склад'),
-      el('div', { class: 'sub' }, 'Карагандинский склад · ул. Бытовая, 13/1'),
     ]),
     el('div', { class: 'actions' }, [
       can('edit-stock') ? el('button', { class: 'btn btn-primary', onclick: () => openStockDoc('receipt', null, () => navigate('warehouse')) }, '📥 Приход') : null,
@@ -5240,7 +5239,6 @@ function renderShell() {
             <span>v0.2</span>
           </div>
         </div>
-        <div class="sidebar-tenant">KazEnergoSnab • Караганда</div>
         <nav class="sidebar-nav" id="nav"></nav>
         <div class="sidebar-foot">
           <span>© 2026 KES</span>
