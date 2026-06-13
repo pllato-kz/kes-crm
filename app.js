@@ -5020,26 +5020,38 @@ VIEWS.reports = () => {
     if (!byStage.length) {
       stageHost.append(noData('Нет сделок по выбранным фильтрам'));
     } else {
-      const rows = byStage
-        .map(x => ({ ...x, stg: STAGES.find(s => s.id === x.stage_id) || { label: x.stage_id, color: '#9CA3AF', sort: 999 } }))
-        .sort((a, b) => (a.stg.sort || 0) - (b.stg.sort || 0));
+      // Объединяем одинаковые этапы из разных воронок по названию — статистика по всем воронкам
+      const grouped = new Map();
+      byStage.forEach(x => {
+        const stg = STAGES.find(s => s.id === x.stage_id) || { label: x.stage_id, color: '#9CA3AF', sort: 999 };
+        const g = grouped.get(stg.label) || { label: stg.label, color: stg.color, sort: stg.sort != null ? stg.sort : 999, count: 0, sum: 0, ids: [] };
+        g.count += x.count || 0;
+        g.sum += x.sum || 0;
+        g.ids.push(x.stage_id);
+        if ((stg.sort != null ? stg.sort : 999) < g.sort) g.sort = stg.sort;
+        grouped.set(stg.label, g);
+      });
+      const rows = [...grouped.values()].sort((a, b) => (a.sort || 0) - (b.sort || 0));
       const st = el('table', { class:'data' });
       st.append(el('thead', {}, el('tr', {}, [el('th', {}, 'Этап'), el('th', { class:'num' }, 'Сделок'), el('th', { class:'num' }, 'Сумма')])));
-      st.append(el('tbody', {}, rows.map(x => el('tr', {
-        style:'cursor:pointer', title:`Открыть сделки этапа «${x.stg.label}»`,
-        onclick: () => {
-          const stg = STAGES.find(s => s.id === x.stage_id);
-          if (stg && stg.pipelineId) setDealsPipeline(stg.pipelineId); // переключаем воронку и сбрасываем этап
-          DEALS_STAGE = x.stage_id;            // фильтр по выбранному этапу
-          DEALS_MGR = f.manager; DEALS_FROM = f.from; DEALS_TO = f.to; DEALS_Q = ''; // переносим фильтры отчёта
-          DEALS_VIEW = 'list';
-          navigate('deals');
-        },
-      }, [
-        el('td', {}, el('span', { class:'pill', style:`background:${x.stg.color}22;color:${x.stg.color}` }, x.stg.label)),
-        el('td', { class:'num strong' }, x.count),
-        el('td', { class:'num muted' }, fmtMoneyK(x.sum)),
-      ]))));
+      st.append(el('tbody', {}, rows.map(g => {
+        const single = g.ids.length === 1; // один этап → доступен переход к сделкам этого этапа
+        return el('tr', single ? {
+          style:'cursor:pointer', title:`Открыть сделки этапа «${g.label}»`,
+          onclick: () => {
+            const stg = STAGES.find(s => s.id === g.ids[0]);
+            if (stg && stg.pipelineId) setDealsPipeline(stg.pipelineId);
+            DEALS_STAGE = g.ids[0];
+            DEALS_MGR = f.manager; DEALS_FROM = f.from; DEALS_TO = f.to; DEALS_Q = '';
+            DEALS_VIEW = 'list';
+            navigate('deals');
+          },
+        } : {}, [
+          el('td', {}, el('span', { class:'pill', style:`background:${g.color}22;color:${g.color}` }, g.label)),
+          el('td', { class:'num strong' }, g.count),
+          el('td', { class:'num muted' }, fmtMoneyK(g.sum)),
+        ]);
+      })));
       stageHost.append(st);
     }
 
