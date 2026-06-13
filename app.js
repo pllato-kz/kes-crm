@@ -3955,11 +3955,14 @@ VIEWS.invoices = () => {
   const wrap = el('div');
   const totalPaid = state.invoices.filter(i => i.status === 'paid').reduce((s,i)=>s+i.amount,0);
   const totalDue = state.invoices.filter(i => i.status !== 'paid').reduce((s,i)=>s+i.amount,0);
+  // Сделки на этапе «Оплачено» показываем как документы (без дублей с существующими счетами)
+  const isPaidStage = (sid) => /оплач/i.test((stageById(sid) || {}).label || '');
+  const paidDeals = visibleDeals().filter(d => isPaidStage(d.stage) && !state.invoices.some(iv => iv.deal === d.id));
 
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Документы'),
-      el('div', { class: 'sub' }, 'Счета-фактуры, накладные, договоры'),
+      el('div', { class: 'sub' }, `Счета, накладные · ${paidDeals.length} по оплаченным сделкам`),
     ]),
     el('div', { class: 'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewInvoice }, '+ Счёт')]),
   ]));
@@ -3981,7 +3984,7 @@ VIEWS.invoices = () => {
       el('th', {}, 'Срок оплаты'),
       el('th', {}, 'Статус'),
     ])));
-    tab.append(el('tbody', {}, state.invoices.map(iv => {
+    const invRows = state.invoices.map(iv => {
       const cl = clientById(iv.client);
       const dl = byId(state.deals, iv.deal);
       const stMap = {
@@ -3989,7 +3992,7 @@ VIEWS.invoices = () => {
         pending: el('span', { class:'pill pill-warn' }, '⏳ Ожидает'),
         overdue: el('span', { class:'pill pill-danger' }, '⚠ Просрочка'),
       };
-      return el('tr', { onclick: () => openInvoiceDetail(iv.id) }, [
+      return el('tr', { style:'cursor:pointer', onclick: () => openInvoiceDetail(iv.id) }, [
         el('td', { class:'strong' }, iv.no),
         el('td', {}, fmtDate(iv.date)),
         el('td', {}, cl.name),
@@ -3998,7 +4001,18 @@ VIEWS.invoices = () => {
         el('td', {}, fmtDate(iv.due)),
         el('td', {}, stMap[iv.status] || '—'),
       ]);
-    })));
+    });
+    const dealRows = paidDeals.map(d => el('tr', { style:'cursor:pointer', onclick: () => openDealDetail(d.id) }, [
+      el('td', { class:'strong' }, 'по сделке'),
+      el('td', {}, d.created ? fmtDate(d.created) : '—'),
+      el('td', {}, clientById(d.client).name),
+      el('td', { class:'muted' }, d.title),
+      el('td', { class:'num strong' }, fmtMoneyK(d.amount)),
+      el('td', { class:'muted' }, '—'),
+      el('td', {}, el('span', { class:'pill pill-success' }, '✓ Оплачено')),
+    ]));
+    const allRows = [...invRows, ...dealRows];
+    tab.append(el('tbody', {}, allRows.length ? allRows : [el('tr', {}, el('td', { colspan: 7, class:'muted', style:'text-align:center;padding:20px' }, 'Документов нет'))]));
     return tab;
   })()));
   return wrap;
