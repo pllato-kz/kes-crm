@@ -2706,25 +2706,38 @@ VIEWS.clients = () => {
       el('div', { class: 'sub' }, `${state.clients.length} клиентов · LTV ${fmtMoneyK(state.clients.reduce((s,c)=>s+c.ltv,0))}`),
     ]),
     el('div', { class: 'actions' }, [
-      el('button', { class: 'btn', onclick: () => openImport('clients') }, '📥 Импорт'),
       el('button', { class: 'btn btn-primary', onclick: openNewClient }, '+ Клиент'),
     ]),
   ]));
 
-  // Локальная фильтрация
-  const filterState = { q: '', type: '', city: '' };
-  const cities = Array.from(new Set(state.clients.map(c => c.city)));
+  // Локальная фильтрация (все фильтры комбинируются, обновление без перезагрузки)
+  const filterState = { q: '', type: '', city: '', manager: '', from: '', to: '' };
+  const cities = Array.from(new Set(state.clients.map(c => c.city).filter(Boolean))).sort();
+  const managers = state.users.filter(u => u.active !== false);
   const searchI = el('input', { placeholder:'Поиск клиента или БИН…', oninput: e => { filterState.q = e.target.value.toLowerCase(); refresh(); } });
   const typeS = el('select', { onchange: e => { filterState.type = e.target.value; refresh(); } },
     [el('option', { value:'' }, 'Все типы'), el('option', { value:'opt' }, 'Опт'), el('option', { value:'rozn' }, 'Розница'), el('option', { value:'dilr' }, 'Дилер')]);
   const cityS = el('select', { onchange: e => { filterState.city = e.target.value; refresh(); } },
     [el('option', { value:'' }, 'Все города')].concat(cities.map(c => el('option', { value: c }, c))));
+  const mgrS = el('select', { onchange: e => { filterState.manager = e.target.value; refresh(); } },
+    [el('option', { value:'' }, 'Все менеджеры')].concat(managers.map(u => el('option', { value: u.id }, u.name))));
+  const fromI = el('input', { type:'date', title:'Последняя сделка с', style:'padding:6px', onchange: e => { filterState.from = e.target.value; refresh(); } });
+  const toI = el('input', { type:'date', title:'Последняя сделка по', style:'padding:6px', onchange: e => { filterState.to = e.target.value; refresh(); } });
+  const resetBtn = el('button', { class:'btn btn-sm', onclick: () => {
+    Object.assign(filterState, { q:'', type:'', city:'', manager:'', from:'', to:'' });
+    searchI.value = ''; typeS.value = ''; cityS.value = ''; mgrS.value = ''; fromI.value = ''; toI.value = '';
+    refresh();
+  } }, 'Сбросить');
 
   const tw = el('div', { class: 'table-wrap' });
   tw.append(el('div', { class: 'table-toolbar' }, [
-    searchI, typeS, cityS,
+    searchI, typeS, cityS, mgrS,
+    el('span', { class:'muted', style:'font-size:12px' }, 'Послед. сделка c:'), fromI,
+    el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
+    resetBtn,
     el('div', { class: 'spacer' }),
-    el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, 'Экспорт CSV'),
+    el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
+    el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт CSV'),
   ]));
 
   function refresh() {
@@ -2732,6 +2745,13 @@ VIEWS.clients = () => {
       if (filterState.q && !(c.name+c.bin+c.contact).toLowerCase().includes(filterState.q)) return false;
       if (filterState.type && c.type !== filterState.type) return false;
       if (filterState.city && c.city !== filterState.city) return false;
+      if (filterState.manager && c.manager !== filterState.manager) return false;
+      if (filterState.from || filterState.to) {
+        const d = String(c.lastDeal || '').slice(0, 10);
+        if (!d) return false;
+        if (filterState.from && d < filterState.from) return false;
+        if (filterState.to && d > filterState.to) return false;
+      }
       return true;
     });
     const tb = tw.querySelector('tbody');
