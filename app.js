@@ -2706,6 +2706,8 @@ VIEWS.clients = () => {
       el('div', { class: 'sub' }, `${state.clients.length} клиентов · LTV ${fmtMoneyK(state.clients.reduce((s,c)=>s+c.ltv,0))}`),
     ]),
     el('div', { class: 'actions' }, [
+      el('button', { class: 'btn', onclick: () => openImport('clients') }, '📥 Импорт'),
+      el('button', { class: 'btn', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
       el('button', { class: 'btn btn-primary', onclick: openNewClient }, '+ Клиент'),
     ]),
   ]));
@@ -2752,9 +2754,6 @@ VIEWS.clients = () => {
     el('span', { class:'muted', style:'font-size:12px' }, 'Послед. сделка c:'), fromI,
     el('span', { class:'muted', style:'font-size:12px' }, 'по:'), toI,
     resetBtn,
-    el('div', { class: 'spacer' }),
-    el('button', { class: 'btn btn-sm', onclick: () => openImport('clients') }, '📥 Импорт'),
-    el('button', { class: 'btn btn-sm', onclick: () => exportClientsCSV() }, '📤 Экспорт CSV'),
   ]));
   tw.append(bulkBar);
 
@@ -2828,20 +2827,33 @@ VIEWS.clients = () => {
   return wrap;
 };
 
-// Массовое редактирование выбранных клиентов: назначить менеджера всем сразу
+// Массовое редактирование выбранных клиентов: заполните нужные поля (пустые — не меняются)
 function openClientBulkEdit(ids) {
   const total = ids.length;
   if (!total) { toast('Не выбрано ни одного клиента', 'warn'); return; }
-  const mgrSel = el('select', {}, state.users.filter(u => u.active !== false).map(u => el('option', { value: u.id }, u.name)));
+  const mgrSel = el('select', {}, [el('option', { value:'' }, 'Не менять'), ...state.users.filter(u => u.active !== false).map(u => el('option', { value: u.id }, u.name))]);
+  const nameI = el('input', { placeholder:'Оставьте пустым, чтобы не менять' });
+  const sumI = el('input', { type:'number', placeholder:'Оставьте пустым, чтобы не менять' });
+  const addrI = el('input', { placeholder:'Оставьте пустым, чтобы не менять' });
+
   const applyBtn = el('button', { class:'btn btn-primary', onclick: async () => {
-    const mgr = mgrSel.value;
-    if (!mgr) { toast('Выберите менеджера', 'warn'); return; }
+    const body = {};
+    if (mgrSel.value) body.manager_id = mgrSel.value;
+    if (nameI.value.trim()) body.name = nameI.value.trim();
+    if (sumI.value !== '') body.ltv = Number(sumI.value) || 0;
+    if (addrI.value.trim()) body.address = addrI.value.trim();
+    if (!Object.keys(body).length) { toast('Заполните хотя бы одно поле', 'warn'); return; }
     applyBtn.disabled = true;
-    const body = { manager_id: mgr };
     try {
       for (let i = 0; i < ids.length; i += 8) { // батчами
         await Promise.all(ids.slice(i, i + 8).map(id => window.__API__.apiFetch('clients/' + id, { method:'PUT', body }).then(() => {
-          const c = byId(state.clients, id); if (c) c.manager = mgr;
+          const c = byId(state.clients, id);
+          if (c) {
+            if ('manager_id' in body) c.manager = body.manager_id;
+            if ('name' in body) c.name = body.name;
+            if ('ltv' in body) c.ltv = body.ltv;
+            if ('address' in body) c.address = body.address;
+          }
         })));
       }
       closeModal(); toast(`Изменено клиентов: ${ids.length}`, 'success'); navigate('clients');
@@ -2851,8 +2863,11 @@ function openClientBulkEdit(ids) {
   openModal({
     title: `Массовое редактирование · ${total} ${plural(total, 'клиент', 'клиента', 'клиентов')}`,
     body: el('div', {}, [
-      el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Выбранным клиентам будет назначен указанный менеджер.'),
+      el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Заполните только те поля, которые нужно изменить. Пустые поля остаются без изменений.'),
       el('div', { class:'form-row' }, [el('label', {}, 'Менеджер'), mgrSel]),
+      el('div', { class:'form-row' }, [el('label', {}, 'Название'), nameI]),
+      el('div', { class:'form-row' }, [el('label', {}, 'Сумма (LTV)'), sumI]),
+      el('div', { class:'form-row' }, [el('label', {}, 'Адрес'), addrI]),
     ]),
     foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), applyBtn],
   });
