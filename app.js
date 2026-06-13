@@ -1311,6 +1311,15 @@ function openInvoiceDetail(id) {
   if (!iv) return;
   const cl = clientById(iv.client);
   const d = byId(state.deals, iv.deal);
+  const setStatus = async (status, msg) => {
+    const prev = iv.status; iv.status = status;
+    try {
+      await window.__API__.apiFetch('invoices/' + iv.id, { method: 'PUT', body: { status_id: status } });
+      closeModal(); toast(msg, 'success');
+      if (document.querySelector('#nav button[data-view="invoices"].active')) navigate('invoices');
+    } catch (err) { iv.status = prev; toast('Не удалось сохранить', 'error'); }
+  };
+  const isPaid = iv.status === 'paid';
   openModal({
     title: 'Счёт ' + iv.no,
     body: el('div', {}, [
@@ -1320,14 +1329,14 @@ function openInvoiceDetail(id) {
         el('dt', {}, 'Дата'),    el('dd', {}, fmtDate(iv.date)),
         el('dt', {}, 'Сумма'),    el('dd', { class:'strong', style:'font-size:18px' }, fmtMoney(iv.amount)),
         el('dt', {}, 'Срок'),    el('dd', {}, fmtDate(iv.due)),
-        el('dt', {}, 'Статус'),   el('dd', {}, iv.status),
+        el('dt', {}, 'Статус'),   el('dd', {}, el('span', { class:'pill ' + (isPaid ? 'pill-success' : iv.status === 'overdue' ? 'pill-danger' : 'pill-warn') }, isPaid ? 'Оплачено' : iv.status === 'overdue' ? 'Просрочка' : 'Ожидает')),
       ]),
     ]),
     foot: [
       el('button', { class:'btn', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl); else toast('Сделка не найдена', 'warn'); } }, '🖨 PDF'),
-      iv.status !== 'paid'
-        ? el('button', { class:'btn btn-primary', onclick: async () => { iv.status = 'paid'; try { await window.__API__.apiFetch('invoices/' + iv.id, { method: 'PUT', body: { status_id: 'paid' } }); closeModal(); toast('Оплата зарегистрирована', 'success'); navigate('invoices'); } catch (err) { toast('Не удалось сохранить', 'error'); } } }, '✓ Оплачено')
-        : el('button', { class:'btn', disabled: 'disabled' }, '✓ Уже оплачен'),
+      isPaid
+        ? el('button', { class:'btn btn-danger', onclick: () => setStatus('pending', 'Оплата отменена — ожидает') }, '↩ Отменить оплату')
+        : el('button', { class:'btn btn-primary', onclick: () => setStatus('paid', 'Счёт оплачен') }, '✓ Оплачено'),
     ],
   });
 }
@@ -3122,7 +3131,40 @@ async function openClientDetail(id) {
     dealsHost.append(tbl);
   }
   renderDeals();
-  const right = el('div', { class:'deal-right' }, [dealsHost]);
+
+  // ----- Документы: счета клиента (синхронно с разделом «Документы») -----
+  const docsHost = el('div', { style:'padding:12px 14px;overflow-y:auto;flex:1;display:none' });
+  function renderDocs() {
+    const invs = state.invoices.filter(iv => iv.client === c.id)
+      .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    docsHost.innerHTML = '';
+    docsHost.append(el('div', { class:'section-title' }, `Счета клиента (${invs.length})`));
+    if (!invs.length) { docsHost.append(el('div', { class:'muted', style:'padding:16px;text-align:center' }, 'Счетов ещё нет')); return; }
+    const stMap = { paid:['pill-success','Оплачено'], pending:['pill-warn','Ожидает'], overdue:['pill-danger','Просрочка'] };
+    const tbl = el('table', { class:'data' });
+    tbl.append(el('thead', {}, el('tr', {}, [el('th', {}, '№ счёта'), el('th', {}, 'Дата'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Статус')])));
+    tbl.append(el('tbody', {}, invs.map(iv => {
+      const sp = stMap[iv.status] || ['pill-muted', iv.status || '—'];
+      return el('tr', { style:'cursor:pointer', onclick: () => { closeModal(); openInvoiceDetail(iv.id); } }, [
+        el('td', { class:'strong' }, iv.no),
+        el('td', { class:'muted' }, iv.date ? fmtDate(iv.date) : '—'),
+        el('td', { class:'num strong' }, fmtMoneyK(iv.amount)),
+        el('td', {}, el('span', { class:'pill ' + sp[0] }, sp[1])),
+      ]);
+    })));
+    docsHost.append(tbl);
+  }
+  renderDocs();
+
+  const cTabs = el('div', { class:'chat-tabs' });
+  function cSwitch(key) {
+    cTabs.querySelectorAll('.chat-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === key));
+    dealsHost.style.display = key === 'deals' ? '' : 'none';
+    docsHost.style.display = key === 'docs' ? '' : 'none';
+  }
+  [['deals','Сделки'],['docs','Документы']].forEach(([k, label]) =>
+    cTabs.append(el('div', { class:'chat-tab' + (k === 'deals' ? ' active' : ''), 'data-tab':k, onclick: () => cSwitch(k) }, label)));
+  const right = el('div', { class:'deal-right' }, [cTabs, dealsHost, docsHost]);
 
   async function saveClient(btn) {
     if (btn) btn.disabled = true;
