@@ -4680,22 +4680,43 @@ VIEWS.suppliers = () => {
   const wrap = el('div');
   wrap.append(el('div', { class:'page-head' }, [
     el('div', {}, [el('h1', {}, 'Поставщики'), el('div', { class:'sub' }, `${state.suppliers.length} партнёров · главный — EKF (78%)`)]),
-    el('div', { class:'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewSupplier }, '+ Поставщик')]),
+    el('div', { class:'actions' }, [
+      (currentUser && currentUser.roleKey === 'director') ? el('button', { class:'btn', onclick: (e) => syncSuppliers1C(e.currentTarget) }, '🔄 Подтянуть из 1С') : null,
+      el('button', { class:'btn btn-primary', onclick: openNewSupplier }, '+ Поставщик'),
+    ]),
   ]));
 
-  // Поиск по названию / контакту / телефону / email
-  let q = '';
-  const searchI = el('input', { placeholder:'Поиск поставщика…', style:'flex:1;min-width:240px', oninput: e => { q = e.target.value.toLowerCase().trim(); renderGrid(); } });
+  // Ручная синхронизация поставщиков с 1С (директор)
+  async function syncSuppliers1C(btn) {
+    const old = btn.textContent; btn.disabled = true; btn.textContent = 'Синхронизация…';
+    try {
+      const res = await window.__API__.apiFetch('sync/1c/suppliers', { method: 'POST' });
+      const list = await window.__API__.apiFetch('suppliers');
+      state.suppliers = (list || []).map(window.__API__.map.supplier);
+      toast(`Из 1С: новых ${res.created || 0}, обновлено ${res.updated || 0}`, 'success');
+      navigate('suppliers');
+    } catch (err) {
+      toast('Ошибка синхронизации: ' + ((err && err.message) || err), 'error');
+      btn.disabled = false; btn.textContent = old;
+    }
+  }
+
+  // Поиск по названию / БИН / контакту / телефону / email
+  let q = '', page = 1; const PAGE_SIZE = 12;
+  const searchI = el('input', { placeholder:'Поиск поставщика…', style:'flex:1;min-width:240px', oninput: e => { q = e.target.value.toLowerCase().trim(); page = 1; renderGrid(); } });
   const tw = el('div', { class:'table-wrap' });
   tw.append(el('div', { class:'table-toolbar' }, [searchI]));
   wrap.append(tw);
 
   const grid = el('div', { class:'grid grid-3', style:'margin-top:16px' });
+  const pager = el('div', { class:'row', style:'justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;gap:8px' });
   function renderGrid() {
     const list = state.suppliers.filter(s => !q || (String(s.name||'') + ' ' + (s.bin||'') + ' ' + (s.contact||'') + ' ' + (s.phone||'') + ' ' + (s.email||'')).toLowerCase().includes(q));
-    grid.innerHTML = '';
+    grid.innerHTML = ''; pager.innerHTML = '';
     if (!list.length) { grid.append(el('div', { class:'muted', style:'padding:16px' }, q ? 'Ничего не найдено' : 'Поставщиков нет')); return; }
-    list.forEach(s => {
+    const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+    if (page > pages) page = pages;
+    list.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).forEach(s => {
       grid.append(el('div', { class:'card', style:'cursor:pointer', title:'Открыть и редактировать поставщика', onclick: () => openSupplierDetail(s.id) }, [
         el('div', { class:'row', style:'justify-content:space-between;margin-bottom:8px' }, [
           el('div', { class:'strong', style:'font-size:15px' }, s.name),
@@ -4712,9 +4733,18 @@ VIEWS.suppliers = () => {
         el('div', { class:'muted mt-12', style:'font-size:12px;line-height:1.4' }, s.note || ''),
       ]));
     });
+    const from = (page - 1) * PAGE_SIZE + 1, to = Math.min(list.length, page * PAGE_SIZE);
+    pager.append(
+      el('div', { class:'muted', style:'font-size:12px' }, `Показано ${from}–${to} из ${list.length} · стр. ${page} из ${pages}`),
+      el('div', { class:'row', style:'gap:6px' }, [
+        el('button', { class:'btn btn-sm', disabled: page <= 1 ? 'disabled' : null, onclick: () => { if (page > 1) { page--; renderGrid(); } } }, '← Назад'),
+        el('button', { class:'btn btn-sm', disabled: page >= pages ? 'disabled' : null, onclick: () => { if (page < pages) { page++; renderGrid(); } } }, 'Вперёд →'),
+      ]),
+    );
   }
   renderGrid();
   wrap.append(grid);
+  wrap.append(pager);
   return wrap;
 };
 
