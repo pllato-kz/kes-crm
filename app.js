@@ -1736,10 +1736,21 @@ function openSupplierDetail(id) {
 
 // ---------- Напоминания по задачам ----------
 // Статус срока задачи: overdue | today | soon | future | none
+// Полный момент срока с учётом времени. Если у срока нет времени (только дата) —
+// считаем дедлайн концом дня (23:59), чтобы задача «на сегодня» не была просрочена
+// сразу с полуночи, но уходила в просрочку, когда указанное время прошло.
+function dueDateTime(due) {
+  const s = String(due || '').trim();
+  if (!s) return null;
+  const d = new Date(s.replace(' ', 'T'));
+  if (isNaN(d.getTime())) return null;
+  if (!/\d{1,2}:\d{2}/.test(s)) d.setHours(23, 59, 59, 999);
+  return d;
+}
 function taskDue(t) {
   if (!t || !t.due) return { kind: 'none' };
-  const due = new Date(String(t.due).replace(' ', 'T'));
-  if (isNaN(due.getTime())) return { kind: 'none' };
+  const due = dueDateTime(t.due);
+  if (!due) return { kind: 'none' };
   const now = new Date();
   if (due.getTime() < now.getTime()) return { kind: 'overdue', due };
   const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
@@ -5007,9 +5018,12 @@ function parseDue(due) { return new Date(String(due || '').replace(' ', 'T')); }
 // Колонка по сроку: просрочено / сегодня / завтра / эта неделя / этот месяц (и далее)
 function taskBucket(t) {
   if (!t.due) return 'month';
+  const due = dueDateTime(t.due);
+  if (!due) return 'month';
+  // срок с учётом времени уже прошёл → «Просрочено» (даже если дата — сегодня)
+  if (due.getTime() < Date.now()) return 'overdue';
   const today = startOfDay(new Date());
-  const d = startOfDay(parseDue(t.due));
-  if (isNaN(d.getTime())) return 'month';
+  const d = startOfDay(due);
   const diff = Math.round((d - today) / 86400000);
   if (diff < 0) return 'overdue';
   if (diff === 0) return 'today';
