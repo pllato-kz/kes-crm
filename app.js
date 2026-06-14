@@ -5836,7 +5836,7 @@ VIEWS.settings = () => {
   if (can('edit-users')) {
     const syncCard = el('div', { class:'card mt-16' });
     syncCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Синхронизация с 1С')));
-    syncCard.append(el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Данные подтягиваются из 1С автоматически в фоне: контрагенты ~20 мин, остатки/приходы ~10–20 мин, номенклатура и цены ~20–60 мин. Ручной запуск не требуется.'));
+    syncCard.append(el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Данные подтягиваются из 1С автоматически в фоне: остатки, клиенты и приходы — каждые ~5 мин, номенклатура и цены — ~10 мин. Ручной запуск не требуется.'));
     const statusHost = el('div', { class:'muted', style:'font-size:12px' }, 'Статус: загрузка…');
     syncCard.append(statusHost);
     wrap.append(syncCard);
