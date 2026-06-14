@@ -3034,16 +3034,31 @@ async function openDealDetail(id, opts) {
   renderTasks();
   const paneTasks = el('div', { class:'chat-pane', 'data-pane':'tasks' }, [el('div', { class:'section-title', style:'padding:12px 14px 6px' }, 'Задачи'), tasksList]);
 
+  // Вкладки строятся динамически по правам: разделы Документы/Отгрузка/Задачи
+  // показываются только при доступе к соответствующему модулю. Скрытые вкладки
+  // не появляются ни как кнопка, ни как панель с данными.
+  const tabDefs = [
+    ['items', 'Товары', paneItems, true],
+    ['whatsapp', 'WhatsApp', paneWhats, true],
+    ['comments', 'Комментарии', paneComments, true],
+    ['docs', 'Документы', paneDocs, can('see-module', 'invoices')],
+    ['shipment', 'Отгрузка', paneShip, can('see-module', 'shipments')],
+    ['tasks', 'Задачи', paneTasks, can('see-module', 'tasks')],
+    ['history', 'История', paneHist, true],
+  ].filter(t => t[3]);
+  const tabPanes = tabDefs.map(t => t[2]);
+
   const tabs = el('div', { class:'chat-tabs' });
   function switchTab(key) {
+    if (!tabDefs.some(t => t[0] === key)) return; // нет доступа к вкладке — игнорируем
     tabs.querySelectorAll('.chat-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === key));
-    [paneItems, paneWhats, paneComments, paneDocs, paneShip, paneTasks, paneHist].forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
+    tabPanes.forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
   }
-  [['items','Товары'],['whatsapp','WhatsApp'],['comments','Комментарии'],['docs','Документы'],['shipment','Отгрузка'],['tasks','Задачи'],['history','История']].forEach(([k, label]) =>
+  tabDefs.forEach(([k, label]) =>
     tabs.append(el('div', { class:'chat-tab' + (k === 'whatsapp' ? ' active' : ''), 'data-tab':k, onclick: () => switchTab(k) }, label)));
-  if (opts && opts.tab) switchTab(opts.tab); // открыть на нужной вкладке (напр. из задачи)
+  if (opts && opts.tab) switchTab(opts.tab); // открыть на нужной вкладке (если доступна)
 
-  const right = el('div', { class:'deal-right' }, [tabs, paneItems, paneWhats, paneComments, paneDocs, paneShip, paneTasks, paneHist]);
+  const right = el('div', { class:'deal-right' }, [tabs, ...tabPanes]);
 
   // ----- Чат (Green API) -----
   function bubble(mm) {
