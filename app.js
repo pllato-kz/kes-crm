@@ -4410,7 +4410,96 @@ VIEWS.shipments = () => {
     el('div', { class: 'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewShipment }, '+ Отгрузка')]),
   ]));
 
-  const t = el('div', { class:'table-wrap' });
+  // Нормализуем реальные отгрузки и «по сделке» в единый список для поиска/фильтров
+  const normStatus = (s) => (s === 'delivered' || s === 'planned') ? s : 'shipped';
+  const rowsData = [
+    ...state.shipments.map(s => ({
+      kind:'ship', id:s.id, deal:s.deal, no:s.no, date:s.date, client:s.client,
+      dest:s.destination || '', transport:s.transport || '', driver:s.driver || '',
+      positions:Number(s.items) || 0, weight:s.weight, status:normStatus(s.status),
+    })),
+    ...shippedDeals.map(d => ({
+      kind:'deal', id:d.id, deal:d.id, no:d.title, date:d.target || d.created, client:d.client,
+      dest:d.address || '', transport:'по сделке', driver:'',
+      positions:Number(d.items) || 0, weight:null, status:'deal',
+    })),
+  ];
+
+  // --- Поиск и фильтры ---
+  const fs = { q:'', status:'', dateFrom:'', dateTo:'', posFrom:'', posTo:'' };
+  const inputCss = 'min-width:0;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;height:34px;box-sizing:border-box';
+  const searchI = el('input', { placeholder:'Поиск по № ТТН/сделке, клиенту, «куда», транспорту…', style: inputCss + ';flex:1;min-width:240px', oninput: e => { fs.q = e.target.value.toLowerCase().trim(); refresh(); } });
+  const statusS = el('select', { onchange: e => { fs.status = e.target.value; refresh(); } }, [
+    el('option', { value:'' }, 'Все статусы'),
+    el('option', { value:'planned' }, 'Запланировано'),
+    el('option', { value:'shipped' }, 'В пути'),
+    el('option', { value:'delivered' }, 'Доставлено'),
+    el('option', { value:'deal' }, 'По сделке'),
+  ]);
+  const dateFromI = el('input', { type:'date', onchange: e => { fs.dateFrom = e.target.value; refresh(); } });
+  const dateToI = el('input', { type:'date', onchange: e => { fs.dateTo = e.target.value; refresh(); } });
+  const posFromI = el('input', { type:'number', min:'0', placeholder:'от', style: inputCss, oninput: e => { fs.posFrom = e.target.value; refresh(); } });
+  const posToI = el('input', { type:'number', min:'0', placeholder:'до', style: inputCss, oninput: e => { fs.posTo = e.target.value; refresh(); } });
+  const drawer = buildFilterDrawer({
+    groups: [
+      filterGroup('Статус', statusS),
+      filterGroup('Период (дата)', el('div', { class:'row2' }, [dateFromI, dateToI])),
+      filterGroup('Количество позиций', el('div', { class:'row2' }, [posFromI, posToI])),
+    ],
+    onReset: () => { Object.assign(fs, { status:'', dateFrom:'', dateTo:'', posFrom:'', posTo:'' }); statusS.value=''; dateFromI.value=''; dateToI.value=''; posFromI.value=''; posToI.value=''; refresh(); },
+    countActive: () => ['status','dateFrom','dateTo','posFrom','posTo'].filter(k => fs[k]).length,
+  });
+
+  function matches(r) {
+    if (fs.q) {
+      const cl = clientById(r.client);
+      const hay = (String(r.no) + ' ' + (cl ? cl.name : '') + ' ' + r.dest + ' ' + r.transport + ' ' + r.driver).toLowerCase();
+      if (!hay.includes(fs.q)) return false;
+    }
+    if (fs.status && r.status !== fs.status) return false;
+    if (fs.dateFrom || fs.dateTo) {
+      const d = String(r.date || '').slice(0, 10);
+      if (!d) return false;
+      if (fs.dateFrom && d < fs.dateFrom) return false;
+      if (fs.dateTo && d > fs.dateTo) return false;
+    }
+    if (fs.posFrom !== '' && r.positions < Number(fs.posFrom)) return false;
+    if (fs.posTo !== '' && r.positions > Number(fs.posTo)) return false;
+    return true;
+  }
+
+  const statusPill = (st) => st === 'delivered'
+    ? el('span', { class:'pill pill-success' }, '✓ Доставлено')
+    : st === 'planned'
+      ? el('span', { class:'pill pill-info' }, '⏱ Запланировано')
+      : st === 'deal'
+        ? el('span', { class:'pill pill-warn' }, '🚚 Отгружена')
+        : el('span', { class:'pill pill-warn' }, '🚚 В пути');
+
+  function buildTbody() {
+    const list = rowsData.filter(matches);
+    const rows = list.map(r => {
+      const cl = clientById(r.client);
+      const onclick = () => { const dl = byId(state.deals, r.deal); if (dl) openDealDetail(dl.id); else openShipmentDetail(r.id); };
+      return el('tr', { style:'cursor:pointer', onclick }, [
+        el('td', { class:'strong' }, r.no),
+        el('td', {}, r.date ? fmtDate(r.date) : '—'),
+        el('td', {}, cl.name),
+        el('td', { class:'muted' }, r.dest || '—'),
+        el('td', {}, r.kind === 'deal'
+          ? el('span', { class:'muted', style:'font-size:11.5px' }, 'по сделке')
+          : [r.transport, el('div', { class:'muted', style:'font-size:11.5px' }, r.driver)]),
+        el('td', { class:'num' }, r.positions),
+        el('td', { class:'num' }, r.weight == null ? '—' : r.weight),
+        el('td', {}, statusPill(r.status)),
+      ]);
+    });
+    return el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 8, class:'muted', style:'text-align:center;padding:20px' }, 'Отгрузок нет'))]);
+  }
+
+  const t = el('div', { class:'mt-16 table-wrap' });
+  // Поиск всегда виден, остальные фильтры — за кнопкой «Фильтры»
+  t.append(el('div', { class:'table-toolbar' }, [ searchI, el('div', { style:'margin-left:auto' }, drawer.btn) ]));
   const tab = el('table', { class:'data' });
   tab.append(el('thead', {}, el('tr', {}, [
     el('th', {}, '№ ТТН / Сделка'),
@@ -4422,38 +4511,16 @@ VIEWS.shipments = () => {
     el('th', { class:'num' }, 'Вес, кг'),
     el('th', {}, 'Статус'),
   ])));
-  const shipRows = state.shipments.map(s => {
-    const cl = clientById(s.client);
-    // Если отгрузка привязана к сделке — открываем карточку сделки (раздел «Отгрузка»)
-    return el('tr', { style:'cursor:pointer', onclick: () => { const dl = byId(state.deals, s.deal); if (dl) openDealDetail(dl.id); else openShipmentDetail(s.id); } }, [
-      el('td', { class:'strong' }, s.no),
-      el('td', {}, fmtDate(s.date)),
-      el('td', {}, cl.name),
-      el('td', { class:'muted' }, s.destination),
-      el('td', {}, [s.transport, el('div', { class:'muted', style:'font-size:11.5px' }, s.driver)]),
-      el('td', { class:'num' }, s.items),
-      el('td', { class:'num' }, s.weight),
-      el('td', {}, s.status === 'delivered'
-        ? el('span', { class:'pill pill-success' }, '✓ Доставлено')
-        : s.status === 'planned'
-          ? el('span', { class:'pill pill-info' }, '⏱ Запланировано')
-          : el('span', { class:'pill pill-warn' }, '🚚 В пути')),
-    ]);
-  });
-  const dealRows = shippedDeals.map(d => el('tr', { style:'cursor:pointer', onclick: () => openDealDetail(d.id) }, [
-    el('td', { class:'strong' }, d.title),
-    el('td', {}, d.target ? fmtDate(d.target) : (d.created ? fmtDate(d.created) : '—')),
-    el('td', {}, clientById(d.client).name),
-    el('td', { class:'muted' }, d.address || '—'),
-    el('td', { class:'muted', style:'font-size:11.5px' }, 'по сделке'),
-    el('td', { class:'num' }, d.items || 0),
-    el('td', { class:'num' }, '—'),
-    el('td', {}, el('span', { class:'pill pill-warn' }, '🚚 Отгружена')),
-  ]));
-  const allRows = [...shipRows, ...dealRows];
-  tab.append(el('tbody', {}, allRows.length ? allRows : [el('tr', {}, el('td', { colspan: 8, class:'muted', style:'text-align:center;padding:20px' }, 'Отгрузок нет'))]));
+  tab.append(buildTbody());
   t.append(tab);
   wrap.append(t);
+  wrap.append(drawer.backdrop, drawer.drawer);
+
+  function refresh() {
+    const tb = tab.querySelector('tbody');
+    if (tb) tb.replaceWith(buildTbody());
+    drawer.refreshBadge();
+  }
   return wrap;
 };
 
