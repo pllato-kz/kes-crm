@@ -3951,36 +3951,47 @@ async function openStockDoc(type, docId, onDone) {
   const noteI = el('input', { value: doc ? (doc.note || '') : '', placeholder:'Примечание' });
   if (!editable) [partyI, dateI, noteI].forEach(i => i.disabled = true);
 
-  // Поле «Поставщик» (для прихода) — поисковый автокомплит по поставщикам:
-  // поиск по названию / БИН / телефону; данные из раздела «Поставщики» (синхронизируются с 1С).
+  // Поле «Поставщик» (для прихода) — поиск + список (как поле «Сделка» в форме отгрузки):
+  // поиск по названию / БИН / телефону, видимый список с пагинацией, метка выбора.
+  // Источник — раздел «Поставщики» (state.suppliers, синхронизируется с 1С в фоне).
   let partyRow;
   if (isIn && editable) {
-    const wrap = el('div', { style:'position:relative' });
-    const list = el('div', { class:'product-picker', style:'display:none;position:absolute;left:0;right:0;top:100%;z-index:40;max-height:220px;overflow:auto;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 10px 28px rgba(17,20,24,.14);margin-top:4px' });
     const nrm = (s) => String(s || '').toLowerCase();
-    const renderSup = () => {
-      const q = nrm(partyI.value).trim();
-      list.innerHTML = '';
-      if (!q) { list.style.display = 'none'; return; }
-      const matches = (state.suppliers || []).filter(s =>
-        nrm(s.name).includes(q) || nrm(s.bin).includes(q) || nrm(s.phone).includes(q)).slice(0, 30);
-      if (!matches.length) { list.style.display = 'none'; return; }
-      matches.forEach(s => list.append(el('div', { class:'pp-item', onmousedown: (e) => { e.preventDefault(); partyI.value = s.name; list.style.display = 'none'; } }, [
+    partyI.setAttribute('placeholder', 'Поиск по названию, БИН или телефону…');
+    const supList = el('div', { class:'product-picker' });
+    const supLabel = el('div', { class:'muted', style:'font-size:12px;margin-top:6px' },
+      partyI.value ? ('✓ Выбран: ' + partyI.value) : 'Поставщик не выбран');
+    let supLimit = 30; // пагинация: показываем по 30, «Показать ещё» добавляет ещё 30
+    const selectSupplier = (s) => {
+      partyI.value = s.name;
+      supLabel.textContent = '✓ Выбран: ' + s.name;
+      supLabel.style.cssText = 'font-size:12px;margin-top:6px;color:#10B981;font-weight:600';
+      fillSuppliers(partyI.value);
+    };
+    function fillSuppliers(qstr = '') {
+      const q = nrm(qstr).trim();
+      supList.innerHTML = '';
+      const all = (state.suppliers || []).filter(s => !q
+        || nrm(s.name).includes(q) || nrm(s.bin).includes(q) || nrm(s.phone).includes(q));
+      const shown = all.slice(0, supLimit);
+      if (!shown.length) { supList.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Поставщики не найдены')); return; }
+      shown.forEach(s => supList.append(el('div', { class:'pp-item', onclick: () => selectSupplier(s) }, [
         el('div', {}, [
           el('div', {}, s.name),
           el('div', { class:'pp-sku' }, [s.bin ? 'БИН ' + s.bin : null, s.phone ? '☎ ' + s.phone : null].filter(Boolean).join(' · ')),
         ]),
+        s.name === partyI.value ? el('span', { class:'pp-price', style:'color:#10B981' }, '✓') : null,
       ])));
-      list.style.display = '';
-    };
-    partyI.setAttribute('placeholder', 'Поиск по названию, БИН или телефону…');
-    partyI.oninput = renderSup;
-    partyI.onfocus = renderSup;
-    partyI.onblur = () => setTimeout(() => { list.style.display = 'none'; }, 150);
-    wrap.append(partyI, list);
-    partyRow = el('div', { class:'form-row' }, [el('label', {}, 'Поставщик'), wrap]);
-    // подтягиваем свежий список поставщиков (его наполняет фоновая синхронизация с 1С)
-    (async () => { try { const l = await window.__API__.apiFetch('suppliers'); if (Array.isArray(l)) state.suppliers = l.map(window.__API__.map.supplier); } catch (e) {} })();
+      if (all.length > shown.length) {
+        supList.append(el('div', { class:'pp-item', style:'justify-content:center;color:var(--brand);font-weight:600',
+          onclick: () => { supLimit += 30; fillSuppliers(partyI.value); } }, `↓ Показать ещё (${all.length - shown.length})`));
+      }
+    }
+    let st; partyI.oninput = () => { supLimit = 30; supLabel.textContent = 'Поставщик не выбран'; supLabel.style.cssText = 'font-size:12px;margin-top:6px'; clearTimeout(st); st = setTimeout(() => fillSuppliers(partyI.value), 150); };
+    fillSuppliers(partyI.value);
+    partyRow = el('div', { class:'form-row' }, [el('label', {}, 'Поставщик'), el('div', {}, [partyI, supList, supLabel])]);
+    // подтягиваем свежий список поставщиков (его наполняет фоновая синхронизация с 1С) и перерисовываем
+    (async () => { try { const l = await window.__API__.apiFetch('suppliers'); if (Array.isArray(l)) { state.suppliers = l.map(window.__API__.map.supplier); fillSuppliers(partyI.value); } } catch (e) {} })();
   } else {
     partyRow = el('div', { class:'form-row' }, [el('label', {}, isIn ? 'Поставщик' : 'Получатель / причина'), partyI]);
   }
