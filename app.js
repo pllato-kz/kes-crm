@@ -4680,23 +4680,37 @@ VIEWS.suppliers = () => {
     el('div', {}, [el('h1', {}, 'Поставщики'), el('div', { class:'sub' }, `${state.suppliers.length} партнёров · главный — EKF (78%)`)]),
     el('div', { class:'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewSupplier }, '+ Поставщик')]),
   ]));
-  const grid = el('div', { class:'grid grid-3' });
-  state.suppliers.forEach(s => {
-    grid.append(el('div', { class:'card', style:'cursor:pointer', title:'Открыть и редактировать поставщика', onclick: () => openSupplierDetail(s.id) }, [
-      el('div', { class:'row', style:'justify-content:space-between;margin-bottom:8px' }, [
-        el('div', { class:'strong', style:'font-size:15px' }, s.name),
-        el('span', { class:'pill pill-info' }, s.share + '% закупок'),
-      ]),
-      el('div', { class:'bar-mini' }, el('div', { style:`width:${s.share}%` })),
-      el('dl', { class:'kv mt-12', style:'grid-template-columns:120px 1fr' }, [
-        el('dt', {}, 'Контакт'),       el('dd', {}, s.contact),
-        el('dt', {}, 'Телефон'),       el('dd', {}, s.phone),
-        el('dt', {}, 'Email'),         el('dd', {}, s.email),
-        el('dt', {}, 'Последняя поставка'), el('dd', {}, fmtDate(s.lastDelivery)),
-      ]),
-      el('div', { class:'muted mt-12', style:'font-size:12px;line-height:1.4' }, s.note),
-    ]));
-  });
+
+  // Поиск по названию / контакту / телефону / email
+  let q = '';
+  const searchI = el('input', { placeholder:'Поиск поставщика…', style:'flex:1;min-width:240px', oninput: e => { q = e.target.value.toLowerCase().trim(); renderGrid(); } });
+  const tw = el('div', { class:'table-wrap' });
+  tw.append(el('div', { class:'table-toolbar' }, [searchI]));
+  wrap.append(tw);
+
+  const grid = el('div', { class:'grid grid-3', style:'margin-top:16px' });
+  function renderGrid() {
+    const list = state.suppliers.filter(s => !q || (String(s.name||'') + ' ' + (s.contact||'') + ' ' + (s.phone||'') + ' ' + (s.email||'')).toLowerCase().includes(q));
+    grid.innerHTML = '';
+    if (!list.length) { grid.append(el('div', { class:'muted', style:'padding:16px' }, q ? 'Ничего не найдено' : 'Поставщиков нет')); return; }
+    list.forEach(s => {
+      grid.append(el('div', { class:'card', style:'cursor:pointer', title:'Открыть и редактировать поставщика', onclick: () => openSupplierDetail(s.id) }, [
+        el('div', { class:'row', style:'justify-content:space-between;margin-bottom:8px' }, [
+          el('div', { class:'strong', style:'font-size:15px' }, s.name),
+          el('span', { class:'pill pill-info' }, s.share + '% закупок'),
+        ]),
+        el('div', { class:'bar-mini' }, el('div', { style:`width:${s.share}%` })),
+        el('dl', { class:'kv mt-12', style:'grid-template-columns:120px 1fr' }, [
+          el('dt', {}, 'Контакт'),       el('dd', {}, s.contact || '—'),
+          el('dt', {}, 'Телефон'),       el('dd', {}, s.phone || '—'),
+          el('dt', {}, 'Email'),         el('dd', {}, s.email || '—'),
+          el('dt', {}, 'Последняя поставка'), el('dd', {}, s.lastDelivery ? fmtDate(s.lastDelivery) : '—'),
+        ]),
+        el('div', { class:'muted mt-12', style:'font-size:12px;line-height:1.4' }, s.note || ''),
+      ]));
+    });
+  }
+  renderGrid();
   wrap.append(grid);
   return wrap;
 };
