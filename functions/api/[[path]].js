@@ -356,6 +356,7 @@ async function dataRoute({ request, env }, seg, url, auth) {
   if (resource === 'tasks') await ensureTaskColumns(env);
   if (resource === 'deals' || resource === 'clients' || resource === 'invoices') await ensureArchiveColumns(env);
   if (resource === 'shipments' && ['POST', 'PUT', 'PATCH'].includes(method)) await ensureShipmentStatuses(env);
+  if (resource === 'suppliers') await ensureSupplierExtRef(env); // колонки ext_ref/bin
   if (resource === 'roles') await ensureArchiveRight(env); // выдать директору право «Архив»
   if (resource === 'deals') await ensureDealColumns(env);
   if (resource === 'company') await ensureCompanyColumns(env);
@@ -1657,11 +1658,13 @@ async function syncClients(env) {
   return json({ fetched, created, updated });
 }
 
-// Колонка ext_ref у поставщиков (для идемпотентной синхронизации с 1С) — добавляем на лету
+// Колонки ext_ref и bin у поставщиков (для синхронизации с 1С) — добавляем на лету
 let SUPPLIER_EXTREF_OK = false;
 async function ensureSupplierExtRef(env) {
   if (SUPPLIER_EXTREF_OK) return;
-  try { await env.DB.prepare('ALTER TABLE suppliers ADD COLUMN ext_ref TEXT').run(); } catch (e) {}
+  for (const ddl of ['ALTER TABLE suppliers ADD COLUMN ext_ref TEXT', 'ALTER TABLE suppliers ADD COLUMN bin TEXT']) {
+    try { await env.DB.prepare(ddl).run(); } catch (e) {}
+  }
   SUPPLIER_EXTREF_OK = true;
 }
 
@@ -1675,10 +1678,10 @@ async function syncSuppliers(env) {
   const byRef = {}, byName = {};
   for (const s of ex.results) { if (s.ext_ref) byRef[s.ext_ref] = s.id; if (s.name) byName[String(s.name).toLowerCase()] = s.id; }
 
-  // имя контрагента по Ref_Key (контрагенты лежат в clients после syncClients)
-  const cl = await env.DB.prepare('SELECT ext_ref, name FROM clients WHERE ext_ref IS NOT NULL').all();
-  const nameByRef = {};
-  for (const c of cl.results) nameByRef[c.ext_ref] = c.name;
+  // имя и БИН контрагента по Ref_Key (контрагенты лежат в clients после syncClients)
+  const cl = await env.DB.prepare('SELECT ext_ref, name, bin FROM clients WHERE ext_ref IS NOT NULL').all();
+  const nameByRef = {}, binByRef = {};
+  for (const c of cl.results) { nameByRef[c.ext_ref] = c.name; binByRef[c.ext_ref] = c.bin; }
 
   // уникальные контрагенты-поставщики из документов поступления
   const supRefs = new Set();
@@ -1699,13 +1702,14 @@ async function syncSuppliers(env) {
   for (const ref of supRefs) {
     const name = String(nameByRef[ref] || '').trim();
     if (!name) { noName++; continue; } // имя появится после следующего синка контрагентов
+    const bin = String(binByRef[ref] || '').trim();
     let id = byRef[ref] || byName[name.toLowerCase()] || null;
     if (id) {
-      stmts.push(env.DB.prepare('UPDATE suppliers SET name=?, ext_ref=? WHERE id=?').bind(name, ref, id));
+      stmts.push(env.DB.prepare('UPDATE suppliers SET name=?, bin=?, ext_ref=? WHERE id=?').bind(name, bin, ref, id));
       updated++;
     } else {
       id = genId();
-      stmts.push(env.DB.prepare('INSERT INTO suppliers (id,name,share,ext_ref) VALUES (?,?,0,?)').bind(id, name, ref));
+      stmts.push(env.DB.prepare('INSERT INTO suppliers (id,name,bin,share,ext_ref) VALUES (?,?,?,0,?)').bind(id, name, bin, ref));
       created++;
     }
     byRef[ref] = id; byName[name.toLowerCase()] = id;

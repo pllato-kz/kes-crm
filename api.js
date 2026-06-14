@@ -74,7 +74,7 @@
       phone: u.phone, avatar: u.avatar, color: u.color, active: u.active !== 0,
     }),
     supplier: (s) => ({
-      id: s.id, name: s.name, contact: s.contact, phone: s.phone, email: s.email,
+      id: s.id, name: s.name, bin: s.bin, contact: s.contact, phone: s.phone, email: s.email,
       share: s.share, lastDelivery: s.last_delivery, note: s.note,
     }),
     task: (t) => ({
@@ -122,7 +122,7 @@
       subject: l.subject, status_id: l.status, created: l.created,
     }),
     supplier: (s) => clean({
-      id: s.id, name: s.name, contact: s.contact, phone: s.phone, email: s.email,
+      id: s.id, name: s.name, bin: s.bin, contact: s.contact, phone: s.phone, email: s.email,
       share: s.share, last_delivery: s.lastDelivery, note: s.note,
     }),
     task: (t) => clean({
