@@ -1392,13 +1392,16 @@ async function writeDeal(env, request, method, id, auth) {
     } else if (prevStage && newStage !== prevStage) {
       await env.DB.prepare(`INSERT INTO deal_stage_history (deal_id, from_stage, to_stage, user_id) VALUES (?,?,?,?)`).bind(dealId, prevStage, newStage, uid).run();
     }
-    // Автосписание со склада при переходе на этап «Отгружено» + синхронизация статуса отгрузки
+    // Синхронизация статуса связанной отгрузки при смене этапа.
+    // ВРЕМЕННО ОТКЛЮЧЕНО (по запросу): автосоздание документов на этапах
+    // «Оплачено»/«Отгружено» не выполняется — никаких скрытых фоновых созданий.
+    // Чтобы вернуть авто-списание на «Отгружено», раскомментируйте строку autoShipDeal.
     if (newStage !== prevStage) {
       try {
         const st = await env.DB.prepare('SELECT label FROM deal_stages WHERE id=?').bind(newStage).first();
         const label = (st && st.label) || '';
-        if (/отгруж/i.test(label)) await autoShipDeal(env, dealId, auth);
-        // Этап сделки → статус связанной отгрузки (двусторонняя синхронизация)
+        // if (/отгруж/i.test(label)) await autoShipDeal(env, dealId, auth);
+        // Этап сделки → статус связанной отгрузки (только обновление СУЩЕСТВУЮЩИХ, без создания)
         let shipStatus = null;
         if (/достав|закры|выполн|заверш/i.test(label)) shipStatus = 'delivered';
         else if (/отгруж/i.test(label)) shipStatus = 'shipped';
