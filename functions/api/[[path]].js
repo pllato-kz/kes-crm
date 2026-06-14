@@ -143,6 +143,13 @@ export async function onRequest(context) {
     // данные: всё требует валидный токен
     if (!auth) return err(401, 'Требуется авторизация');
 
+    // удаление демо/захардкоженных данных (директор): сделки, клиенты, документы,
+    // поставщики, товары, отгрузки. Записи, связанные с 1С (ext_ref), сохраняются.
+    if (seg[0] === 'admin' && seg[1] === 'clear-demo' && request.method === 'POST') {
+      if (auth.role !== 'director') return err(403, 'Только директор может удалять демо-данные');
+      return clearDemoData(env);
+    }
+
     // категории каталога с подсчётом товаров (для плиток)
     if (seg[0] === 'catalog' && seg[1] === 'categories' && request.method === 'GET') return catalogCategories(env);
 
@@ -1569,6 +1576,54 @@ async function odataGet(env, path) {
 async function syncStatus(env) {
   const r = await env.DB.prepare('SELECT entity, last_at, info FROM sync_state').all();
   return json(r.results);
+}
+
+// Удаление демо/фиктивных записей (фикстуры из seed.sql) по их точным id.
+// Клиенты/товары/поставщики, привязанные к 1С (ext_ref IS NOT NULL), НЕ удаляются —
+// они уже реальные. Сделки/счета/отгрузки в 1С не синхронизируются, поэтому удаляются полностью.
+async function clearDemoData(env) {
+  const DEALS = ['d001','d002','d003','d004','d005','d006','d007','d008','d009','d010','d011','d012'];
+  const INVOICES = ['iv01','iv02','iv03','iv04','iv05','iv06'];
+  const SHIPMENTS = ['sh01','sh02','sh03','sh04'];
+  const CLIENTS = ['cl01','cl02','cl03','cl04','cl05','cl06','cl07','cl08','cl09','cl10','cl11','cl12','cl13','cl14','cl15'];
+  const PRODUCTS = ['p001','p002','p003','p004','p005','p101','p102','p103','p201','p202','p203','p204','p301','p302','p303','p401','p402','p501','p502','p601','p602','p701','p702','p801','p901'];
+  const SUPPLIERS = ['sp1','sp2','sp3','sp4','sp5'];
+  const ph = (a) => a.map(() => '?').join(',');
+  const run = async (sql, args) => { try { const r = await env.DB.prepare(sql).bind(...args).run(); return (r.meta && r.meta.changes) || 0; } catch (e) { return 0; } };
+  const result = {};
+
+  // 1) Документы (счета) — демо
+  result.invoices = await run(`DELETE FROM invoices WHERE id IN (${ph(INVOICES)})`, INVOICES);
+  // 2) Отгрузки — демо
+  result.shipments = await run(`DELETE FROM shipments WHERE id IN (${ph(SHIPMENTS)})`, SHIPMENTS);
+
+  // 3) Сделки — демо (очищаем связи, затем удаляем)
+  await run(`UPDATE tasks SET deal_id=NULL WHERE deal_id IN (${ph(DEALS)})`, DEALS);
+  await run(`UPDATE invoices SET deal_id=NULL WHERE deal_id IN (${ph(DEALS)})`, DEALS);
+  await run(`UPDATE shipments SET deal_id=NULL WHERE deal_id IN (${ph(DEALS)})`, DEALS);
+  await run(`DELETE FROM deal_items WHERE deal_id IN (${ph(DEALS)})`, DEALS);
+  await run(`DELETE FROM deal_stage_history WHERE deal_id IN (${ph(DEALS)})`, DEALS);
+  result.deals = await run(`DELETE FROM deals WHERE id IN (${ph(DEALS)})`, DEALS);
+
+  // 4) Клиенты — только демо без привязки к 1С
+  const delClients = `SELECT id FROM clients WHERE id IN (${ph(CLIENTS)}) AND ext_ref IS NULL`;
+  await run(`UPDATE deals SET client_id=NULL WHERE client_id IN (${delClients})`, CLIENTS);
+  await run(`UPDATE invoices SET client_id=NULL WHERE client_id IN (${delClients})`, CLIENTS);
+  await run(`UPDATE shipments SET client_id=NULL WHERE client_id IN (${delClients})`, CLIENTS);
+  await run(`DELETE FROM client_tags WHERE client_id IN (${delClients})`, CLIENTS);
+  result.clients = await run(`DELETE FROM clients WHERE id IN (${ph(CLIENTS)}) AND ext_ref IS NULL`, CLIENTS);
+
+  // 5) Товары — только демо без привязки к 1С
+  const delProducts = `SELECT id FROM products WHERE id IN (${ph(PRODUCTS)}) AND ext_ref IS NULL`;
+  await run(`DELETE FROM deal_items WHERE product_id IN (${delProducts})`, PRODUCTS);
+  await run(`DELETE FROM product_stock WHERE product_id IN (${delProducts})`, PRODUCTS);
+  await run(`DELETE FROM stock_movements WHERE product_id IN (${delProducts})`, PRODUCTS);
+  result.products = await run(`DELETE FROM products WHERE id IN (${ph(PRODUCTS)}) AND ext_ref IS NULL`, PRODUCTS);
+
+  // 6) Поставщики — только демо без привязки к 1С
+  result.suppliers = await run(`DELETE FROM suppliers WHERE id IN (${ph(SUPPLIERS)}) AND ext_ref IS NULL`, SUPPLIERS);
+
+  return json({ cleared: result });
 }
 
 // Интервалы фоновой синхронизации (минуты), по требованиям заказчика
