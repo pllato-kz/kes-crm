@@ -231,19 +231,8 @@ function setDealsPipeline(id, persist = true) {
   refreshPipelineNav();
 }
 
-// Группа «Сделки» в сайдбаре с раскрывающимся списком воронок
-function buildDealsNavGroup(it, isActive) {
-  const group = el('div', { class: 'nav-group open', id: 'nav-deals-group' });
-  const mainBtn = el('button', { 'data-view': 'deals', class: 'nav-group-main' + (isActive ? ' active' : '') }, [
-    el('span', { class: 'icon' }, it.icon),
-    ' ' + it.label,
-  ]);
-  const toggle = el('button', { class: 'nav-group-toggle', id: 'pipeToggle', title: 'Воронки', 'aria-label': 'Воронки' }, '▸');
-  group.append(el('div', { class: 'nav-group-row' }, [mainBtn, toggle]), el('div', { class: 'nav-sub', id: 'nav-pipelines' }));
-  return group;
-}
-
-// Перерисовка списка воронок в сайдбаре (выделяет активную, у директора — правка/удаление/создание)
+// Перерисовка списка воронок в сайдбаре (легаси: список воронок переехал в дропдаун
+// раздела «Сделки», поэтому при отсутствии host функция безопасно ничего не делает)
 function refreshPipelineNav() {
   const host = document.getElementById('nav-pipelines');
   if (!host) return;
@@ -309,8 +298,8 @@ function renamePipeline(p) {
           p.name = name;
           refreshPipelineNav();
           closeModal(); toast('Переименовано', 'success');
-          const onDeals = document.querySelector('#nav .nav-group-main.active');
-          if (onDeals && DEALS_PIPELINE === p.id) navigate('deals');
+          // если открыт раздел «Сделки» — перерисуем (обновится дропдаун воронок и заголовок)
+          if (String(location.hash || '').startsWith('#deals')) navigate('deals');
         } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Сохранить'),
     ],
@@ -334,6 +323,50 @@ async function deletePipelineUI(p) {
     navigate('deals'); toast('Воронка удалена', 'success');
   } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
 }
+// Выпадающий список воронок для раздела «Сделки»: активная выделена, у директора —
+// переименование/удаление и кнопка «Создать воронку». Выбор сразу переключает сделки.
+function buildPipelineDropdown() {
+  ensureActivePipeline();
+  const isDirector = currentUser && currentUser.roleKey === 'director';
+  const active = pipelineById(DEALS_PIPELINE);
+  const wrap = el('div', { class: 'pipe-dd' });
+  const menu = el('div', { class: 'pipe-dd-menu' });
+  const close = () => wrap.classList.remove('open');
+  const btn = el('button', { class: 'btn pipe-dd-btn', title: 'Выбор воронки',
+    onclick: (e) => { e.stopPropagation(); wrap.classList.toggle('open'); } }, [
+    svgIconEl('folder', 16),
+    el('span', { class: 'pipe-dd-label' }, (active && active.name) || 'Воронки'),
+    el('span', { class: 'pipe-dd-caret' }, '▾'),
+  ]);
+  PIPELINES.forEach(p => {
+    const isActive = p.id === DEALS_PIPELINE;
+    const actions = isDirector ? el('span', { class: 'pipe-dd-actions' }, [
+      el('span', { class: 'pipe-dd-act', title: 'Переименовать', onclick: (e) => { e.stopPropagation(); close(); renamePipeline(p); } }, svgIconEl('edit', 14)),
+      PIPELINES.length > 1 ? el('span', { class: 'pipe-dd-act', title: 'Удалить', onclick: (e) => { e.stopPropagation(); close(); deletePipelineUI(p); } }, svgIconEl('trash', 14)) : null,
+    ]) : null;
+    menu.append(el('div', { class: 'pipe-dd-item' + (isActive ? ' active' : ''),
+      onclick: () => { close(); if (!isActive) { setDealsPipeline(p.id, true); navigate('deals'); } } }, [
+      el('span', { class: 'pipe-dd-dot' }),
+      el('span', { class: 'pipe-dd-name' }, p.name),
+      isActive ? svgIconEl('check', 15) : null,
+      actions,
+    ]));
+  });
+  if (isDirector) {
+    menu.append(el('div', { class: 'pipe-dd-sep' }));
+    menu.append(el('button', { class: 'pipe-dd-create', onclick: () => { close(); createPipelineUI(); } }, '+ Создать воронку'));
+  }
+  wrap.append(btn, menu);
+  // закрытие по клику вне (один обработчик на всё приложение)
+  if (!buildPipelineDropdown._bound) {
+    document.addEventListener('click', (e) => {
+      document.querySelectorAll('.pipe-dd.open').forEach(d => { if (!d.contains(e.target)) d.classList.remove('open'); });
+    });
+    buildPipelineDropdown._bound = true;
+  }
+  return wrap;
+}
+
 const userById = (id) => byId(state.users, id) || { name: '—', avatar: '?', color: '#999' };
 const clientById = (id) => byId(state.clients, id) || { name: '—' };
 const categoryById = (id) => byId(state.categories, id) || { name: '—', icon: '·' };
@@ -383,12 +416,8 @@ function navigate(view, params = {}, noHash = false) {
 }
 
 document.addEventListener('click', (e) => {
-  // раскрытие/сворачивание списка воронок
-  const pipeToggle = e.target.closest('#pipeToggle');
-  if (pipeToggle) { e.stopPropagation(); const g = document.getElementById('nav-deals-group'); if (g) g.classList.toggle('open'); return; }
   const navBtn = e.target.closest('#nav button[data-view]');
   if (navBtn) {
-    if (navBtn.dataset.view === 'deals') { const g = document.getElementById('nav-deals-group'); if (g) g.classList.add('open'); }
     if (navBtn.dataset.view === 'tasks') TASKS_VIEW = 'kanban'; // при входе в раздел — всегда канбан
     navigate(navBtn.dataset.view); document.body.classList.remove('nav-open'); return;
   }
@@ -2294,6 +2323,7 @@ VIEWS.deals = () => {
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [el('h1', {}, (pipe && pipe.name) || 'Сделки'), subEl]),
     el('div', { class: 'actions' }, [
+      buildPipelineDropdown(),
       el('button', { class: 'btn', onclick: () => { DEALS_VIEW = isList ? 'kanban' : 'list'; navigate('deals'); } }, isList ? '🗂 Канбан' : '📋 Список'),
       el('button', { class: 'btn btn-primary', onclick: () => openNewDeal() }, '+ Сделка'),
     ]),
@@ -6114,7 +6144,6 @@ function renderShell() {
   ];
   const nav = $('#nav');
   NAV_ITEMS.filter(it => r.modules.includes(it.v)).forEach((it, idx) => {
-    if (it.v === 'deals') { nav.appendChild(buildDealsNavGroup(it, idx === 0)); return; }
     const btn = el('button', { 'data-view': it.v, class: idx === 0 ? 'active' : '' }, [
       el('span', { class: 'icon' }, it.icon),
       ' ' + it.label,
@@ -6123,7 +6152,6 @@ function renderShell() {
   });
   // Архив (удалённые сделки/клиенты) — по праву доступа «Архив»
   if (can('see-module', 'archive')) nav.appendChild(el('button', { 'data-view': 'archive' }, [el('span', { class: 'icon' }, '🗄'), ' Архив']));
-  refreshPipelineNav();
 
   // Обработчики
   $('#reset-state').addEventListener('click', async () => {

@@ -159,6 +159,45 @@ a:hover { text-decoration: underline; }
 }
 .sidebar-nav .pipe-add:hover { background: rgba(255,255,255,.06); color: #fff; }
 
+/* Выпадающий выбор воронок (раздел «Сделки») */
+.pipe-dd { position: relative; display: inline-block; }
+.pipe-dd-btn { display: inline-flex; align-items: center; gap: 8px; }
+.pipe-dd-btn svg { color: var(--brand); }
+.pipe-dd-label { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.pipe-dd-caret { font-size: 10px; opacity: .55; transition: transform .15s; }
+.pipe-dd.open .pipe-dd-caret { transform: rotate(180deg); }
+.pipe-dd-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 60;
+  min-width: 264px; max-height: 60vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(17,20,24,.14); padding: 6px;
+  opacity: 0; visibility: hidden; transform: translateY(-4px);
+  transition: opacity .15s ease, transform .15s ease, visibility .15s;
+}
+.pipe-dd.open .pipe-dd-menu { opacity: 1; visibility: visible; transform: translateY(0); }
+.pipe-dd-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px; border-radius: 8px; cursor: pointer; font-size: 13.5px; color: var(--ink);
+}
+.pipe-dd-item:hover { background: #F3F4F6; }
+.pipe-dd-item.active { background: rgba(0,166,226,.10); font-weight: 600; }
+.pipe-dd-item > svg { color: var(--brand); flex: none; }
+.pipe-dd-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); flex: none; opacity: .3; }
+.pipe-dd-item.active .pipe-dd-dot { opacity: 1; }
+.pipe-dd-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipe-dd-actions { display: inline-flex; gap: 2px; margin-left: auto; opacity: 0; transition: opacity .12s; }
+.pipe-dd-item:hover .pipe-dd-actions { opacity: 1; }
+.pipe-dd-act { display: inline-flex; padding: 4px; border-radius: 6px; color: var(--muted); }
+.pipe-dd-act:hover { background: rgba(17,20,24,.07); color: var(--ink); }
+.pipe-dd-act svg { color: inherit; }
+.pipe-dd-sep { height: 1px; background: var(--border); margin: 6px 4px; }
+.pipe-dd-create {
+  width: 100%; display: flex; align-items: center; gap: 8px; justify-content: flex-start;
+  padding: 9px 10px; border: 0; background: none; cursor: pointer;
+  font-size: 13.5px; font-weight: 600; color: var(--brand); border-radius: 8px;
+}
+.pipe-dd-create:hover { background: rgba(0,166,226,.10); }
+
 .sidebar-foot {
   padding: 10px 14px;
   border-top: 1px solid rgba(255,255,255,.08);
