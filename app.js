@@ -5598,7 +5598,7 @@ VIEWS.settings = () => {
     window.__API__.apiFetch('sync/status').then(rows => {
       rows = rows || [];
       const f = (e) => rows.find(x => x.entity === e);
-      const cl = f('clients_1c'), pr = f('products_1c'), st = f('stock_1c'), px = f('prices_1c'), rc = f('receipts_1c');
+      const cl = f('clients_1c'), pr = f('products_1c'), st = f('stock_1c'), px = f('prices_1c'), rc = f('receipts_1c'), ip = f('invoices_push');
       statusHost.innerHTML = '';
       statusHost.append(
         el('div', {}, cl ? `Контрагенты: ${String(cl.last_at).slice(0, 16)} · ${cl.info}` : 'Контрагенты ещё не синхронизировались'),
@@ -5606,6 +5606,7 @@ VIEWS.settings = () => {
         el('div', {}, st ? `Остатки: ${String(st.last_at).slice(0, 16)} · ${st.info}` : 'Остатки ещё не синхронизировались'),
         el('div', {}, px ? `Цены: ${String(px.last_at).slice(0, 16)} · ${px.info}` : 'Цены ещё не пересчитывались'),
         el('div', {}, rc ? `Приходы: ${String(rc.last_at).slice(0, 16)} · ${rc.info}` : 'Приходы ещё не синхронизировались'),
+        el('div', {}, ip ? `Счета → 1С: ${String(ip.last_at).slice(0, 16)} · ${ip.info}` : 'Счета в 1С ещё не отправлялись'),
       );
     }).catch(() => { statusHost.textContent = ''; });
   }

@@ -404,6 +404,7 @@ async function dataRoute(ctx, seg, url, auth) {
   if (resource === 'clients' && method === 'DELETE' && id) return deleteClient(env, id, auth);
   if (resource === 'invoices' && method === 'GET' && !id) return listInvoices(env, url);
   if (resource === 'invoices' && method === 'DELETE' && id) return deleteInvoice(env, id, auth);
+  if (resource === 'invoices' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeInvoice(env, request, method, id, ctx);
   if (resource === 'leads' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeLead(env, request, method, id);
   if (resource === 'notifications' && id === 'scan-overdue' && method === 'POST') return scanOverdueTasks(env);
   if (resource === 'notifications' && method === 'GET' && !id) return listNotifications(env, auth);
@@ -1508,6 +1509,232 @@ async function setClientTags(env, clientId, names) {
     if (tag) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO client_tags (client_id, tag_id) VALUES (?,?)`).bind(clientId, tag.id));
   }
   await env.DB.batch(stmts);
+}
+
+// --------------------------------------------------------------------------
+// CRM → 1С (этап 2): счёт CRM -> черновик «Счёт на оплату покупателю» в 1С.
+//
+// Документ создаётся НЕПРОВЕДЁННЫМ (Posted=false) — это безопасный черновик:
+// он не двигает склад и взаиморасчёты, его всегда можно проверить/удалить в 1С.
+//
+// Реквизиты НЕ хардкодим по GUID — организацию и валюту находим в самой базе 1С
+// по названию и кэшируем в onec_refs. Договор у каждого контрагента свой, поэтому
+// для клиента находим/создаём «Основной договор» (вид: с покупателем, валюта: тенге).
+//
+// Имена сущностей/полей 1С зависят от конфигурации — собраны здесь, чтобы при
+// расхождении поправить в одном месте. Любая ошибка обмена пишется в sync_state
+// (entity='invoices_push'), её видно в статусе синхронизации.
+// --------------------------------------------------------------------------
+const ONEC_ORG_NAME = 'KazEnergoSnab';                  // ищем по вхождению в название организации
+const ONEC_DOC = 'Document_СчетНаОплатуПокупателю';     // документ-счёт в 1С
+const ONEC_DOC_ROWS = 'Товары';                         // имя табличной части в теле документа
+
+let INVOICE_EXTREF_OK = false;
+async function ensureInvoiceExtRef(env) {
+  if (INVOICE_EXTREF_OK) return;
+  try { await env.DB.prepare('ALTER TABLE invoices ADD COLUMN ext_ref TEXT').run(); } catch (e) {}
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS onec_refs (
+    kind TEXT, key TEXT NOT NULL DEFAULT '', ref TEXT, PRIMARY KEY (kind, key)
+  )`).run();
+  INVOICE_EXTREF_OK = true;
+}
+
+async function onecRefGet(env, kind, key = '') {
+  const r = await env.DB.prepare('SELECT ref FROM onec_refs WHERE kind=? AND key=?').bind(kind, key).first();
+  return (r && r.ref) || null;
+}
+async function onecRefSet(env, kind, key, ref) {
+  await env.DB.prepare(`INSERT INTO onec_refs (kind, key, ref) VALUES (?,?,?)
+    ON CONFLICT(kind, key) DO UPDATE SET ref=excluded.ref`).bind(kind, key, ref).run();
+}
+
+// Дата для 1С (OData ждёт ISO без таймзоны: '2026-06-14T00:00:00').
+function onecDate(d) {
+  const s = String(d || '').trim();
+  if (!s) return new Date().toISOString().slice(0, 19);
+  return s.length <= 10 ? `${s}T00:00:00` : s.slice(0, 19);
+}
+
+// Организация ТОО «KazEnergoSnab»: организаций в базе мало — берём все и ищем по вхождению.
+async function resolveOnecOrg(env) {
+  const cached = await onecRefGet(env, 'org');
+  if (cached) return cached;
+  const data = await odataGet(env, 'Catalog_Организации?$format=json&$select=Ref_Key,Description,DeletionMark');
+  const rows = (data.value || []).filter((r) => !r.DeletionMark);
+  const want = ONEC_ORG_NAME.toLowerCase();
+  const hit = rows.find((r) => String(r.Description || '').toLowerCase().includes(want));
+  if (!hit) throw new Error(`организация «${ONEC_ORG_NAME}» не найдена в 1С`);
+  await onecRefSet(env, 'org', '', hit.Ref_Key);
+  return hit.Ref_Key;
+}
+
+// Валюта «тенге»: по коду (KZT/398) или по названию.
+async function resolveOnecCurrency(env) {
+  const cached = await onecRefGet(env, 'currency');
+  if (cached) return cached;
+  const data = await odataGet(env, 'Catalog_Валюты?$format=json&$select=Ref_Key,Code,Description,DeletionMark');
+  const rows = (data.value || []).filter((r) => !r.DeletionMark);
+  const byCode = rows.find((r) => ['KZT', '398', 'ТГ', 'ТНГ'].includes(String(r.Code || '').trim().toUpperCase()));
+  const byName = rows.find((r) => /тенге|kzt/i.test(String(r.Description || '')));
+  const hit = byCode || byName;
+  if (!hit) throw new Error('валюта «тенге» (KZT) не найдена в 1С');
+  await onecRefSet(env, 'currency', '', hit.Ref_Key);
+  return hit.Ref_Key;
+}
+
+// «Основной договор» контрагента: находим существующий или создаём (вид — с покупателем).
+// Договор подчинён контрагенту, поэтому общего на всех быть не может — кэшируем по клиенту.
+async function resolveOnecContract(env, clientRef, orgRef, currencyRef) {
+  const cached = await onecRefGet(env, 'contract', clientRef);
+  if (cached) return cached;
+  let ref = null;
+  try {
+    const path = `Catalog_ДоговорыКонтрагентов?$format=json&$select=Ref_Key,Description,DeletionMark`
+      + `&$filter=Owner_Key eq guid'${clientRef}'`;
+    const data = await odataGet(env, path);
+    const rows = (data.value || []).filter((r) => !r.DeletionMark);
+    const hit = rows.find((r) => /основн/i.test(String(r.Description || '')));
+    if (hit) ref = hit.Ref_Key;
+  } catch (e) { /* фильтрация по владельцу не поддержалась — просто создадим договор ниже */ }
+  if (!ref) {
+    const created = await odataWrite(env, 'POST', 'Catalog_ДоговорыКонтрагентов', {
+      Description: 'Основной договор',
+      Owner_Key: clientRef,
+      Owner_Type: 'StandardODATA.Catalog_Контрагенты',
+      'Организация_Key': orgRef,
+      'ВидДоговора': 'СПокупателем',
+      'ВалютаВзаиморасчетов_Key': currencyRef,
+    });
+    ref = created && created.Ref_Key;
+  }
+  if (!ref) throw new Error('не удалось получить/создать договор контрагента');
+  await onecRefSet(env, 'contract', clientRef, ref);
+  return ref;
+}
+
+// Основная отправка: строит и пишет документ-счёт. Идемпотентно по invoices.ext_ref.
+async function pushInvoiceToOnec(env, invoiceId) {
+  if (!env.ODATA_URL) return null; // интеграция не настроена
+  await ensureInvoiceExtRef(env);
+  const iv = await env.DB.prepare('SELECT id, no, client_id, deal_id, date, amount, ext_ref FROM invoices WHERE id=?').bind(invoiceId).first();
+  if (!iv || !iv.client_id) return null;
+
+  // контрагент обязан существовать в 1С — если ещё не выгружен, выгружаем сейчас
+  let cl = await env.DB.prepare('SELECT id, name, ext_ref FROM clients WHERE id=?').bind(iv.client_id).first();
+  if (cl && !cl.ext_ref) {
+    await pushClientToOnec(env, cl.id);
+    cl = await env.DB.prepare('SELECT id, name, ext_ref FROM clients WHERE id=?').bind(iv.client_id).first();
+  }
+  if (!cl || !cl.ext_ref) throw new Error('клиент не связан с 1С (контрагент не создан)');
+
+  const orgRef = await resolveOnecOrg(env);
+  const curRef = await resolveOnecCurrency(env);
+  const dogRef = await resolveOnecContract(env, cl.ext_ref, orgRef, curRef);
+
+  // позиции документа берём из связанной сделки (товары с привязкой к 1С)
+  const lines = [];
+  if (iv.deal_id) {
+    const items = await env.DB.prepare(
+      `SELECT di.qty, di.price_used, p.ext_ref FROM deal_items di
+       JOIN products p ON p.id = di.product_id
+       WHERE di.deal_id = ? AND p.ext_ref IS NOT NULL`
+    ).bind(iv.deal_id).all();
+    let n = 0;
+    for (const it of items.results) {
+      const qty = Number(it.qty) || 0;
+      const price = Number(it.price_used) || 0;
+      lines.push({ LineNumber: String(++n), 'Номенклатура_Key': it.ext_ref, 'Количество': qty, 'Цена': price, 'Сумма': qty * price });
+    }
+  }
+
+  const doc = {
+    Date: onecDate(iv.date),
+    Posted: false, // черновик — не проводим
+    'Организация_Key': orgRef,
+    'Контрагент_Key': cl.ext_ref,
+    'ДоговорКонтрагента_Key': dogRef,
+    'ВалютаДокумента_Key': curRef,
+    'СуммаДокумента': Number(iv.amount) || 0,
+    'Комментарий': 'Из CRM' + (iv.no ? ` • счёт ${iv.no}` : ''),
+  };
+  if (lines.length) doc[ONEC_DOC_ROWS] = lines;
+
+  let ref = iv.ext_ref;
+  if (ref) {
+    await odataWrite(env, 'PATCH', `${ONEC_DOC}(guid'${ref}')`, doc);
+  } else {
+    const created = await odataWrite(env, 'POST', ONEC_DOC, doc);
+    ref = created && created.Ref_Key;
+    if (ref) await env.DB.prepare('UPDATE invoices SET ext_ref=? WHERE id=?').bind(ref, invoiceId).run();
+  }
+  return ref;
+}
+
+// Обёртка с записью результата в статус синхронизации (видно в разделе синхронизации с 1С).
+async function pushInvoiceWithStatus(env, invoiceId) {
+  if (!env.ODATA_URL) return;
+  let info;
+  try {
+    const ref = await pushInvoiceToOnec(env, invoiceId);
+    info = `ok: счёт ${invoiceId} → 1С${ref ? ` (${ref})` : ''}`;
+  } catch (e) {
+    info = `ошибка: счёт ${invoiceId} — ${(e && e.message) || e}`;
+  }
+  try {
+    await env.DB.prepare(
+      `INSERT INTO sync_state (entity, last_at, info) VALUES ('invoices_push', datetime('now'), ?)
+       ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+    ).bind(String(info).slice(0, 300)).run();
+  } catch (e) {}
+}
+
+// Уникальный номер счёта присваивает сервер: фронт нумерует по длине списка
+// (без архивных), а в БД номера архивных счетов остаются занятыми → коллизии.
+// Берём предложенный номер, если он свободен, иначе инкрементируем хвостовое число.
+function splitInvoiceNo(no) {
+  const m = String(no || '').match(/^(.*?)(\d+)(\D*)$/);
+  if (!m) return null;
+  return { prefix: m[1], num: parseInt(m[2], 10), width: m[2].length, suffix: m[3] };
+}
+async function uniqueInvoiceNo(env, preferred) {
+  const all = await env.DB.prepare('SELECT no FROM invoices').all();
+  const used = new Set((all.results || []).map((r) => String(r.no)));
+  if (preferred && !used.has(String(preferred))) return preferred;
+  const base = splitInvoiceNo(preferred) || { prefix: `СФ-${new Date().getFullYear()}-`, num: 0, width: 4, suffix: '' };
+  for (let i = 1; i <= 100000; i++) {
+    const cand = base.prefix + String(base.num + i).padStart(base.width, '0') + base.suffix;
+    if (!used.has(cand)) return cand;
+  }
+  return base.prefix + Date.now(); // крайний случай — гарантированно уникально
+}
+
+// Сохранение счёта в CRM + фоновая отправка черновика в 1С (не задерживает ответ).
+async function writeInvoice(env, request, method, id, ctx) {
+  const body = await request.json().catch(() => ({}));
+  await ensureArchiveColumns(env);
+  await ensureInvoiceExtRef(env);
+  const invId = id || body.id || genId();
+  if (method === 'POST') body.no = await uniqueInvoiceNo(env, body.no);
+  const cols = (await columns(env, 'invoices')).map((c) => c.name);
+  const data = { ...body, id: invId };
+  const keys = Object.keys(data).filter((k) => cols.includes(k));
+
+  if (method === 'POST') {
+    await env.DB.prepare(`INSERT INTO invoices (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`)
+      .bind(...keys.map((k) => data[k])).run();
+  } else {
+    const up = keys.filter((k) => k !== 'id');
+    if (up.length) {
+      await env.DB.prepare(`UPDATE invoices SET ${up.map((k) => `${k}=?`).join(',')} WHERE id=?`)
+        .bind(...up.map((k) => data[k]), invId).run();
+    }
+  }
+
+  const push = pushInvoiceWithStatus(env, invId);
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(push); else await push.catch(() => {});
+
+  const row = await env.DB.prepare('SELECT * FROM invoices WHERE id=?').bind(invId).first();
+  return json(row, method === 'POST' ? 201 : 200);
 }
 
 // --------------------------------------------------------------------------
