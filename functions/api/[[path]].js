@@ -2456,6 +2456,8 @@ async function ensureSupplierExtRef(env) {
   for (const ddl of ['ALTER TABLE suppliers ADD COLUMN ext_ref TEXT', 'ALTER TABLE suppliers ADD COLUMN bin TEXT']) {
     try { await env.DB.prepare(ddl).run(); } catch (e) {}
   }
+  // Удаляем демо-поставщиков из seed (sp1..sp5), не привязанных к 1С — больше не нужны.
+  try { await env.DB.prepare("DELETE FROM suppliers WHERE id IN ('sp1','sp2','sp3','sp4','sp5') AND ext_ref IS NULL").run(); } catch (e) {}
   SUPPLIER_EXTREF_OK = true;
 }
 
