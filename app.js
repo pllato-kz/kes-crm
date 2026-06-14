@@ -3992,6 +3992,45 @@ async function openStockDoc(type, docId, onDone) {
     partyRow = el('div', { class:'form-row' }, [el('label', {}, 'Поставщик'), el('div', {}, [partyI, supList, supLabel])]);
     // подтягиваем свежий список поставщиков (его наполняет фоновая синхронизация с 1С) и перерисовываем
     (async () => { try { const l = await window.__API__.apiFetch('suppliers'); if (Array.isArray(l)) { state.suppliers = l.map(window.__API__.map.supplier); fillSuppliers(partyI.value); } } catch (e) {} })();
+  } else if (!isIn && editable) {
+    // Расход: поле «Получатель» — поиск по сделкам (как поле «Сделка» в форме отгрузки).
+    // При выборе сделки в получателя подставляется её клиент.
+    const nrm = (s) => String(s || '').toLowerCase();
+    partyI.setAttribute('placeholder', 'Поиск сделки по названию/клиенту…');
+    const dealList = el('div', { class:'product-picker' });
+    const dealLabel = el('div', { class:'muted', style:'font-size:12px;margin-top:6px' },
+      partyI.value ? ('✓ Получатель: ' + partyI.value) : 'Получатель не выбран');
+    let dealLimit = 30;
+    const selectDeal = (d) => {
+      const cl = clientById(d.client);
+      partyI.value = (cl && cl.name) || d.title || '';
+      dealLabel.textContent = '✓ ' + (d.title || '—') + (cl && cl.name ? ' · ' + cl.name : '');
+      dealLabel.style.cssText = 'font-size:12px;margin-top:6px;color:#10B981;font-weight:600';
+      fillDeals(partyI.value);
+    };
+    function fillDeals(qstr = '') {
+      const q = nrm(qstr).trim();
+      dealList.innerHTML = '';
+      const all = (state.deals || []).filter(d => {
+        const cl = clientById(d.client);
+        return !q || nrm(d.title).includes(q) || nrm(cl && cl.name).includes(q);
+      });
+      const shown = all.slice(0, dealLimit);
+      if (!shown.length) { dealList.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Сделки не найдены')); return; }
+      shown.forEach(d => {
+        const cl = clientById(d.client);
+        dealList.append(el('div', { class:'pp-item', onclick: () => selectDeal(d) }, [
+          el('div', {}, [el('div', {}, d.title || '—'), el('div', { class:'pp-sku' }, (cl ? cl.name : '—'))]),
+        ]));
+      });
+      if (all.length > shown.length) {
+        dealList.append(el('div', { class:'pp-item', style:'justify-content:center;color:var(--brand);font-weight:600',
+          onclick: () => { dealLimit += 30; fillDeals(partyI.value); } }, `↓ Показать ещё (${all.length - shown.length})`));
+      }
+    }
+    let dt; partyI.oninput = () => { dealLimit = 30; dealLabel.textContent = 'Получатель не выбран'; dealLabel.style.cssText = 'font-size:12px;margin-top:6px'; clearTimeout(dt); dt = setTimeout(() => fillDeals(partyI.value), 150); };
+    fillDeals(partyI.value);
+    partyRow = el('div', { class:'form-row' }, [el('label', {}, 'Получатель'), el('div', {}, [partyI, dealList, dealLabel])]);
   } else {
     partyRow = el('div', { class:'form-row' }, [el('label', {}, isIn ? 'Поставщик' : 'Получатель / причина'), partyI]);
   }
