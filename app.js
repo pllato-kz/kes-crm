@@ -5607,7 +5607,7 @@ VIEWS.settings = () => {
         el('div', {}, px ? `Цены: ${String(px.last_at).slice(0, 16)} · ${px.info}` : 'Цены ещё не пересчитывались'),
         el('div', {}, rc ? `Приходы: ${String(rc.last_at).slice(0, 16)} · ${rc.info}` : 'Приходы ещё не синхронизировались'),
         el('div', {}, ip ? `Счета → 1С: ${String(ip.last_at).slice(0, 16)} · ${ip.info}` : 'Счета в 1С ещё не отправлялись'),
-        el('div', {}, sp ? `Отгрузки → 1С: ${String(sp.last_at).slice(0, 16)} · ${sp.info}` : 'Отгрузки в 1С ещё не отправлялись (этап 3 выключен)'),
+        el('div', {}, sp ? `Отгрузки → 1С (списание): ${String(sp.last_at).slice(0, 16)} · ${sp.info}` : 'Отгрузки в 1С ещё не отправлялись (этап 3 выключен)'),
       );
     }).catch(() => { statusHost.textContent = ''; });
 
@@ -5615,12 +5615,12 @@ VIEWS.settings = () => {
     const shipRow = el('div', { style:'margin-top:14px;padding-top:12px;border-top:1px solid var(--border, #eee)' });
     const shipChk = el('input', { type:'checkbox', disabled:true, style:'width:16px;height:16px;cursor:pointer' });
     const shipLabel = el('label', { style:'display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer' },
-      [shipChk, el('span', {}, 'Этап 3: отправлять отгрузки в 1С (черновики «Реализация»)')]);
+      [shipChk, el('span', {}, 'Этап 3: отгрузки → «Реализация» в 1С с проведением (списание склада)')]);
     const shipState = el('span', { class:'muted', style:'font-size:12px;margin-left:8px' }, '');
     shipRow.append(
       shipLabel,
       el('div', { class:'muted', style:'font-size:12px;margin-top:4px' },
-        '⚠ Влияет на налоги/ЭСФ. Включать только после согласования с бухгалтером. Документы создаются непроведёнными черновиками — их проводит бухгалтер вручную в 1С.'),
+        '⚠ Влияет на налоги/ЭСФ. При включении отгрузка создаёт ПРОВЕДЁННУЮ «Реализацию» в 1С — товар списывается со склада автоматически. Включать только после согласования с бухгалтером.'),
       shipState,
     );
     syncCard.append(shipRow);
