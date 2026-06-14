@@ -111,6 +111,15 @@ export async function onRequest(context) {
       if (!auth) return err(401, 'Требуется авторизация');
       if (auth.role !== 'director') return err(403, 'Только директор может запускать синхронизацию');
       if (seg[1] === 'status' && request.method === 'GET') return syncStatus(env);
+      // переключатель этапа 3 (отгрузки → 1С): только директор (проверка выше)
+      if (seg[1] === 'flags' && request.method === 'GET') {
+        return json({ shipments: await isShipmentsPushEnabled(env), shipments_env_forced: onecShipmentsEnvForced(env) });
+      }
+      if (seg[1] === 'flags' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        if (!onecShipmentsEnvForced(env)) await setSetting(env, 'onec_shipments', b.shipments ? '1' : '0');
+        return json({ shipments: await isShipmentsPushEnabled(env), shipments_env_forced: onecShipmentsEnvForced(env) });
+      }
       if (seg[1] === '1c' && seg[2] === 'clients' && request.method === 'POST') return syncClients(env);
       if (seg[1] === '1c' && seg[2] === 'suppliers' && request.method === 'POST') return syncSuppliers(env);
       if (seg[1] === '1c' && seg[2] === 'categories' && request.method === 'POST') return syncCategories(env);
@@ -1751,8 +1760,29 @@ async function writeInvoice(env, request, method, id, ctx) {
 // --------------------------------------------------------------------------
 const ONEC_SHIP_DOC = 'Document_РеализацияТоваровУслуг'; // документ реализации в 1С
 
-function onecShipmentsEnabled(env) {
+// Простое key/value хранилище настроек (создаётся на лету).
+async function ensureAppSettings(env) {
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)').run();
+}
+async function getSetting(env, key) {
+  await ensureAppSettings(env);
+  const r = await env.DB.prepare('SELECT value FROM app_settings WHERE key=?').bind(key).first();
+  return r ? r.value : null;
+}
+async function setSetting(env, key, value) {
+  await ensureAppSettings(env);
+  await env.DB.prepare('INSERT INTO app_settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+    .bind(key, String(value)).run();
+}
+
+// Принудительное включение через переменную окружения (приоритет над настройкой в БД).
+function onecShipmentsEnvForced(env) {
   return /^(1|on|true|yes|да)$/i.test(String(env.ONEC_SHIPMENTS || '').trim());
+}
+// Этап 3 включён, если задана переменная окружения ИЛИ переключатель в CRM (директор).
+async function isShipmentsPushEnabled(env) {
+  if (onecShipmentsEnvForced(env)) return true;
+  return /^(1|on|true|yes)$/i.test(String(await getSetting(env, 'onec_shipments') || '').trim());
 }
 
 let SHIP_EXTREF_OK = false;
@@ -1844,7 +1874,7 @@ async function pushShipmentToOnec(env, shipmentId) {
 }
 
 async function pushShipmentWithStatus(env, shipmentId) {
-  if (!env.ODATA_URL || !onecShipmentsEnabled(env)) return;
+  if (!env.ODATA_URL || !(await isShipmentsPushEnabled(env))) return;
   let info;
   try {
     const ref = await pushShipmentToOnec(env, shipmentId);
@@ -1881,7 +1911,7 @@ async function writeShipment(env, request, method, id, ctx) {
     }
   }
 
-  if (onecShipmentsEnabled(env)) {
+  if (await isShipmentsPushEnabled(env)) {
     const push = pushShipmentWithStatus(env, shId);
     if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(push); else await push.catch(() => {});
   }

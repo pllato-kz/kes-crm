@@ -5610,6 +5610,34 @@ VIEWS.settings = () => {
         el('div', {}, sp ? `Отгрузки → 1С: ${String(sp.last_at).slice(0, 16)} · ${sp.info}` : 'Отгрузки в 1С ещё не отправлялись (этап 3 выключен)'),
       );
     }).catch(() => { statusHost.textContent = ''; });
+
+    // Переключатель этапа 3 (отгрузки → 1С). Ответственно — влияет на налоги/ЭСФ.
+    const shipRow = el('div', { style:'margin-top:14px;padding-top:12px;border-top:1px solid var(--border, #eee)' });
+    const shipChk = el('input', { type:'checkbox', disabled:true, style:'width:16px;height:16px;cursor:pointer' });
+    const shipLabel = el('label', { style:'display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer' },
+      [shipChk, el('span', {}, 'Этап 3: отправлять отгрузки в 1С (черновики «Реализация»)')]);
+    const shipState = el('span', { class:'muted', style:'font-size:12px;margin-left:8px' }, '');
+    shipRow.append(
+      shipLabel,
+      el('div', { class:'muted', style:'font-size:12px;margin-top:4px' },
+        '⚠ Влияет на налоги/ЭСФ. Включать только после согласования с бухгалтером. Документы создаются непроведёнными черновиками — их проводит бухгалтер вручную в 1С.'),
+      shipState,
+    );
+    syncCard.append(shipRow);
+    window.__API__.apiFetch('sync/flags').then(f => {
+      shipChk.checked = !!(f && f.shipments);
+      if (f && f.shipments_env_forced) { shipChk.disabled = true; shipState.textContent = 'Управляется переменной окружения ONEC_SHIPMENTS.'; }
+      else shipChk.disabled = false;
+    }).catch(() => { shipState.textContent = ''; });
+    shipChk.onchange = async (e) => {
+      const on = e.target.checked; shipChk.disabled = true; shipState.textContent = 'Сохранение…';
+      try {
+        const r = await window.__API__.apiFetch('sync/flags', { method:'POST', body:{ shipments: on } });
+        shipChk.checked = !!(r && r.shipments);
+        shipState.textContent = (r && r.shipments) ? 'Включено.' : 'Выключено.';
+      } catch (err) { shipChk.checked = !on; shipState.textContent = 'Ошибка: ' + ((err && err.message) || err); }
+      finally { shipChk.disabled = false; }
+    };
   }
 
   // Матрица прав
