@@ -2797,14 +2797,22 @@ async function openDealDetail(id, opts) {
       if (my !== seq) return; // пришёл более свежий запрос
       list.innerHTML = '';
       rows.forEach(p => {
+        const free = (Number(p.stock) || 0) - (Number(p.reserved) || 0); // доступно на складе
+        const out = free <= 0;
         list.append(el('div', { class:'pp-item', onclick: () => {
+          // продажа под заказ разрешена, но предупреждаем, что на складе нет
+          if (out) toast('«' + p.name + '» нет на складе (остаток 0) — добавлено под заказ', 'warn');
           const existing = d.lineItems.find(it => it.product === p.id);
           if (existing) { existing.qty += 1; toast('Количество увеличено', 'info'); }
-          else { d.lineItems.push({ product: p.id, qty: 1, priceUsed: p.priceWholesale }); toast('Товар добавлен', 'success'); }
+          else { d.lineItems.push({ product: p.id, qty: 1, priceUsed: p.priceWholesale }); if (!out) toast('Товар добавлен', 'success'); }
           recomputeAmount(); renderItems();
         } }, [
           el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku + (p.brand ? ' · ' + p.brand : ''))]),
-          el('span', { class:'pp-price' }, fmtMoney(p.priceWholesale)),
+          el('div', { style:'text-align:right;white-space:nowrap' }, [
+            el('div', { class:'pp-price' }, fmtMoney(p.priceWholesale)),
+            el('div', { style:'font-size:11px;margin-top:2px;font-weight:600;color:' + (out ? '#EF4444' : '#10B981') },
+              out ? 'нет на складе' : ('в наличии: ' + free + (p.unit ? ' ' + p.unit : ''))),
+          ]),
         ]));
       });
       if (!rows.length) list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено'));
@@ -2812,7 +2820,7 @@ async function openDealDetail(id, opts) {
     let dt; search.oninput = (e) => { const v = e.target.value; clearTimeout(dt); dt = setTimeout(() => fill(v), 250); };
     fill();
     pickerHost.append(
-      el('div', { style:'font-weight:600;font-size:12px;margin:14px 0 6px;color:#6B7280;text-transform:uppercase;letter-spacing:.5px' }, 'Добавить товар из каталога'),
+      el('div', { style:'font-weight:600;font-size:12px;margin:14px 0 6px;color:#6B7280;text-transform:uppercase;letter-spacing:.5px' }, 'Добавить товар со склада'),
       search, list
     );
   }
