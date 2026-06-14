@@ -4464,14 +4464,11 @@ VIEWS.invoices = () => {
   const wrap = el('div');
   const totalPaid = state.invoices.filter(i => i.status === 'paid').reduce((s,i)=>s+i.amount,0);
   const totalDue = state.invoices.filter(i => i.status !== 'paid').reduce((s,i)=>s+i.amount,0);
-  // Сделки на этапе «Оплачено» показываем как документы (без дублей с существующими счетами)
-  const isPaidStage = (sid) => /оплач/i.test((stageById(sid) || {}).label || '');
-  const paidDeals = visibleDeals().filter(d => isPaidStage(d.stage) && !state.invoices.some(iv => iv.deal === d.id));
 
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Документы'),
-      el('div', { class: 'sub' }, `Счета, накладные · ${paidDeals.length} по оплаченным сделкам`),
+      el('div', { class: 'sub' }, `Счета · всего ${state.invoices.length}`),
     ]),
     el('div', { class: 'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewInvoice }, '+ Счёт')]),
   ]));
@@ -4487,14 +4484,9 @@ VIEWS.invoices = () => {
   const todayMs = new Date(new Date().toISOString().slice(0,10)).getTime();
   const daysUntil = (due) => { const s = String(due||'').slice(0,10); if (!s) return null; const t = new Date(s).getTime(); return isNaN(t) ? null : Math.round((t - todayMs)/86400000); };
 
-  // Единый список документов: счета + сделки на этапе «Оплачено» (пересчитывается, чтобы
-  // отражать массовые изменения статусов/удаление без перезагрузки)
+  // Список документов = только реальные счета (строки «по сделке» больше не показываем)
   function computeDocs() {
-    const paid = visibleDeals().filter(d => isPaidStage(d.stage) && !state.invoices.some(iv => iv.deal === d.id));
-    return [
-      ...state.invoices.map(iv => ({ invId: iv.id, no: iv.no, date: iv.date, client: iv.client, deal: iv.deal, amount: iv.amount, due: iv.due, status: iv.status, onopen: () => { const dl = byId(state.deals, iv.deal); if (dl) openDealDetail(dl.id); else openInvoiceDetail(iv.id); } })),
-      ...paid.map(d => ({ invId: null, no: 'по сделке', date: d.created, client: d.client, deal: d.id, amount: d.amount, due: '', status: 'paid', onopen: () => openDealDetail(d.id) })),
-    ];
+    return state.invoices.map(iv => ({ invId: iv.id, no: iv.no, date: iv.date, client: iv.client, deal: iv.deal, amount: iv.amount, due: iv.due, status: iv.status, onopen: () => { const dl = byId(state.deals, iv.deal); if (dl) openDealDetail(dl.id); else openInvoiceDetail(iv.id); } }));
   }
 
   // Массовое редактирование: выбор счетов (только реальные счета, не строки «по сделке»)
@@ -5730,8 +5722,9 @@ VIEWS.settings = () => {
     const maint = el('div', { class:'card', style:'margin-top:16px' });
     maint.append(el('div', { class:'card-head' }, el('h3', {}, 'Обслуживание')));
     const clearBtn = el('button', { class:'btn btn-danger btn-sm', onclick: async (e) => {
+      const btn = e.currentTarget; // фиксируем до await: после него currentTarget = null
       if (!(await confirmModal({ title:'Удаление демо-данных', message:'Удалить все фиктивные (демо) записи: сделки, клиентов, документы, поставщиков, товары, отгрузки? Данные, синхронизированные из 1С, будут сохранены. Действие необратимо.', confirmText:'Удалить', cancelText:'Отмена', danger:true }))) return;
-      const btn = e.currentTarget; const old = btn.textContent; btn.disabled = true; btn.textContent = 'Удаление…';
+      const old = btn.textContent; btn.disabled = true; btn.textContent = 'Удаление…';
       try {
         const res = await window.__API__.apiFetch('admin/clear-demo', { method:'POST' });
         const c = (res && res.cleared) || {};
