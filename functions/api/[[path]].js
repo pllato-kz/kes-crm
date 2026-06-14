@@ -350,7 +350,8 @@ function b64uToStr(s) { return new TextDecoder().decode(b64uToBytes(s)); }
 // --------------------------------------------------------------------------
 // Данные (D1)
 // --------------------------------------------------------------------------
-async function dataRoute({ request, env }, seg, url, auth) {
+async function dataRoute(ctx, seg, url, auth) {
+  const { request, env } = ctx;
   if (!env.DB) return err(500, 'D1 binding DB не настроен (см. wrangler.toml)');
 
   const resource = ALIASES[seg[0]] || seg[0];
@@ -399,7 +400,7 @@ async function dataRoute({ request, env }, seg, url, auth) {
   if (resource === 'deals' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeDeal(env, request, method, id, auth);
   if (resource === 'deals' && method === 'DELETE' && id) return deleteDeal(env, id, auth);
   if (resource === 'clients' && method === 'GET') return id ? getClient(env, id) : listClients(env, url);
-  if (resource === 'clients' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeClient(env, request, method, id);
+  if (resource === 'clients' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeClient(env, request, method, id, ctx);
   if (resource === 'clients' && method === 'DELETE' && id) return deleteClient(env, id, auth);
   if (resource === 'invoices' && method === 'GET' && !id) return listInvoices(env, url);
   if (resource === 'invoices' && method === 'DELETE' && id) return deleteInvoice(env, id, auth);
@@ -1454,7 +1455,7 @@ async function listClients(env, url) {
   return json(rows.results);
 }
 
-async function writeClient(env, request, method, id) {
+async function writeClient(env, request, method, id, ctx) {
   const body = await request.json().catch(() => ({}));
   const clientId = id || body.id || genId();
   const cols = (await columns(env, 'clients')).map((c) => c.name);
@@ -1472,7 +1473,29 @@ async function writeClient(env, request, method, id) {
     }
   }
   if (Array.isArray(body.tags)) await setClientTags(env, clientId, body.tags);
+
+  // Двухсторонний обмен (этап 1): отправляем контрагента в 1С в фоне, чтобы не задерживать сохранение.
+  const push = pushClientToOnec(env, clientId).catch(() => {});
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(push); else await push;
+
   return getClient(env, clientId);
+}
+
+// CRM → 1С: создание/обновление контрагента в Catalog_Контрагенты.
+// Идемпотентно: при наличии ext_ref — PATCH существующего, иначе POST + сохранение Ref_Key.
+async function pushClientToOnec(env, clientId) {
+  if (!env.ODATA_URL) return; // интеграция не настроена — пропускаем
+  const c = await env.DB.prepare('SELECT id, name, bin, ext_ref FROM clients WHERE id=?').bind(clientId).first();
+  if (!c || !c.name) return;
+  const payload = { Description: String(c.name).slice(0, 150) };
+  if (c.bin) payload['ИдентификационныйКодЛичности'] = String(c.bin);
+  if (c.ext_ref) {
+    await odataWrite(env, 'PATCH', `Catalog_Контрагенты(guid'${c.ext_ref}')`, payload);
+  } else {
+    const created = await odataWrite(env, 'POST', 'Catalog_Контрагенты', payload);
+    const ref = created && created.Ref_Key;
+    if (ref) await env.DB.prepare('UPDATE clients SET ext_ref=? WHERE id=?').bind(ref, clientId).run();
+  }
 }
 
 async function setClientTags(env, clientId, names) {
@@ -1571,6 +1594,22 @@ async function odataGet(env, path) {
   const res = await fetch(url, { headers: { Authorization: auth, Accept: 'application/json' } });
   if (!res.ok) throw new Error('1С OData ' + res.status + ' на ' + path.split('?')[0]);
   return res.json();
+}
+
+// Запись в 1С через OData (POST/PATCH). Возвращает JSON ответа (для POST — созданный объект с Ref_Key).
+async function odataWrite(env, method, path, body) {
+  if (!env.ODATA_URL) throw new Error('ODATA_URL не задан (секрет)');
+  const base = encodeURI(env.ODATA_URL.replace(/\/+$/, '') + '/' + path);
+  const url = base + (path.includes('?') ? '&' : '?') + '$format=json';
+  const auth = 'Basic ' + btoa(`${env.ODATA_USER}:${env.ODATA_PASSWORD}`);
+  const res = await fetch(url, {
+    method,
+    headers: { Authorization: auth, Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
+  });
+  if (!res.ok) throw new Error('1С OData ' + method + ' ' + res.status + ' на ' + path.split('?')[0]);
+  return res.json().catch(() => null);
 }
 
 async function syncStatus(env) {
