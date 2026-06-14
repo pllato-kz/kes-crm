@@ -111,6 +111,9 @@ export async function onRequest(context) {
       if (!auth) return err(401, 'Требуется авторизация');
       if (auth.role !== 'director') return err(403, 'Только директор может запускать синхронизацию');
       if (seg[1] === 'status' && request.method === 'GET') return syncStatus(env);
+      // этап 4: очередь отправки в 1С — сводка/лог (GET) и принудительный досыл (POST)
+      if (seg[1] === 'queue' && request.method === 'GET') return onecQueueStatus(env);
+      if (seg[1] === 'queue' && request.method === 'POST') return json(await processOnecQueue(env, 50));
       // переключатель этапа 3 (отгрузки → 1С): только директор (проверка выше)
       if (seg[1] === 'flags' && request.method === 'GET') {
         return json({ shipments: await isShipmentsPushEnabled(env), shipments_env_forced: onecShipmentsEnvForced(env) });
@@ -1485,9 +1488,9 @@ async function writeClient(env, request, method, id, ctx) {
   }
   if (Array.isArray(body.tags)) await setClientTags(env, clientId, body.tags);
 
-  // Двухсторонний обмен (этап 1): отправляем контрагента в 1С в фоне, чтобы не задерживать сохранение.
-  const push = pushClientToOnec(env, clientId).catch(() => {});
-  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(push); else await push;
+  // Двухсторонний обмен: ставим контрагента в очередь на отправку в 1С (этап 4 — с ретраями).
+  const job = tryOnecNow(env, 'client', clientId, ctx);
+  if (job && !(ctx && typeof ctx.waitUntil === 'function')) await job;
 
   return getClient(env, clientId);
 }
@@ -1681,23 +1684,6 @@ async function pushInvoiceToOnec(env, invoiceId) {
 }
 
 // Обёртка с записью результата в статус синхронизации (видно в разделе синхронизации с 1С).
-async function pushInvoiceWithStatus(env, invoiceId) {
-  if (!env.ODATA_URL) return;
-  let info;
-  try {
-    const ref = await pushInvoiceToOnec(env, invoiceId);
-    info = `ok: счёт ${invoiceId} → 1С${ref ? ` (${ref})` : ''}`;
-  } catch (e) {
-    info = `ошибка: счёт ${invoiceId} — ${(e && e.message) || e}`;
-  }
-  try {
-    await env.DB.prepare(
-      `INSERT INTO sync_state (entity, last_at, info) VALUES ('invoices_push', datetime('now'), ?)
-       ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
-    ).bind(String(info).slice(0, 300)).run();
-  } catch (e) {}
-}
-
 // Уникальный номер документа присваивает сервер: фронт нумерует по длине списка
 // (без архивных), а в БД номера архивных документов остаются занятыми из-за
 // UNIQUE(no) → коллизии. Берём предложенный номер, если он свободен, иначе
@@ -1741,8 +1727,8 @@ async function writeInvoice(env, request, method, id, ctx) {
     }
   }
 
-  const push = pushInvoiceWithStatus(env, invId);
-  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(push); else await push.catch(() => {});
+  const job = tryOnecNow(env, 'invoice', invId, ctx);
+  if (job && !(ctx && typeof ctx.waitUntil === 'function')) await job;
 
   const row = await env.DB.prepare('SELECT * FROM invoices WHERE id=?').bind(invId).first();
   return json(row, method === 'POST' ? 201 : 200);
@@ -1888,31 +1874,6 @@ async function pushShipmentToOnec(env, shipmentId) {
   return { ref, posted, lines: lines.length };
 }
 
-async function pushShipmentWithStatus(env, shipmentId) {
-  if (!env.ODATA_URL || !(await isShipmentsPushEnabled(env))) return;
-  let info;
-  try {
-    const r = await pushShipmentToOnec(env, shipmentId);
-    if (r && r.posted) {
-      info = `ok: отгрузка ${shipmentId} → реализация проведена, склад списан (позиций ${r.lines})`;
-      // мгновенно обновляем остатки в CRM из 1С (не ждём 15-минутной автосинхронизации)
-      try { await syncStock(env); } catch (e) {}
-    } else if (r && r.ref) {
-      info = `ok: отгрузка ${shipmentId} → черновик без проведения (нет позиций с привязкой к 1С)`;
-    } else {
-      info = `пропуск: отгрузка ${shipmentId} — нет клиента/данных`;
-    }
-  } catch (e) {
-    info = `ошибка: отгрузка ${shipmentId} — ${(e && e.message) || e}`;
-  }
-  try {
-    await env.DB.prepare(
-      `INSERT INTO sync_state (entity, last_at, info) VALUES ('shipments_push', datetime('now'), ?)
-       ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
-    ).bind(String(info).slice(0, 300)).run();
-  } catch (e) {}
-}
-
 // Сохранение отгрузки в CRM + (если включено) фоновая отправка черновика в 1С.
 async function writeShipment(env, request, method, id, ctx) {
   const body = await request.json().catch(() => ({}));
@@ -1935,12 +1896,152 @@ async function writeShipment(env, request, method, id, ctx) {
   }
 
   if (await isShipmentsPushEnabled(env)) {
-    const push = pushShipmentWithStatus(env, shId);
-    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(push); else await push.catch(() => {});
+    const job = tryOnecNow(env, 'shipment', shId, ctx);
+    if (job && !(ctx && typeof ctx.waitUntil === 'function')) await job;
   }
 
   const row = await env.DB.prepare('SELECT * FROM shipments WHERE id=?').bind(shId).first();
   return json(row, method === 'POST' ? 201 : 200);
+}
+
+// --------------------------------------------------------------------------
+// CRM → 1С (этап 4): очередь, ретраи и лог.
+//
+// Каждая отправка (контрагент/счёт/отгрузка) ставится в очередь onec_queue и
+// сразу пробуется в фоне. Если 1С недоступна или вернула ошибку — задача остаётся
+// в очереди и до-сылается по расписанию (cron /api/sync/run, каждые ~10 мин) с
+// нарастающей паузой (backoff). Каждая попытка пишется в onec_log.
+// --------------------------------------------------------------------------
+const ONEC_MAX_ATTEMPTS = 12;                        // после стольких неудач — статус 'error' (стоп)
+const ONEC_BACKOFF_MIN = [1, 2, 5, 10, 20, 30, 60];  // паузы между попытками, мин (далее 60)
+const ONEC_KIND_RU = { client: 'контрагент', invoice: 'счёт', shipment: 'отгрузка' };
+
+let ONEC_QUEUE_OK = false;
+async function ensureOnecQueue(env) {
+  if (ONEC_QUEUE_OK) return;
+  await env.DB.batch([
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS onec_queue (
+      kind TEXT NOT NULL,
+      ref_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_at TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (kind, ref_id)
+    )`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS onec_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL DEFAULT (datetime('now')),
+      kind TEXT, ref_id TEXT, ok INTEGER, info TEXT
+    )`),
+  ]);
+  ONEC_QUEUE_OK = true;
+}
+
+async function onecLog(env, kind, refId, ok, info) {
+  try {
+    await env.DB.prepare('INSERT INTO onec_log (kind, ref_id, ok, info) VALUES (?,?,?,?)')
+      .bind(kind, refId, ok ? 1 : 0, String(info || '').slice(0, 400)).run();
+    // подрезаем лог, чтобы не рос бесконечно (оставляем ~последние 500 записей)
+    await env.DB.prepare('DELETE FROM onec_log WHERE id < (SELECT MAX(id) - 500 FROM onec_log)').run();
+  } catch (e) {}
+}
+
+// Поставить задачу в очередь (или «оживить» существующую для немедленной попытки).
+async function enqueueOnec(env, kind, refId) {
+  await ensureOnecQueue(env);
+  await env.DB.prepare(
+    `INSERT INTO onec_queue (kind, ref_id, status, attempts, next_at, updated_at)
+     VALUES (?,?,'pending',0,datetime('now'),datetime('now'))
+     ON CONFLICT(kind, ref_id) DO UPDATE SET status='pending', next_at=datetime('now'), updated_at=datetime('now')`
+  ).bind(kind, refId).run();
+}
+
+// Выполнить саму отправку по типу. Бросает исключение при ошибке.
+async function runOnecPush(env, kind, refId) {
+  if (kind === 'client') { await pushClientToOnec(env, refId); return 'контрагент отправлен'; }
+  if (kind === 'invoice') { const ref = await pushInvoiceToOnec(env, refId); return `→ 1С${ref ? ` (${ref})` : ''}`; }
+  if (kind === 'shipment') {
+    if (!(await isShipmentsPushEnabled(env))) return 'этап 3 выключен — пропуск';
+    const r = await pushShipmentToOnec(env, refId);
+    if (r && r.posted) { try { await syncStock(env); } catch (e) {} return `реализация проведена, склад списан (позиций ${r.lines})`; }
+    return (r && r.ref) ? 'черновик без проведения (нет позиций с привязкой к 1С)' : 'нет данных';
+  }
+  throw new Error('неизвестный тип задачи: ' + kind);
+}
+
+// Обновить «последний результат» в sync_state для карточки синхронизации.
+async function onecStatusLine(env, kind, info) {
+  const entity = kind === 'invoice' ? 'invoices_push' : kind === 'shipment' ? 'shipments_push' : 'clients_push';
+  try {
+    await env.DB.prepare(
+      `INSERT INTO sync_state (entity, last_at, info) VALUES (?, datetime('now'), ?)
+       ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+    ).bind(entity, String(info).slice(0, 300)).run();
+  } catch (e) {}
+}
+
+// Одна попытка по задаче: успех -> done (выходит из очереди), ошибка -> backoff либо стоп.
+async function attemptOnec(env, kind, refId) {
+  await ensureOnecQueue(env);
+  const cur = await env.DB.prepare('SELECT attempts FROM onec_queue WHERE kind=? AND ref_id=?').bind(kind, refId).first();
+  const attempts = cur ? Number(cur.attempts) : 0;
+  const ru = ONEC_KIND_RU[kind] || kind;
+  try {
+    const res = await runOnecPush(env, kind, refId);
+    await env.DB.prepare(`UPDATE onec_queue SET status='done', attempts=attempts+1, last_error=NULL, updated_at=datetime('now') WHERE kind=? AND ref_id=?`).bind(kind, refId).run();
+    await onecLog(env, kind, refId, true, res);
+    await onecStatusLine(env, kind, `ok: ${ru} ${refId} — ${res}`);
+    return true;
+  } catch (e) {
+    const msg = ((e && e.message) || String(e)).slice(0, 400);
+    const n = attempts + 1;
+    const stop = n >= ONEC_MAX_ATTEMPTS;
+    const waitMin = ONEC_BACKOFF_MIN[Math.min(n, ONEC_BACKOFF_MIN.length - 1)];
+    await env.DB.prepare(
+      `UPDATE onec_queue SET status=?, attempts=?, last_error=?, next_at=datetime('now', ?), updated_at=datetime('now') WHERE kind=? AND ref_id=?`
+    ).bind(stop ? 'error' : 'pending', n, msg, `+${waitMin} minutes`, kind, refId).run();
+    await onecLog(env, kind, refId, false, `попытка ${n}${stop ? ' (стоп)' : `, повтор через ${waitMin} мин`}: ${msg}`);
+    await onecStatusLine(env, kind, `ошибка (попытка ${n}${stop ? ', остановлено' : `, повтор через ${waitMin} мин`}): ${ru} ${refId} — ${msg}`);
+    return false;
+  }
+}
+
+// Поставить в очередь и сразу попробовать в фоне (вызывается из обработчиков сохранения).
+function tryOnecNow(env, kind, refId, ctx) {
+  if (!env.ODATA_URL) return null;
+  const job = (async () => { await enqueueOnec(env, kind, refId); await attemptOnec(env, kind, refId); })().catch(() => {});
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(job);
+  return job;
+}
+
+// Обработать «созревшие» задачи очереди (вызывается из cron runDueSyncs и по кнопке).
+async function processOnecQueue(env, limit = 25) {
+  if (!env.ODATA_URL) return { processed: 0, ok: 0, fail: 0 };
+  await ensureOnecQueue(env);
+  const dueRows = await env.DB.prepare(
+    `SELECT kind, ref_id FROM onec_queue WHERE status='pending' AND (next_at IS NULL OR next_at <= datetime('now')) ORDER BY next_at LIMIT ?`
+  ).bind(limit).all();
+  let ok = 0, fail = 0;
+  for (const r of (dueRows.results || [])) {
+    if (await attemptOnec(env, r.kind, r.ref_id)) ok++; else fail++;
+  }
+  return { processed: ok + fail, ok, fail };
+}
+
+// Сводка очереди + последние записи лога (для раздела синхронизации).
+async function onecQueueStatus(env) {
+  await ensureOnecQueue(env);
+  const counts = await env.DB.prepare(`SELECT status, COUNT(*) AS c FROM onec_queue GROUP BY status`).all();
+  const summary = { pending: 0, error: 0, done: 0 };
+  for (const r of (counts.results || [])) summary[r.status] = r.c;
+  const log = await env.DB.prepare(`SELECT at, kind, ref_id, ok, info FROM onec_log ORDER BY id DESC LIMIT 30`).all();
+  const items = await env.DB.prepare(
+    `SELECT kind, ref_id, attempts, next_at, last_error FROM onec_queue WHERE status IN ('pending','error') ORDER BY updated_at DESC LIMIT 30`
+  ).all();
+  return json({ summary, log: log.results || [], items: items.results || [] });
 }
 
 // --------------------------------------------------------------------------
@@ -2134,6 +2235,9 @@ async function runDueSyncs(env) {
     await run('prices_last', () => syncPrices(env, 'last'));
     await run('prices_avg', () => syncPrices(env, 'avg'));
   }
+  // этап 4: до-сылаем отложенные/упавшие отправки в 1С (контрагенты/счета/отгрузки)
+  try { const q = await processOnecQueue(env); if (q.processed) ran.push(`queue ${q.ok}/${q.processed}`); }
+  catch (e) { errors.push('queue: ' + ((e && e.message) || e)); }
   return { ran, errors, at: new Date().toISOString() };
 }
 

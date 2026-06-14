@@ -5638,6 +5638,38 @@ VIEWS.settings = () => {
       } catch (err) { shipChk.checked = !on; shipState.textContent = 'Ошибка: ' + ((err && err.message) || err); }
       finally { shipChk.disabled = false; }
     };
+
+    // Этап 4: очередь отправки в 1С (ретраи) + лог последних попыток.
+    const qRow = el('div', { style:'margin-top:14px;padding-top:12px;border-top:1px solid var(--border, #eee)' });
+    const qHead = el('div', { style:'display:flex;align-items:center;gap:10px;flex-wrap:wrap' });
+    const qTitle = el('div', { style:'font-size:13px;font-weight:600' }, 'Очередь отправки в 1С');
+    const qSummary = el('span', { class:'muted', style:'font-size:12px' }, '…');
+    const qBtn = el('button', { class:'btn btn-sm', style:'margin-left:auto' }, 'Досыл сейчас');
+    qHead.append(qTitle, qSummary, qBtn);
+    const qLog = el('div', { class:'muted', style:'font-size:11px;margin-top:8px;max-height:160px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;line-height:1.5' }, '');
+    qRow.append(qHead, qLog);
+    syncCard.append(qRow);
+    const loadQueue = () => window.__API__.apiFetch('sync/queue').then(q => {
+      const s = (q && q.summary) || {};
+      qSummary.textContent = `в очереди: ${s.pending || 0} · ошибок: ${s.error || 0} · отправлено: ${s.done || 0}`;
+      qSummary.style.color = (s.error ? '#dc2626' : (s.pending ? '#d97706' : ''));
+      const log = (q && q.log) || [];
+      qLog.innerHTML = '';
+      if (!log.length) { qLog.textContent = 'Пока нет отправок.'; return; }
+      log.forEach(r => {
+        const t = String(r.at || '').slice(5, 16);
+        const mark = r.ok ? '✓' : '✗';
+        const line = el('div', { style: r.ok ? '' : 'color:#dc2626' }, `${t} ${mark} ${r.kind} ${r.ref_id}: ${r.info || ''}`);
+        qLog.append(line);
+      });
+    }).catch(() => { qSummary.textContent = 'недоступно'; });
+    qBtn.onclick = async () => {
+      qBtn.disabled = true; const o = qBtn.textContent; qBtn.textContent = 'Досылаю…';
+      try { const r = await window.__API__.apiFetch('sync/queue', { method:'POST' }); toast(`Обработано: ${r.ok || 0}/${r.processed || 0}`, 'success'); }
+      catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
+      finally { qBtn.textContent = o; qBtn.disabled = false; loadQueue(); }
+    };
+    loadQueue();
   }
 
   // Матрица прав
