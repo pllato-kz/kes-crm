@@ -332,11 +332,12 @@ function buildPipelineDropdown() {
   const wrap = el('div', { class: 'pipe-dd' });
   const menu = el('div', { class: 'pipe-dd-menu' });
   const close = () => wrap.classList.remove('open');
-  const btn = el('button', { class: 'btn pipe-dd-btn', title: 'Выбор воронки',
-    onclick: (e) => { e.stopPropagation(); wrap.classList.toggle('open'); } }, [
-    svgIconEl('folder', 16),
-    el('span', { class: 'pipe-dd-label' }, (active && active.name) || 'Воронки'),
-    el('span', { class: 'pipe-dd-caret' }, '▾'),
+  // Заголовок раздела = кликабельная кнопка-воронка со стрелкой ▼
+  const trigger = el('h1', { class: 'pipe-dd-trigger', tabindex: '0', title: 'Выбрать воронку',
+    onclick: (e) => { e.stopPropagation(); wrap.classList.toggle('open'); },
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); wrap.classList.toggle('open'); } } }, [
+    el('span', { class: 'pipe-dd-title' }, (active && active.name) || 'Сделки'),
+    el('span', { class: 'pipe-dd-caret' }, '▼'),
   ]);
   PIPELINES.forEach(p => {
     const isActive = p.id === DEALS_PIPELINE;
@@ -354,9 +355,9 @@ function buildPipelineDropdown() {
   });
   if (isDirector) {
     menu.append(el('div', { class: 'pipe-dd-sep' }));
-    menu.append(el('button', { class: 'pipe-dd-create', onclick: () => { close(); createPipelineUI(); } }, '+ Создать воронку'));
+    menu.append(el('button', { class: 'pipe-dd-create', onclick: () => { close(); createPipelineUI(); } }, '➕ Создать воронку'));
   }
-  wrap.append(btn, menu);
+  wrap.append(trigger, menu);
   // закрытие по клику вне (один обработчик на всё приложение)
   if (!buildPipelineDropdown._bound) {
     document.addEventListener('click', (e) => {
@@ -2321,9 +2322,8 @@ VIEWS.deals = () => {
 
   const subEl = el('div', { class: 'sub' });
   wrap.append(el('div', { class: 'page-head' }, [
-    el('div', {}, [el('h1', {}, (pipe && pipe.name) || 'Сделки'), subEl]),
+    el('div', {}, [buildPipelineDropdown(), subEl]),
     el('div', { class: 'actions' }, [
-      buildPipelineDropdown(),
       el('button', { class: 'btn', onclick: () => { DEALS_VIEW = isList ? 'kanban' : 'list'; navigate('deals'); } }, isList ? '🗂 Канбан' : '📋 Список'),
       el('button', { class: 'btn btn-primary', onclick: () => openNewDeal() }, '+ Сделка'),
     ]),
