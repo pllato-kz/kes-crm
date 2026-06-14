@@ -1193,18 +1193,19 @@ function openNewProduct() {
 // ---------- New Supplier ----------
 function openNewSupplier() {
   const name = fInput('Название');
+  const bin = fInput('БИН');
   const contact = fInput('Контакт');
   const phone = fInput('Телефон');
   const email = fInput('Email');
   const note = fTextarea('Примечание');
   openModal({
     title: 'Новый поставщик',
-    body: el('div', {}, [name.row, contact.row, phone.row, email.row, note.row]),
+    body: el('div', {}, [name.row, bin.row, contact.row, phone.row, email.row, note.row]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
       el('button', { class: 'btn btn-primary', onclick: async () => {
         if (!name.get().trim()) { toast('Введите название', 'warn'); return; }
-        const sp = { name: name.get().trim(), contact: contact.get(), phone: phone.get(), email: email.get(), share: 0, lastDelivery: new Date().toISOString().slice(0,10), note: note.get() };
+        const sp = { name: name.get().trim(), bin: bin.get(), contact: contact.get(), phone: phone.get(), email: email.get(), share: 0, lastDelivery: new Date().toISOString().slice(0,10), note: note.get() };
         try {
           const saved = await window.__API__.apiFetch('suppliers', { method: 'POST', body: window.__API__.toApi.supplier(sp) });
           state.suppliers.push(window.__API__.map.supplier(saved));
@@ -1567,18 +1568,19 @@ function openSupplierDetail(id) {
   if (!sp) return;
   // Редактируемые поля поставщика
   const fName = fInput('Наименование', sp.name || '');
+  const fBin = fInput('БИН', sp.bin || '');
   const fContact = fInput('Контактное лицо', sp.contact || '');
   const fPhone = fInput('Телефон', sp.phone || '');
   const fEmail = fInput('Email', sp.email || '', { type: 'email' });
   const fShare = fInput('Доля закупок, %', sp.share != null ? sp.share : '', { type: 'number' });
   const fDelivery = fDateField('Последняя поставка', String(sp.lastDelivery || '').slice(0, 10));
   const fNote = fTextarea('Комментарий', sp.note || '');
-  const fields = [fName, fContact, fPhone, fEmail, fShare, fDelivery, fNote];
+  const fields = [fName, fBin, fContact, fPhone, fEmail, fShare, fDelivery, fNote];
 
   async function save(btn) {
     if (btn) btn.disabled = true;
     const upd = {
-      id: sp.id, name: fName.get().trim() || sp.name, contact: fContact.get(), phone: fPhone.get(),
+      id: sp.id, name: fName.get().trim() || sp.name, bin: fBin.get(), contact: fContact.get(), phone: fPhone.get(),
       email: fEmail.get(), share: Number(fShare.get()) || 0, lastDelivery: fDelivery.getDate(), note: fNote.get(),
     };
     try {
@@ -4690,7 +4692,7 @@ VIEWS.suppliers = () => {
 
   const grid = el('div', { class:'grid grid-3', style:'margin-top:16px' });
   function renderGrid() {
-    const list = state.suppliers.filter(s => !q || (String(s.name||'') + ' ' + (s.contact||'') + ' ' + (s.phone||'') + ' ' + (s.email||'')).toLowerCase().includes(q));
+    const list = state.suppliers.filter(s => !q || (String(s.name||'') + ' ' + (s.bin||'') + ' ' + (s.contact||'') + ' ' + (s.phone||'') + ' ' + (s.email||'')).toLowerCase().includes(q));
     grid.innerHTML = '';
     if (!list.length) { grid.append(el('div', { class:'muted', style:'padding:16px' }, q ? 'Ничего не найдено' : 'Поставщиков нет')); return; }
     list.forEach(s => {
@@ -4701,6 +4703,7 @@ VIEWS.suppliers = () => {
         ]),
         el('div', { class:'bar-mini' }, el('div', { style:`width:${s.share}%` })),
         el('dl', { class:'kv mt-12', style:'grid-template-columns:120px 1fr' }, [
+          el('dt', {}, 'БИН'),           el('dd', {}, s.bin || '—'),
           el('dt', {}, 'Контакт'),       el('dd', {}, s.contact || '—'),
           el('dt', {}, 'Телефон'),       el('dd', {}, s.phone || '—'),
           el('dt', {}, 'Email'),         el('dd', {}, s.email || '—'),
