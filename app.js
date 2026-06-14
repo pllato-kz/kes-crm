@@ -2785,20 +2785,28 @@ function openStageManager() {
 
 async function openDealDetail(id, opts) {
   let d = byId(state.deals, id);
+  let history = [];
+  // позиции сделки и историю тянем ПАРАЛЛЕЛЬНО (а не последовательно) — карточка открывается быстрее
   if (!d) {
-    // прямая ссылка #deals/{id}: сделки нет в памяти — тянем из БД
+    // прямая ссылка #deals/{id}: сделки нет в памяти
     try {
-      d = await window.__API__.loadDeal(id);
-      if (!d || !d.id) throw new Error('not found');
-      state.deals.push(d);
+      const [full, h] = await Promise.all([
+        window.__API__.loadDeal(id),
+        window.__API__.apiFetch('deals/' + id + '/history').catch(() => []),
+      ]);
+      if (!full || !full.id) throw new Error('not found');
+      d = full; state.deals.push(d); history = h || [];
     } catch (e) { showNotFound('deals', id); return; }
   } else {
-    // ленивая подгрузка позиций сделки из БД
     try {
-      const full = await window.__API__.loadDeal(id);
+      const [full, h] = await Promise.all([
+        window.__API__.loadDeal(id),
+        window.__API__.apiFetch('deals/' + id + '/history').catch(() => []),
+      ]);
       d.lineItems = full.lineItems || [];
       if (full.amount != null) d.amount = full.amount;
       if (full.items != null) d.items = full.items;
+      history = h || [];
     } catch (e) { if (!d.lineItems) d.lineItems = []; }
   }
   // открытая сделка задаёт активную воронку (для корректного возврата к доске)
@@ -2806,15 +2814,8 @@ async function openDealDetail(id, opts) {
   if (dpid && pipelineById(dpid) && dpid !== DEALS_PIPELINE) setDealsPipeline(dpid, true);
   setEntityHash('deals', d.id); // уникальный URL карточки
   if (!d.lineItems) d.lineItems = [];
-  // Синхронизация с каталогом: дозагрузим товары позиций, которых нет в памяти
+  // Товары позиций, которых нет в памяти, догрузим В ФОНЕ (после открытия карточки) — см. ниже.
   const missingPids = [...new Set(d.lineItems.map(it => it.product).filter(pid => pid && !byId(state.products, pid)))];
-  if (missingPids.length) {
-    await Promise.all(missingPids.map(pid => window.__API__.apiFetch('products/' + encodeURIComponent(pid))
-      .then(row => { const p = window.__API__.map.product(row); if (p && p.id && !byId(state.products, p.id)) state.products.push(p); })
-      .catch(() => {})));
-  }
-  let history = [];
-  try { history = await window.__API__.apiFetch('deals/' + id + '/history'); } catch (e) {}
   const cl = clientById(d.client);
   const m = userById(d.manager);
   const s = stageById(d.stage);
@@ -3276,6 +3277,14 @@ async function openDealDetail(id, opts) {
       } }, 'Сохранить') : null,
     ],
   });
+
+  // Фоновая догрузка товаров позиций, которых нет в памяти — карточка уже открыта,
+  // после загрузки перерисовываем строки и пересчитываем сумму (без задержки открытия).
+  if (missingPids.length) {
+    Promise.all(missingPids.map(pid => window.__API__.apiFetch('products/' + encodeURIComponent(pid))
+      .then(row => { const p = window.__API__.map.product(row); if (p && p.id && !byId(state.products, p.id)) state.products.push(p); })
+      .catch(() => {}))).then(() => { try { renderItems(); recomputeAmount(); } catch (e) {} });
+  }
 }
 
 // WhatsApp по сделке через Green API: отправка + история сообщений
@@ -6339,8 +6348,9 @@ function renderLogin(errMsg = null) {
 async function doLogin(email, password) {
   try {
     await window.__API__.login(email, password);
-    await loadData();
+    await loadEssentialData();
     renderShell();
+    loadRestData().then(afterDataLoaded);
   } catch (e) {
     renderLogin(e && e.status === 401 ? 'Неверный email или пароль' : ('Ошибка входа: ' + ((e && e.message) || e)));
   }
@@ -6376,14 +6386,24 @@ function visibleTasks()    { return role().seeAllData ? state.tasks    : state.t
 // BOOT — после успешного логина
 // ============================================================
 // Загрузка данных из боевого API в state + справочники из БД
-async function loadData() {
-  const { state: s, dict } = await window.__API__.loadAllData();
+// Лёгкое ядро (справочники + пользователи) — быстрый старт интерфейса.
+async function loadEssentialData() {
+  const { state: s, dict } = await window.__API__.loadEssential();
   state = s;
   STAGES = dict.STAGES;
   PIPELINES = dict.PIPELINES || [];
   ROLES = dict.ROLES;
   CLIENT_TYPES = dict.CLIENT_TYPES;
   currentUser = state.users.find(u => u.id === jwtSub(window.__API__.getToken())) || null;
+}
+// Тяжёлые данные (товары/клиенты/сделки и т.д.) — в фон, мутируют текущий state.
+async function loadRestData() {
+  try { await window.__API__.loadRest(state); } catch (e) {}
+}
+// Полная загрузка (для рефрешей после изменений в данных).
+async function loadData() {
+  await loadEssentialData();
+  await loadRestData();
 }
 
 // Достаём sub (id пользователя) из JWT без проверки подписи — только для UI
@@ -6397,17 +6417,29 @@ function jwtSub(token) {
 async function bootApp() {
   if (!window.__API__ || !window.__API__.isAuthed()) { renderLogin(); return; }
   try {
-    await loadData();
+    // 1) грузим только лёгкое ядро и сразу рисуем интерфейс (без белого экрана)
+    await loadEssentialData();
     if (!currentUser || currentUser.active === false) {
       window.__API__.logout();
       renderLogin('Сессия истекла — войдите снова');
       return;
     }
     renderShell();
+    // 2) тяжёлые списки — в фоне, затем перерисовываем текущий раздел
+    loadRestData().then(afterDataLoaded);
   } catch (e) {
     window.__API__.logout();
     renderLogin('Не удалось загрузить данные. Войдите снова.');
   }
+}
+
+// После фоновой дозагрузки: перерисовать текущий раздел и обновить индикатор уведомлений.
+function afterDataLoaded() {
+  try { if (CURRENT_VIEW) navigate(CURRENT_VIEW); } catch (e) {}
+  try {
+    const dot = document.querySelector('#notif-btn .dot');
+    if (dot) dot.style.display = (taskReminders().length || (state.notifications || []).length) ? '' : 'none';
+  } catch (e) {}
 }
 
 function renderShell() {

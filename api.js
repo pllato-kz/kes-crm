@@ -165,56 +165,63 @@
   // ------------------------------------------------------------------
   // Полная загрузка состояния (форма как у SEED) одним заходом
   // ------------------------------------------------------------------
-  async function loadAllData() {
-    // отметить просроченные задачи и разослать уведомления (директор + ответственный)
-    try { await apiFetch('notifications/scan-overdue', { method: 'POST' }); } catch (e) {}
-    const [
-      company, rolesRows, stagesRows, pipelinesRows, typesRows, cats, leadSources, leadStatuses,
-      warehouses, shipStatuses, invStatuses, taskPrios,
-      usersRows, suppliers, productsResp, clients, deals, leads, tasks, invoices, shipments, receipts, notifications,
-    ] = await Promise.all([
-      apiFetch('company'), apiFetch('roles'), apiFetch('deal_stages'), apiFetch('pipelines'), apiFetch('client_types'),
-      apiFetch('product_categories'), apiFetch('lead_sources'), apiFetch('lead_statuses'),
-      apiFetch('warehouses'), apiFetch('shipment_statuses'), apiFetch('invoice_statuses'), apiFetch('task_priorities'),
-      apiFetch('users'), apiFetch('suppliers'), apiFetch('products?limit=1000'), apiFetch('clients?limit=1000'),
-      apiFetch('deals'), apiFetch('leads'), apiFetch('tasks'), apiFetch('invoices'), apiFetch('shipments'),
-      apiFetch('receipts'), apiFetch('notifications'),
+  // ЛЁГКОЕ ЯДРО: справочники + пользователи (всё мелкое). Их достаточно, чтобы сразу
+  // отрисовать интерфейс. Тяжёлые списки (товары/клиенты/сделки и т.д.) грузятся отдельно.
+  async function loadEssential() {
+    const [company, rolesRows, stagesRows, pipelinesRows, typesRows, usersRows, cats] = await Promise.all([
+      apiFetch('company'), apiFetch('roles'), apiFetch('deal_stages'), apiFetch('pipelines'),
+      apiFetch('client_types'), apiFetch('users'), apiFetch('product_categories'),
     ]);
-
     const rolesByKey = buildRoles(rolesRows);
-    const srcById = {}; (leadSources || []).forEach((s) => { srcById[s.id] = s.name; });
     const meta = (Array.isArray(company) ? company[0] : company) || {};
-    const products = (productsResp.data || productsResp || []).map(M.product);
-
-    // категории + пересчёт count по товарам (в мокапе показывался count)
-    const catCount = {}; products.forEach((p) => { catCount[p.cat] = (catCount[p.cat] || 0) + 1; });
-    const categories = (cats || []).map((c) => ({ id: c.id, name: c.name, icon: c.icon, count: catCount[c.id] || 0 }));
-
     const state = {
       meta: { id: meta.id || 1, tenant: meta.tenant, city: meta.city, currency: meta.currency || '₸',
               legalName: meta.legal_name, bin: meta.bin, address: meta.address,
               workHours: meta.work_hours, website: meta.website, note: meta.note, version: 1 },
       users: (usersRows || []).map((u) => M.user(u, rolesByKey)),
-      categories,
-      products,
-      clients: (clients || []).map(M.client),
-      deals: (deals || []).map(M.deal),               // lineItems подгружаются лениво в карточке сделки
-      leads: (leads || []).map((l) => ({ id: l.id, source: srcById[l.source_id] || '', name: l.name, phone: l.phone, subject: l.subject, created: l.created, status: l.status_id })),
-      suppliers: (suppliers || []).map(M.supplier),
-      tasks: (tasks || []).map(M.task),
-      invoices: (invoices || []).map(M.invoice),
-      shipments: (shipments || []).map(M.shipment),
-      receipts: (receipts || []).map(M.receipt),
-      notifications: (notifications || []).map(M.notification),
+      categories: (cats || []).map((c) => ({ id: c.id, name: c.name, icon: c.icon, count: 0 })),
+      // тяжёлые списки — пустые, заполняются в loadRest (фон)
+      products: [], clients: [], deals: [], leads: [], suppliers: [],
+      tasks: [], invoices: [], shipments: [], receipts: [], notifications: [],
     };
-
-    // справочники, которыми пользуется app.js напрямую
     const dict = {
-      STAGES: buildStages(stagesRows),
-      PIPELINES: buildPipelines(pipelinesRows),
-      ROLES: rolesByKey,
-      CLIENT_TYPES: buildClientTypes(typesRows),
+      STAGES: buildStages(stagesRows), PIPELINES: buildPipelines(pipelinesRows),
+      ROLES: rolesByKey, CLIENT_TYPES: buildClientTypes(typesRows),
     };
+    return { state, dict };
+  }
+
+  // ТЯЖЁЛЫЕ/ВТОРОСТЕПЕННЫЕ данные — грузятся в фоне после первой отрисовки и мутируют state.
+  async function loadRest(state) {
+    // отметка просроченных задач — побочный эффект, не блокируем
+    apiFetch('notifications/scan-overdue', { method: 'POST' }).catch(() => {});
+    const [leadSources, suppliers, productsResp, clients, deals, leads, tasks, invoices, shipments, receipts, notifications] = await Promise.all([
+      apiFetch('lead_sources'),
+      apiFetch('suppliers'), apiFetch('products?limit=1000'), apiFetch('clients?limit=1000'),
+      apiFetch('deals'), apiFetch('leads'), apiFetch('tasks'), apiFetch('invoices'),
+      apiFetch('shipments'), apiFetch('receipts'), apiFetch('notifications'),
+    ]);
+    const srcById = {}; (leadSources || []).forEach((s) => { srcById[s.id] = s.name; });
+    const products = (productsResp.data || productsResp || []).map(M.product);
+    const catCount = {}; products.forEach((p) => { catCount[p.cat] = (catCount[p.cat] || 0) + 1; });
+    (state.categories || []).forEach((c) => { c.count = catCount[c.id] || 0; });
+    state.products = products;
+    state.clients = (clients || []).map(M.client);
+    state.deals = (deals || []).map(M.deal); // lineItems подгружаются лениво в карточке сделки
+    state.leads = (leads || []).map((l) => ({ id: l.id, source: srcById[l.source_id] || '', name: l.name, phone: l.phone, subject: l.subject, created: l.created, status: l.status_id }));
+    state.suppliers = (suppliers || []).map(M.supplier);
+    state.tasks = (tasks || []).map(M.task);
+    state.invoices = (invoices || []).map(M.invoice);
+    state.shipments = (shipments || []).map(M.shipment);
+    state.receipts = (receipts || []).map(M.receipt);
+    state.notifications = (notifications || []).map(M.notification);
+    return state;
+  }
+
+  // Полная загрузка (для рефрешей после изменений): ядро + тяжёлое последовательно.
+  async function loadAllData() {
+    const { state, dict } = await loadEssential();
+    await loadRest(state);
     return { state, dict };
   }
 
@@ -246,6 +253,6 @@
 
   window.__API__ = {
     apiFetch, login, logout, isAuthed, getToken, clearToken,
-    loadAllData, loadDeal, refreshDicts, uploadFile, map: M, toApi,
+    loadAllData, loadEssential, loadRest, loadDeal, refreshDicts, uploadFile, map: M, toApi,
   };
 })();
