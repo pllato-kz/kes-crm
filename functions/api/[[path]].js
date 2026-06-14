@@ -405,6 +405,7 @@ async function dataRoute(ctx, seg, url, auth) {
   if (resource === 'invoices' && method === 'GET' && !id) return listInvoices(env, url);
   if (resource === 'invoices' && method === 'DELETE' && id) return deleteInvoice(env, id, auth);
   if (resource === 'invoices' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeInvoice(env, request, method, id, ctx);
+  if (resource === 'shipments' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeShipment(env, request, method, id, ctx);
   if (resource === 'leads' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeLead(env, request, method, id);
   if (resource === 'notifications' && id === 'scan-overdue' && method === 'POST') return scanOverdueTasks(env);
   if (resource === 'notifications' && method === 'GET' && !id) return listNotifications(env, auth);
@@ -1688,19 +1689,20 @@ async function pushInvoiceWithStatus(env, invoiceId) {
   } catch (e) {}
 }
 
-// Уникальный номер счёта присваивает сервер: фронт нумерует по длине списка
-// (без архивных), а в БД номера архивных счетов остаются занятыми → коллизии.
-// Берём предложенный номер, если он свободен, иначе инкрементируем хвостовое число.
-function splitInvoiceNo(no) {
+// Уникальный номер документа присваивает сервер: фронт нумерует по длине списка
+// (без архивных), а в БД номера архивных документов остаются занятыми из-за
+// UNIQUE(no) → коллизии. Берём предложенный номер, если он свободен, иначе
+// инкрементируем хвостовое число до свободного. table — из фикс. списка (не польз. ввод).
+function splitDocNo(no) {
   const m = String(no || '').match(/^(.*?)(\d+)(\D*)$/);
   if (!m) return null;
   return { prefix: m[1], num: parseInt(m[2], 10), width: m[2].length, suffix: m[3] };
 }
-async function uniqueInvoiceNo(env, preferred) {
-  const all = await env.DB.prepare('SELECT no FROM invoices').all();
+async function uniqueDocNo(env, table, preferred, fallbackPrefix) {
+  const all = await env.DB.prepare(`SELECT no FROM ${table}`).all();
   const used = new Set((all.results || []).map((r) => String(r.no)));
   if (preferred && !used.has(String(preferred))) return preferred;
-  const base = splitInvoiceNo(preferred) || { prefix: `СФ-${new Date().getFullYear()}-`, num: 0, width: 4, suffix: '' };
+  const base = splitDocNo(preferred) || { prefix: fallbackPrefix, num: 0, width: 4, suffix: '' };
   for (let i = 1; i <= 100000; i++) {
     const cand = base.prefix + String(base.num + i).padStart(base.width, '0') + base.suffix;
     if (!used.has(cand)) return cand;
@@ -1714,7 +1716,7 @@ async function writeInvoice(env, request, method, id, ctx) {
   await ensureArchiveColumns(env);
   await ensureInvoiceExtRef(env);
   const invId = id || body.id || genId();
-  if (method === 'POST') body.no = await uniqueInvoiceNo(env, body.no);
+  if (method === 'POST') body.no = await uniqueDocNo(env, 'invoices', body.no, `СФ-${new Date().getFullYear()}-`);
   const cols = (await columns(env, 'invoices')).map((c) => c.name);
   const data = { ...body, id: invId };
   const keys = Object.keys(data).filter((k) => cols.includes(k));
@@ -1734,6 +1736,157 @@ async function writeInvoice(env, request, method, id, ctx) {
   if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(push); else await push.catch(() => {});
 
   const row = await env.DB.prepare('SELECT * FROM invoices WHERE id=?').bind(invId).first();
+  return json(row, method === 'POST' ? 201 : 200);
+}
+
+// --------------------------------------------------------------------------
+// CRM → 1С (этап 3): отгрузка CRM -> черновик «Реализация товаров и услуг».
+//
+// ⚠ Самый ответственный обмен — влияет на налоги/ЭСФ. Поэтому он ВЫКЛЮЧЕН по
+// умолчанию и срабатывает, только если задан секрет ONEC_SHIPMENTS=1 (включать
+// после этапа 2 и согласования с бухгалтером). Документ всегда непроведённый
+// черновик (Posted=false) — ничего не списывает и не формирует ЭСФ сам по себе.
+//
+// Реквизиты резолвятся по названию (как на этапе 2) + склад «по умолчанию».
+// --------------------------------------------------------------------------
+const ONEC_SHIP_DOC = 'Document_РеализацияТоваровУслуг'; // документ реализации в 1С
+
+function onecShipmentsEnabled(env) {
+  return /^(1|on|true|yes|да)$/i.test(String(env.ONEC_SHIPMENTS || '').trim());
+}
+
+let SHIP_EXTREF_OK = false;
+async function ensureShipmentExtRef(env) {
+  if (SHIP_EXTREF_OK) return;
+  try { await env.DB.prepare('ALTER TABLE shipments ADD COLUMN ext_ref TEXT').run(); } catch (e) {}
+  SHIP_EXTREF_OK = true;
+}
+
+// Склад «по умолчанию»: предпочитаем основной/по-умолчанию, иначе предопределённый, иначе первый.
+async function resolveOnecWarehouse(env) {
+  await ensureInvoiceExtRef(env); // гарантирует таблицу onec_refs
+  const cached = await onecRefGet(env, 'warehouse');
+  if (cached) return cached;
+  const data = await odataGet(env, 'Catalog_Склады?$format=json&$select=Ref_Key,Description,DeletionMark,Predefined');
+  const rows = (data.value || []).filter((r) => !r.DeletionMark);
+  const byName = rows.find((r) => /основн|умолчан/i.test(String(r.Description || '')));
+  const predef = rows.find((r) => r.Predefined);
+  const hit = byName || predef || rows[0];
+  if (!hit) throw new Error('склад не найден в 1С');
+  await onecRefSet(env, 'warehouse', '', hit.Ref_Key);
+  return hit.Ref_Key;
+}
+
+// Основная отправка реализации. Идемпотентно по shipments.ext_ref.
+async function pushShipmentToOnec(env, shipmentId) {
+  if (!env.ODATA_URL) return null;
+  await ensureInvoiceExtRef(env);
+  await ensureShipmentExtRef(env);
+  const sh = await env.DB.prepare('SELECT id, no, client_id, deal_id, date, ext_ref FROM shipments WHERE id=?').bind(shipmentId).first();
+  if (!sh || !sh.client_id) return null;
+
+  let cl = await env.DB.prepare('SELECT id, name, ext_ref FROM clients WHERE id=?').bind(sh.client_id).first();
+  if (cl && !cl.ext_ref) {
+    await pushClientToOnec(env, cl.id);
+    cl = await env.DB.prepare('SELECT id, name, ext_ref FROM clients WHERE id=?').bind(sh.client_id).first();
+  }
+  if (!cl || !cl.ext_ref) throw new Error('клиент не связан с 1С (контрагент не создан)');
+
+  const orgRef = await resolveOnecOrg(env);
+  const curRef = await resolveOnecCurrency(env);
+  const dogRef = await resolveOnecContract(env, cl.ext_ref, orgRef, curRef);
+  const whRef = await resolveOnecWarehouse(env);
+
+  // позиции и сумма — из связанной сделки (товары с привязкой к 1С)
+  const lines = [];
+  let sum = 0;
+  if (sh.deal_id) {
+    const items = await env.DB.prepare(
+      `SELECT di.qty, di.price_used, p.ext_ref FROM deal_items di
+       JOIN products p ON p.id = di.product_id
+       WHERE di.deal_id = ? AND p.ext_ref IS NOT NULL`
+    ).bind(sh.deal_id).all();
+    let n = 0;
+    for (const it of items.results) {
+      const qty = Number(it.qty) || 0;
+      const price = Number(it.price_used) || 0;
+      lines.push({ LineNumber: String(++n), 'Номенклатура_Key': it.ext_ref, 'Количество': qty, 'Цена': price, 'Сумма': qty * price });
+      sum += qty * price;
+    }
+    if (!sum) {
+      const deal = await env.DB.prepare('SELECT amount FROM deals WHERE id=?').bind(sh.deal_id).first();
+      sum = (deal && Number(deal.amount)) || 0;
+    }
+  }
+
+  const doc = {
+    Date: onecDate(sh.date),
+    Posted: false, // черновик — не проводим
+    'Организация_Key': orgRef,
+    'Контрагент_Key': cl.ext_ref,
+    'ДоговорКонтрагента_Key': dogRef,
+    'Склад_Key': whRef,
+    'ВалютаДокумента_Key': curRef,
+    'СуммаДокумента': sum,
+    'Комментарий': 'Из CRM' + (sh.no ? ` • отгрузка ${sh.no}` : ''),
+  };
+  if (lines.length) doc['Товары'] = lines;
+
+  let ref = sh.ext_ref;
+  if (ref) {
+    await odataWrite(env, 'PATCH', `${ONEC_SHIP_DOC}(guid'${ref}')`, doc);
+  } else {
+    const created = await odataWrite(env, 'POST', ONEC_SHIP_DOC, doc);
+    ref = created && created.Ref_Key;
+    if (ref) await env.DB.prepare('UPDATE shipments SET ext_ref=? WHERE id=?').bind(ref, shipmentId).run();
+  }
+  return ref;
+}
+
+async function pushShipmentWithStatus(env, shipmentId) {
+  if (!env.ODATA_URL || !onecShipmentsEnabled(env)) return;
+  let info;
+  try {
+    const ref = await pushShipmentToOnec(env, shipmentId);
+    info = `ok: отгрузка ${shipmentId} → 1С${ref ? ` (${ref})` : ''}`;
+  } catch (e) {
+    info = `ошибка: отгрузка ${shipmentId} — ${(e && e.message) || e}`;
+  }
+  try {
+    await env.DB.prepare(
+      `INSERT INTO sync_state (entity, last_at, info) VALUES ('shipments_push', datetime('now'), ?)
+       ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+    ).bind(String(info).slice(0, 300)).run();
+  } catch (e) {}
+}
+
+// Сохранение отгрузки в CRM + (если включено) фоновая отправка черновика в 1С.
+async function writeShipment(env, request, method, id, ctx) {
+  const body = await request.json().catch(() => ({}));
+  await ensureShipmentExtRef(env);
+  const shId = id || body.id || genId();
+  if (method === 'POST') body.no = await uniqueDocNo(env, 'shipments', body.no, 'ТТН-');
+  const cols = (await columns(env, 'shipments')).map((c) => c.name);
+  const data = { ...body, id: shId };
+  const keys = Object.keys(data).filter((k) => cols.includes(k));
+
+  if (method === 'POST') {
+    await env.DB.prepare(`INSERT INTO shipments (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`)
+      .bind(...keys.map((k) => data[k])).run();
+  } else {
+    const up = keys.filter((k) => k !== 'id');
+    if (up.length) {
+      await env.DB.prepare(`UPDATE shipments SET ${up.map((k) => `${k}=?`).join(',')} WHERE id=?`)
+        .bind(...up.map((k) => data[k]), shId).run();
+    }
+  }
+
+  if (onecShipmentsEnabled(env)) {
+    const push = pushShipmentWithStatus(env, shId);
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(push); else await push.catch(() => {});
+  }
+
+  const row = await env.DB.prepare('SELECT * FROM shipments WHERE id=?').bind(shId).first();
   return json(row, method === 'POST' ? 201 : 200);
 }
 
