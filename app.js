@@ -1121,7 +1121,8 @@ function convertLead(id) {
 }
 
 // ---------- New Task ----------
-function openNewTask() {
+function openNewTask(dealId) {
+  const linkedDeal = (typeof dealId === 'string') ? dealId : null; // привязка к сделке (если из карточки)
   const today = new Date().toISOString().slice(0,10);
   const title = fInput('Название');
   const desc = fTextarea('Описание', '');
@@ -1145,12 +1146,13 @@ function openNewTask() {
         const t = {
           title: title.get().trim(), description: desc.get(), owner: owner.get(),
           due: due.getDate() + ' ' + (time.get() || '18:00'),
-          deal: null, priority: prio.get(),
+          deal: linkedDeal, priority: prio.get(),
         };
         try {
           const saved = await window.__API__.apiFetch('tasks', { method: 'POST', body: window.__API__.toApi.task(t) });
           state.tasks.unshift(window.__API__.map.task(saved));
-          closeModal(); toast('Задача добавлена', 'success'); navigate('tasks');
+          closeModal(); toast('Задача добавлена', 'success');
+          if (linkedDeal) openDealDetail(linkedDeal, { tab: 'tasks' }); else navigate('tasks');
         } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Создать'),
     ],
@@ -2648,7 +2650,7 @@ function openStageManager() {
   });
 }
 
-async function openDealDetail(id) {
+async function openDealDetail(id, opts) {
   let d = byId(state.deals, id);
   if (!d) {
     // прямая ссылка #deals/{id}: сделки нет в памяти — тянем из БД
@@ -2999,15 +3001,47 @@ async function openDealDetail(id) {
   renderShip();
   const paneShip = el('div', { class:'chat-pane', 'data-pane':'shipment' }, [el('div', { class:'section-title', style:'padding:12px 14px 6px' }, 'Отгрузка'), shipList]);
 
+  // ----- Задачи: синхронно с общим разделом «Задачи» (общий state.tasks) -----
+  const tasksList = el('div', { style:'padding:8px 14px 14px;overflow-y:auto' });
+  function renderTasks() {
+    const tks = state.tasks.filter(tk => tk.deal === d.id);
+    tasksList.innerHTML = '';
+    if (!tks.length) {
+      tasksList.append(el('div', { class:'muted', style:'font-size:12px;padding:8px 0' }, 'Задач по сделке нет'));
+    } else {
+      tks.forEach(tk => {
+        const u = userById(tk.owner);
+        const overdue = !tk.done && taskDue(tk).kind === 'overdue';
+        const st = tk.done ? ['pill-success','✓ Выполнена'] : overdue ? ['pill-danger','⚠ Просрочена'] : ['pill-warn','⏳ Открыта'];
+        const prCls = tk.priority === 'high' ? 'pill-danger' : tk.priority === 'medium' ? 'pill-warn' : 'pill-muted';
+        const prLbl = tk.priority === 'high' ? 'высокий' : tk.priority === 'medium' ? 'средний' : 'низкий';
+        tasksList.append(el('div', { class:'card', style:'padding:10px 12px;margin-bottom:8px;cursor:pointer', onclick: () => { closeModal(); openTaskDetail(tk.id, d.id); } }, [
+          el('div', { style:'display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px' }, [
+            el('div', { class:'strong', style:'font-size:13px' }, tk.title || '—'),
+            el('span', { class:'pill ' + st[0], style:'font-size:11px' }, st[1]),
+          ]),
+          el('div', { class:'muted', style:'font-size:12px' }, [
+            (u && u.name ? u.name.split(' ')[0] : '—') + ' · ' + (tk.due ? fmtDate(String(tk.due).slice(0, 10)) : '—'),
+            el('span', { class:'pill ' + prCls, style:'font-size:10px;margin-left:6px' }, prLbl),
+          ]),
+        ]));
+      });
+    }
+    tasksList.append(el('button', { class:'btn btn-sm btn-primary', style:'margin-top:8px', onclick: () => { closeModal(); openNewTask(d.id); } }, '+ Задача'));
+  }
+  renderTasks();
+  const paneTasks = el('div', { class:'chat-pane', 'data-pane':'tasks' }, [el('div', { class:'section-title', style:'padding:12px 14px 6px' }, 'Задачи'), tasksList]);
+
   const tabs = el('div', { class:'chat-tabs' });
   function switchTab(key) {
     tabs.querySelectorAll('.chat-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === key));
-    [paneItems, paneWhats, paneComments, paneDocs, paneShip, paneHist].forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
+    [paneItems, paneWhats, paneComments, paneDocs, paneShip, paneTasks, paneHist].forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
   }
-  [['items','Товары'],['whatsapp','WhatsApp'],['comments','Комментарии'],['docs','Документы'],['shipment','Отгрузка'],['history','История']].forEach(([k, label]) =>
+  [['items','Товары'],['whatsapp','WhatsApp'],['comments','Комментарии'],['docs','Документы'],['shipment','Отгрузка'],['tasks','Задачи'],['history','История']].forEach(([k, label]) =>
     tabs.append(el('div', { class:'chat-tab' + (k === 'whatsapp' ? ' active' : ''), 'data-tab':k, onclick: () => switchTab(k) }, label)));
+  if (opts && opts.tab) switchTab(opts.tab); // открыть на нужной вкладке (напр. из задачи)
 
-  const right = el('div', { class:'deal-right' }, [tabs, paneItems, paneWhats, paneComments, paneDocs, paneShip, paneHist]);
+  const right = el('div', { class:'deal-right' }, [tabs, paneItems, paneWhats, paneComments, paneDocs, paneShip, paneTasks, paneHist]);
 
   // ----- Чат (Green API) -----
   function bubble(mm) {
@@ -4748,7 +4782,7 @@ VIEWS.tasks = () => {
     el('div', {}, [el('h1', {}, 'Задачи'), el('div', { class:'sub' }, subParts.join(' · '))]),
     el('div', { class:'actions' }, [
       el('button', { class:'btn', onclick: () => { TASKS_VIEW = isList ? 'kanban' : 'list'; navigate('tasks'); } }, isList ? '🗂 Канбан' : '📋 Список'),
-      el('button', { class:'btn btn-primary', onclick: openNewTask }, '+ Задача'),
+      el('button', { class:'btn btn-primary', onclick: () => openNewTask() }, '+ Задача'),
     ]),
   ]));
 
@@ -4902,9 +4936,11 @@ VIEWS.tasks = () => {
 };
 
 // Карточка задачи: просмотр и редактирование деталей
-function openTaskDetail(id) {
+function openTaskDetail(id, returnDealId) {
   const t = byId(state.tasks, id);
   if (!t) return;
+  const backToDeal = (typeof returnDealId === 'string') ? returnDealId : null; // вернуться в карточку сделки
+  const goBack = () => { if (backToDeal) openDealDetail(backToDeal, { tab: 'tasks' }); else navigate('tasks'); };
   const canEdit = role().seeAllData || t.owner === currentUser.id;
 
   const title = fInput('Название', t.title || '');
@@ -4918,14 +4954,14 @@ function openTaskDetail(id) {
   const fields = [title, desc, prio, owner, dealSel, due, time];
   if (!canEdit) fields.forEach(f => f.row.querySelectorAll('input,select,textarea').forEach(i => i.disabled = true));
 
-  const foot = [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')];
+  const foot = [el('button', { class:'btn', onclick: () => { closeModal(); if (backToDeal) openDealDetail(backToDeal, { tab: 'tasks' }); } }, 'Закрыть')];
   if (canEdit) {
     foot.push(el('button', { class:'btn btn-danger', onclick: async () => {
       if (!(await confirmModal({ title:'Удаление задачи', message:`Удалить задачу «${t.title}»?`, confirmText:'Удалить', danger:true }))) return;
       try {
         await window.__API__.apiFetch('tasks/' + t.id, { method:'DELETE' });
         const i = state.tasks.findIndex(x => x.id === t.id); if (i >= 0) state.tasks.splice(i, 1);
-        closeModal(); toast('Задача удалена', 'success'); navigate('tasks');
+        closeModal(); toast('Задача удалена', 'success'); goBack();
       } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
     } }, 'Удалить'));
     foot.push(el('button', { class:'btn btn-primary', onclick: async () => {
@@ -4940,7 +4976,7 @@ function openTaskDetail(id) {
       try {
         const saved = await window.__API__.apiFetch('tasks/' + t.id, { method:'PUT', body: window.__API__.toApi.task(upd) });
         Object.assign(t, window.__API__.map.task(saved));
-        closeModal(); toast('Задача сохранена', 'success'); navigate('tasks');
+        closeModal(); toast('Задача сохранена', 'success'); goBack();
       } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
     } }, 'Сохранить'));
   }
