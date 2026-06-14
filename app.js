@@ -4931,7 +4931,7 @@ VIEWS.tasks = () => {
     onReset: () => { TASKS_OWNER=''; TASKS_FROM=''; TASKS_TO=''; TASKS_STATUS=''; navigate('tasks'); },
     countActive: () => [TASKS_OWNER, TASKS_FROM, TASKS_TO, (isList ? TASKS_STATUS : '')].filter(Boolean).length,
   });
-  wrap.append(el('div', { class:'table-toolbar', style:'margin-bottom:12px' }, [ el('div', { style:'margin-left:auto' }, drawer.btn) ]));
+  wrap.append(el('div', { style:'margin-bottom:12px' }, [ drawer.btn ]));
   wrap.append(drawer.backdrop, drawer.drawer);
 
   const byDue = (a, b) => String(a.due || '').localeCompare(String(b.due || ''));
