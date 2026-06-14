@@ -1697,19 +1697,51 @@ async function syncSuppliers(env) {
     skip += TOP;
   }
 
+  // Контактная информация контрагентов: телефон (номер) и email по Ref_Key.
+  // Лежат в табличной части КонтактнаяИнформация (не прямым полем). Необязательно —
+  // если сущность недоступна в этой базе, синк продолжается без телефонов.
+  const phoneByRef = {}, emailByRef = {};
+  try {
+    let cskip = 0;
+    const cbase = 'Catalog_Контрагенты_КонтактнаяИнформация?$format=json&$orderby=Ref_Key&$select=Ref_Key,Тип,Представление';
+    while (true) {
+      const data = await odataGet(env, `${cbase}&$top=${TOP}&$skip=${cskip}`);
+      const rows = data.value || [];
+      if (!rows.length) break;
+      for (const r of rows) {
+        const ref = r.Ref_Key; const val = String(r['Представление'] || '').trim();
+        if (!ref || !val) continue;
+        const type = String(r['Тип'] || '');
+        if (/тел/i.test(type)) { if (!phoneByRef[ref]) phoneByRef[ref] = val; }
+        else if (/почт|email|mail/i.test(type)) { if (!emailByRef[ref]) emailByRef[ref] = val; }
+      }
+      if (rows.length < TOP) break;
+      cskip += TOP;
+    }
+  } catch (e) { /* контактная информация недоступна — пропускаем */ }
+
   let created = 0, updated = 0, noName = 0;
   const stmts = [];
   for (const ref of supRefs) {
     const name = String(nameByRef[ref] || '').trim();
     if (!name) { noName++; continue; } // имя появится после следующего синка контрагентов
     const bin = String(binByRef[ref] || '').trim();
+    const phone = String(phoneByRef[ref] || '').trim();
+    const email = String(emailByRef[ref] || '').trim();
     let id = byRef[ref] || byName[name.toLowerCase()] || null;
     if (id) {
-      stmts.push(env.DB.prepare('UPDATE suppliers SET name=?, bin=?, ext_ref=? WHERE id=?').bind(name, bin, ref, id));
+      // не затираем вручную заполненные поля пустыми значениями из 1С
+      stmts.push(env.DB.prepare(
+        `UPDATE suppliers SET name=?, ext_ref=?,
+           bin=COALESCE(NULLIF(?,''), bin),
+           phone=COALESCE(NULLIF(?,''), phone),
+           email=COALESCE(NULLIF(?,''), email)
+         WHERE id=?`
+      ).bind(name, ref, bin, phone, email, id));
       updated++;
     } else {
       id = genId();
-      stmts.push(env.DB.prepare('INSERT INTO suppliers (id,name,bin,share,ext_ref) VALUES (?,?,?,0,?)').bind(id, name, bin, ref));
+      stmts.push(env.DB.prepare('INSERT INTO suppliers (id,name,bin,phone,email,share,ext_ref) VALUES (?,?,?,?,?,0,?)').bind(id, name, bin, phone, email, ref));
       created++;
     }
     byRef[ref] = id; byName[name.toLowerCase()] = id;
