@@ -5921,6 +5921,86 @@ VIEWS.settings = () => {
   card.append(tab);
   wrap.append(card);
 
+  // Green API · WhatsApp: подключение, проверка, webhook, автораспределение сделок (директор)
+  if (can('edit-users')) {
+    const gInput = 'width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box';
+    const gCard = el('div', { class:'card mt-16' });
+    gCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Green API · WhatsApp')));
+    gCard.append(el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Подключение к WhatsApp через Green API. Входящие сообщения автоматически создают клиента и сделку.'));
+
+    const instI = el('input', { placeholder:'Instance ID (idInstance)', style: gInput });
+    const tokI = el('input', { placeholder:'API Token (apiTokenInstance)', style: gInput });
+    const statusPill = el('span', { class:'pill pill-muted', style:'font-size:12px' }, 'Статус: загрузка…');
+    const checkBtn = el('button', { class:'btn btn-sm' }, 'Проверить подключение');
+    const webhookI = el('input', { readonly:true, style: gInput + ';background:#F7F8FA;font-family:ui-monospace,monospace;font-size:11.5px', onclick: (e) => e.target.select() });
+    const autoChk = el('input', { type:'checkbox', style:'width:16px;height:16px' });
+    const mgrHost = el('div', { style:'margin-top:4px' });
+    const saveBtn = el('button', { class:'btn btn-sm btn-primary' }, 'Сохранить');
+
+    const managers = state.users.filter(u => (u.roleKey === 'manager') || /менеджер/i.test(u.role || ''));
+    let excludedSet = new Set();
+    const renderManagers = () => {
+      mgrHost.innerHTML = '';
+      if (!managers.length) { mgrHost.append(el('div', { class:'muted', style:'font-size:12px' }, 'Менеджеров нет — добавьте пользователей с ролью «Менеджер».')); return; }
+      managers.forEach(m => {
+        const cb = el('input', { type:'checkbox', checked: !excludedSet.has(m.id) ? 'checked' : null, style:'width:15px;height:15px' });
+        cb.onchange = () => { if (cb.checked) excludedSet.delete(m.id); else excludedSet.add(m.id); };
+        mgrHost.append(el('label', { style:'display:flex;align-items:center;gap:8px;font-size:13px;margin:4px 0;cursor:pointer' },
+          [cb, el('span', {}, m.name + (m.active === false ? ' (заблокирован)' : ''))]));
+      });
+    };
+
+    checkBtn.onclick = async () => {
+      checkBtn.disabled = true; statusPill.textContent = 'Проверка…'; statusPill.className = 'pill pill-muted';
+      try {
+        await window.__API__.apiFetch('greenapi/settings', { method:'POST', body:{ instance: instI.value.trim(), token: tokI.value.trim() } });
+        const r = await window.__API__.apiFetch('greenapi/check', { method:'POST' });
+        if (r && r.ok) { statusPill.textContent = '● Подключено' + (r.state ? ' (' + r.state + ')' : ''); statusPill.className = 'pill pill-success'; }
+        else { statusPill.textContent = '● ' + (r && (r.message || r.state) || 'не подключено'); statusPill.className = 'pill pill-danger'; }
+      } catch (e) { statusPill.textContent = '● Ошибка проверки'; statusPill.className = 'pill pill-danger'; }
+      checkBtn.disabled = false;
+    };
+    saveBtn.onclick = async () => {
+      saveBtn.disabled = true;
+      try {
+        const s = await window.__API__.apiFetch('greenapi/settings', { method:'POST', body:{
+          instance: instI.value.trim(), token: tokI.value.trim(), autodistribute: autoChk.checked, excluded: [...excludedSet],
+        } });
+        if (s && s.webhookUrl) webhookI.value = s.webhookUrl;
+        statusPill.textContent = (s && s.configured) ? '● Реквизиты заданы (проверьте подключение)' : '● Не настроен';
+        statusPill.className = 'pill ' + ((s && s.configured) ? 'pill-info' : 'pill-muted');
+        toast('Настройки Green API сохранены', 'success');
+      } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
+      saveBtn.disabled = false;
+    };
+
+    gCard.append(
+      el('div', { class:'form-row' }, [el('label', {}, 'Instance ID'), instI]),
+      el('div', { class:'form-row' }, [el('label', {}, 'API Token'), tokI]),
+      el('div', { style:'display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 12px' }, [checkBtn, statusPill]),
+      el('div', { class:'form-row' }, [el('label', {}, 'URL для webhook'), el('div', {}, [webhookI, el('div', { class:'muted', style:'font-size:11.5px;margin-top:4px' }, 'Вставьте этот адрес в консоли Green API (Webhook URL) и включите «Входящие сообщения».')])]),
+      el('div', { style:'border-top:1px solid var(--border);margin:12px 0 10px' }),
+      el('div', { style:'font-weight:600;font-size:13px;margin-bottom:6px' }, 'Автораспределение сделок (Round Robin)'),
+      el('label', { style:'display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:8px' }, [autoChk, el('span', {}, 'Включить автораспределение по очереди между активными менеджерами')]),
+      el('div', { class:'muted', style:'font-size:12px;margin-bottom:4px' }, 'Участвуют в распределении (снимите галочку, чтобы исключить менеджера):'),
+      mgrHost,
+      el('div', { style:'margin-top:12px' }, saveBtn),
+    );
+    wrap.append(gCard);
+
+    window.__API__.apiFetch('greenapi/settings').then(s => {
+      if (!s) return;
+      instI.value = s.instance || '';
+      tokI.value = s.token || '';
+      webhookI.value = s.webhookUrl || '';
+      autoChk.checked = !!s.autodistribute;
+      excludedSet = new Set(s.excluded || []);
+      renderManagers();
+      statusPill.textContent = s.configured ? '● Реквизиты заданы (проверьте подключение)' : '● Не настроен';
+      statusPill.className = 'pill ' + (s.configured ? 'pill-info' : 'pill-muted');
+    }).catch(() => { statusPill.textContent = '● Недоступно'; statusPill.className = 'pill pill-muted'; renderManagers(); });
+  }
+
   // Статус синхронизации с 1С (выполняется автоматически в фоне)
   if (can('edit-users')) {
     const syncCard = el('div', { class:'card mt-16' });
