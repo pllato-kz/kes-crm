@@ -79,6 +79,7 @@ const ICONS = {
   'archive': '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/>',
   'sliders': '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
   'filter': '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
+  'download': '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   'ruler': '<path d="M21.3 8.7 8.7 21.3a1 1 0 0 1-1.4 0l-4.6-4.6a1 1 0 0 1 0-1.4L15.3 2.7a1 1 0 0 1 1.4 0l4.6 4.6a1 1 0 0 1 0 1.4Z"/><path d="m7.5 10.5 2 2M10.5 7.5l2 2M13.5 4.5l2 2M4.5 13.5l2 2"/>',
   'thermometer': '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>',
   'antenna': '<path d="M2 12 7 2M7 12l5-10M12 12l5-10M17 12l5-10M4.5 7h15"/><path d="M12 16v6"/>',
@@ -2141,10 +2142,6 @@ VIEWS.dashboard = () => {
       el('h1', {}, `${greet}, ${firstName} 👋`),
       el('div', { class: 'sub' }, `Сводка по KazEnergoSnab · ${role().seeAllData ? 'все данные компании' : 'ваши клиенты и сделки'}`),
     ]),
-    el('div', { class: 'actions' }, [
-      el('button', { class: 'btn', onclick: () => exportReportPDF() }, '📥 Экспорт'),
-      el('button', { class: 'btn btn-primary', onclick: () => openNewDeal() }, '+ Новая сделка'),
-    ]),
   ]));
 
   // 4 KPI карточки
@@ -3307,7 +3304,7 @@ VIEWS.clients = () => {
     drawer.btn,
     el('div', { style:'display:flex;gap:8px;margin-left:auto' }, [
       el('button', { class: 'btn', onclick: () => openImport('clients') }, '📥 Импорт'),
-      el('button', { class: 'btn', onclick: () => exportClientsCSV() }, '📤 Экспорт'),
+      el('button', { class: 'btn', onclick: () => exportClientsCSV() }, [svgIconEl('download', 16), ' Экспорт']),
     ]),
   ]));
   tw.append(bulkBar);
