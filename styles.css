@@ -182,7 +182,7 @@ a:hover { text-decoration: underline; }
 .pipe-dd-trigger:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .pipe-dd-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60vw; }
 .pipe-dd-caret {
-  font-size: 12px; opacity: .6; color: var(--brand);
+  font-size: 12px; opacity: .7; color: var(--ink);
   transition: transform .18s ease, opacity .12s;
 }
 .pipe-dd-trigger:hover .pipe-dd-caret, .pipe-dd.open .pipe-dd-caret { opacity: 1; }
