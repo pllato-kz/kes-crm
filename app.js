@@ -5025,8 +5025,11 @@ VIEWS.leads = () => {
 // ============================================================
 VIEWS.suppliers = () => {
   const wrap = el('div');
+  const DEMO_SUPPLIER_IDS = ['sp1', 'sp2', 'sp3', 'sp4', 'sp5']; // демо-поставщики из seed — не показываем
+  const realSuppliers = () => state.suppliers.filter(s => !DEMO_SUPPLIER_IDS.includes(s.id));
+  const subEl = el('div', { class:'sub' }, `${realSuppliers().length} партнёров`);
   wrap.append(el('div', { class:'page-head' }, [
-    el('div', {}, [el('h1', {}, 'Поставщики'), el('div', { class:'sub' }, `${state.suppliers.length} партнёров · главный — EKF (78%)`)]),
+    el('div', {}, [el('h1', {}, 'Поставщики'), subEl]),
     el('div', { class:'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewSupplier }, '+ Поставщик')]),
   ]));
 
@@ -5040,7 +5043,8 @@ VIEWS.suppliers = () => {
   const grid = el('div', { class:'grid grid-3', style:'margin-top:16px' });
   const pager = el('div', { class:'row', style:'justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;gap:8px' });
   function renderGrid() {
-    const list = state.suppliers.filter(s => !q || (String(s.name||'') + ' ' + (s.bin||'') + ' ' + (s.contact||'') + ' ' + (s.phone||'') + ' ' + (s.email||'')).toLowerCase().includes(q));
+    if (subEl) subEl.textContent = `${realSuppliers().length} партнёров`;
+    const list = realSuppliers().filter(s => !q || (String(s.name||'') + ' ' + (s.bin||'') + ' ' + (s.contact||'') + ' ' + (s.phone||'') + ' ' + (s.email||'')).toLowerCase().includes(q));
     grid.innerHTML = ''; pager.innerHTML = '';
     if (!list.length) { grid.append(el('div', { class:'muted', style:'padding:16px' }, q ? 'Ничего не найдено' : 'Поставщиков нет')); return; }
     const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
