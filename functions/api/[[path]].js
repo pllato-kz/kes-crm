@@ -1665,53 +1665,59 @@ async function ensureSupplierExtRef(env) {
   SUPPLIER_EXTREF_OK = true;
 }
 
-// Поставщики 1С (контрагенты с признаком «Поставщик») -> поставщики CRM.
-// Идемпотентно по ext_ref (Ref_Key) и наименованию.
+// Поставщики 1С = контрагенты, у которых есть документы поступления (приходы).
+// Имена берём из уже синхронизированных контрагентов (таблица clients по ext_ref),
+// как и в syncReceipts. Идемпотентно по ext_ref (Ref_Key) и наименованию.
 async function syncSuppliers(env) {
   await ensureSupplierExtRef(env);
+  // существующие поставщики CRM
   const ex = await env.DB.prepare('SELECT id, ext_ref, name FROM suppliers').all();
   const byRef = {}, byName = {};
   for (const s of ex.results) { if (s.ext_ref) byRef[s.ext_ref] = s.id; if (s.name) byName[String(s.name).toLowerCase()] = s.id; }
 
-  const top = 1000;
-  let skip = 0, fetched = 0, created = 0, updated = 0;
-  const base = 'Catalog_Контрагенты?$format=json'
-    + '&$filter=DeletionMark eq false and IsFolder eq false and Поставщик eq true'
-    + '&$orderby=Ref_Key'
-    + '&$select=Ref_Key,Description,НаименованиеПолное';
+  // имя контрагента по Ref_Key (контрагенты лежат в clients после syncClients)
+  const cl = await env.DB.prepare('SELECT ext_ref, name FROM clients WHERE ext_ref IS NOT NULL').all();
+  const nameByRef = {};
+  for (const c of cl.results) nameByRef[c.ext_ref] = c.name;
 
+  // уникальные контрагенты-поставщики из документов поступления
+  const supRefs = new Set();
+  const TOP = 10000;
+  let skip = 0;
+  const hbase = 'Document_ПоступлениеТоваровУслуг?$format=json&$orderby=Ref_Key&$select=Контрагент_Key';
   while (true) {
-    const data = await odataGet(env, `${base}&$top=${top}&$skip=${skip}`);
+    const data = await odataGet(env, `${hbase}&$top=${TOP}&$skip=${skip}`);
     const rows = data.value || [];
     if (!rows.length) break;
-    fetched += rows.length;
-    const stmts = [];
-    for (const r of rows) {
-      const ref = r.Ref_Key;
-      const name = String(r.Description || r['НаименованиеПолное'] || '').trim();
-      if (!ref || !name) continue;
-      let id = byRef[ref] || byName[name.toLowerCase()] || null;
-      if (id) {
-        stmts.push(env.DB.prepare('UPDATE suppliers SET name=?, ext_ref=? WHERE id=?').bind(name, ref, id));
-        updated++;
-      } else {
-        id = genId();
-        stmts.push(env.DB.prepare('INSERT INTO suppliers (id,name,share,ext_ref) VALUES (?,?,0,?)').bind(id, name, ref));
-        created++;
-      }
-      byRef[ref] = id; byName[name.toLowerCase()] = id;
-    }
-    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
-    if (rows.length < top) break;
-    skip += top;
+    for (const r of rows) { const k = r['Контрагент_Key']; if (k && k !== '00000000-0000-0000-0000-000000000000') supRefs.add(k); }
+    if (rows.length < TOP) break;
+    skip += TOP;
   }
 
-  const info = `получено ${fetched}, новых ${created}, обновлено ${updated}`;
+  let created = 0, updated = 0, noName = 0;
+  const stmts = [];
+  for (const ref of supRefs) {
+    const name = String(nameByRef[ref] || '').trim();
+    if (!name) { noName++; continue; } // имя появится после следующего синка контрагентов
+    let id = byRef[ref] || byName[name.toLowerCase()] || null;
+    if (id) {
+      stmts.push(env.DB.prepare('UPDATE suppliers SET name=?, ext_ref=? WHERE id=?').bind(name, ref, id));
+      updated++;
+    } else {
+      id = genId();
+      stmts.push(env.DB.prepare('INSERT INTO suppliers (id,name,share,ext_ref) VALUES (?,?,0,?)').bind(id, name, ref));
+      created++;
+    }
+    byRef[ref] = id; byName[name.toLowerCase()] = id;
+  }
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+
+  const info = `контрагентов-поставщиков ${supRefs.size}, новых ${created}, обновлено ${updated}` + (noName ? `, без имени ${noName}` : '');
   await env.DB.prepare(
     `INSERT INTO sync_state (entity, last_at, info) VALUES ('suppliers_1c', datetime('now'), ?)
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
   ).bind(info).run();
-  return json({ fetched, created, updated });
+  return json({ suppliers: supRefs.size, created, updated, noName });
 }
 
 // Номенклатура 1С (только товары, Услуга=false) -> товары CRM.
