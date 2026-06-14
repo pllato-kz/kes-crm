@@ -117,7 +117,7 @@ const EMOJI_ICON = {
   '🔌':'plug','🧵':'plug','🧰':'tool','🛠':'tool','🔩':'tool','🗄':'archive','🔧':'wrench','🎛':'sliders',
   '🪜':'package','📏':'ruler','🌡':'thermometer','📡':'antenna','🔘':'circle-dot','🚦':'traffic',
   '🔋':'battery','👔':'briefcase','⏻':'power','🚫':'ban','⌕':'search','🛡':'shield','🔥':'flame',
-  '🧲':'magnet','📟':'cpu','🏛':'building','🧾':'receipt','💬':'message','📨':'send','📞':'phone','📲':'phone','📎':'paperclip',
+  '🧲':'magnet','📟':'cpu','🏛':'building','🏢':'building','🧾':'receipt','💬':'message','📨':'send','📞':'phone','📲':'phone','📎':'paperclip',
   '→':'arrow-right','←':'arrow-left','↓':'arrow-down','▲':'chevron-up','▼':'chevron-down','▸':'chevron-right','▾':'chevron-down',
 };
 // 'wrench' если нет — алиас на tool
