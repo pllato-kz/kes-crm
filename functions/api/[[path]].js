@@ -141,6 +141,11 @@ export async function onRequest(context) {
       return err(404, 'Неизвестная синхронизация: ' + seg.join('/'));
     }
 
+    // Green API webhook (входящие сообщения) — ПУБЛИЧНЫЙ (Green API без JWT), защита токеном в URL
+    if (seg[0] === 'greenapi' && seg[1] === 'webhook' && request.method === 'POST') {
+      return greenapiWebhook(env, request, url);
+    }
+
     // установка/смена пароля: первичная установка (хэш ещё null) разрешена без токена
     if (seg[0] === 'users' && seg[2] === 'password' && request.method === 'POST') {
       return setPasswordRoute(env, request, seg[1], auth);
@@ -207,6 +212,10 @@ export async function onRequest(context) {
       if (seg[1] === 'status' && request.method === 'GET') return greenapiStatus(env);
       if (seg[1] === 'send' && request.method === 'POST') return greenapiSend(env, request, auth);
       if (seg[1] === 'messages' && request.method === 'GET') return greenapiMessages(env, url);
+      // настройки/проверка подключения — только директор
+      if (seg[1] === 'settings' && request.method === 'GET') return auth.role === 'director' ? greenapiSettingsGet(env, url) : err(403, 'Только директор');
+      if (seg[1] === 'settings' && request.method === 'POST') return auth.role === 'director' ? greenapiSettingsSave(env, request, url) : err(403, 'Только директор');
+      if (seg[1] === 'check' && request.method === 'POST') return auth.role === 'director' ? greenapiCheck(env) : err(403, 'Только директор');
       return err(404, 'Неизвестный метод Green API');
     }
 
@@ -792,7 +801,7 @@ function greenapiCreds(env) {
 }
 
 async function greenapiStatus(env) {
-  const { inst, tok } = greenapiCreds(env);
+  const { inst, tok } = await greenCreds(env);
   return json({ configured: !!(inst && tok) });
 }
 
@@ -833,9 +842,9 @@ async function greenapiSend(env, request, auth) {
   const chatId = toChatId(phone);
   if (!chatId) return err(400, 'У клиента не указан корректный номер телефона');
 
-  const { inst, tok, base } = greenapiCreds(env);
+  const { inst, tok, base } = await greenCreds(env);
   if (!inst || !tok) {
-    return err(503, 'Green API не настроен: задайте секреты GREENAPI_INSTANCE и GREENAPI_TOKEN');
+    return err(503, 'Green API не настроен: задайте Instance ID и API Token в настройках (или секреты GREENAPI_*)');
   }
 
   let status = 'sent', extId = null, errMsg = null;
@@ -858,6 +867,141 @@ async function greenapiSend(env, request, auth) {
 
   if (status === 'error') return err(502, errMsg || 'Не удалось отправить сообщение');
   return json({ ok: true, id, idMessage: extId, chatId });
+}
+
+// Креды Green API: приоритет — настройки из CRM (app_settings), затем секреты окружения.
+async function greenCreds(env) {
+  await ensureAppSettings(env);
+  const inst = (await getSetting(env, 'greenapi_instance')) || env.GREENAPI_INSTANCE || '';
+  const tok = (await getSetting(env, 'greenapi_token')) || env.GREENAPI_TOKEN || '';
+  const base = (env.GREENAPI_URL || 'https://api.green-api.com').replace(/\/+$/, '');
+  return { inst, tok, base };
+}
+
+// Настройки Green API + автораспределения (для раздела настроек). webhook-токен генерируем при первом чтении.
+async function greenapiSettingsGet(env, url) {
+  await ensureAppSettings(env);
+  let wt = await getSetting(env, 'greenapi_webhook_token');
+  if (!wt) { wt = genId(); await setSetting(env, 'greenapi_webhook_token', wt); }
+  const { inst, tok } = await greenCreds(env);
+  const autod = await getSetting(env, 'autodistribute');
+  let excluded = []; try { excluded = JSON.parse((await getSetting(env, 'autodistribute_excluded')) || '[]'); } catch (e) {}
+  const origin = url ? url.origin : '';
+  return json({
+    instance: inst, token: tok, configured: !!(inst && tok),
+    autodistribute: autod !== '0', // по умолчанию включено
+    excluded,
+    webhookUrl: origin + '/api/greenapi/webhook?token=' + wt,
+  });
+}
+async function greenapiSettingsSave(env, request, url) {
+  await ensureAppSettings(env);
+  const b = await request.json().catch(() => ({}));
+  if (b.instance != null) await setSetting(env, 'greenapi_instance', String(b.instance).trim());
+  if (b.token != null) await setSetting(env, 'greenapi_token', String(b.token).trim());
+  if (b.autodistribute != null) await setSetting(env, 'autodistribute', b.autodistribute ? '1' : '0');
+  if (Array.isArray(b.excluded)) await setSetting(env, 'autodistribute_excluded', JSON.stringify(b.excluded));
+  return greenapiSettingsGet(env, url);
+}
+// «Проверить подключение» — getStateInstance Green API.
+async function greenapiCheck(env) {
+  const { inst, tok, base } = await greenCreds(env);
+  if (!inst || !tok) return json({ ok: false, state: 'no-creds', message: 'Instance ID и API Token не заданы' });
+  try {
+    const res = await fetch(`${base}/waInstance${inst}/getStateInstance/${tok}`);
+    const data = await res.json().catch(() => null);
+    if (!res.ok) return json({ ok: false, state: 'error', message: 'Green API ' + res.status + (data && data.message ? ': ' + data.message : '') });
+    const st = data && data.stateInstance;
+    return json({ ok: st === 'authorized', state: st || 'unknown' });
+  } catch (e) { return json({ ok: false, state: 'error', message: String((e && e.message) || e) }); }
+}
+
+// Round Robin: следующий активный менеджер (role_key='manager', active=1), не из списка исключённых.
+async function pickRoundRobinManager(env) {
+  if ((await getSetting(env, 'autodistribute')) === '0') return null; // распределение выключено
+  let excluded = []; try { excluded = JSON.parse((await getSetting(env, 'autodistribute_excluded')) || '[]'); } catch (e) {}
+  const r = await env.DB.prepare("SELECT id FROM users WHERE role_key='manager' AND active=1 ORDER BY id").all();
+  const managers = (r.results || []).map((x) => x.id).filter((id) => !excluded.includes(id));
+  if (!managers.length) return null;
+  const last = await getSetting(env, 'roundrobin_last');
+  const idx = managers.indexOf(last);                 // -1, если последнего нет в списке
+  const next = managers[(idx + 1) % managers.length]; // следующий по кругу (или первый)
+  await setSetting(env, 'roundrobin_last', next);
+  return next;
+}
+
+// Клиент по номеру телефона: ищем по совпадению цифр (и по последним 10), иначе создаём нового.
+async function findOrCreateClientByPhone(env, digits, name) {
+  const norm = (s) => String(s || '').replace(/\D/g, '');
+  const all = await env.DB.prepare('SELECT id, phone FROM clients').all();
+  const rows = all.results || [];
+  for (const c of rows) { if (c.phone && norm(c.phone) === digits) return { clientId: c.id, created: false }; }
+  const tail = digits.slice(-10);
+  if (tail.length === 10) for (const c of rows) { if (c.phone && norm(c.phone).slice(-10) === tail) return { clientId: c.id, created: false }; }
+  const id = genId();
+  const cname = ((name && name.trim()) || ('WhatsApp +' + digits)).slice(0, 150);
+  await env.DB.prepare("INSERT INTO clients (id, name, phone, created_at) VALUES (?,?,?,datetime('now'))").bind(id, cname, '+' + digits).run();
+  return { clientId: id, created: true };
+}
+
+// Активная (не закрытая/не отказная, не архивная) сделка клиента — чтобы не плодить сделки на каждое сообщение.
+async function openDealForClient(env, clientId) {
+  const r = await env.DB.prepare(
+    `SELECT d.id FROM deals d JOIN deal_stages s ON s.id = d.stage_id
+     WHERE d.client_id = ? AND (d.archived_at IS NULL OR d.archived_at = '')
+       AND s.label NOT LIKE '%акры%' AND s.label NOT LIKE '%тказ%' AND s.label NOT LIKE '%роигр%'
+     ORDER BY d.created_at DESC LIMIT 1`
+  ).bind(clientId).first();
+  return r ? r.id : null;
+}
+
+// Новая сделка из входящего сообщения: первый этап воронки + менеджер по Round Robin.
+async function createIncomingDeal(env, clientId, text) {
+  const stage = await env.DB.prepare('SELECT id FROM deal_stages ORDER BY sort, rowid LIMIT 1').first();
+  if (!stage || !stage.id) throw new Error('нет этапов воронки');
+  const mgr = await pickRoundRobinManager(env);
+  const id = genId();
+  const no = 'WA-' + Date.now();
+  const title = (String(text || '').trim().slice(0, 60)) || 'Заявка из WhatsApp';
+  const today = new Date().toISOString().slice(0, 10);
+  await env.DB.prepare(
+    `INSERT INTO deals (id, no, title, client_id, manager_id, stage_id, amount, items, created, created_at)
+     VALUES (?,?,?,?,?,?,0,0,?,datetime('now'))`
+  ).bind(id, no, title, clientId, mgr, stage.id, today).run();
+  try { await env.DB.prepare('INSERT INTO deal_stage_history (deal_id, from_stage, to_stage, user_id) VALUES (?,?,?,?)').bind(id, null, stage.id, null).run(); } catch (e) {}
+  return id;
+}
+
+// Webhook Green API: входящее сообщение -> клиент (если нет) + сделка (если нет открытой) + лог.
+async function greenapiWebhook(env, request, url) {
+  await ensureMessagesSchema(env); await ensureAppSettings(env); await ensureArchiveColumns(env);
+  const wt = await getSetting(env, 'greenapi_webhook_token');
+  if (wt && url.searchParams.get('token') !== wt) return err(403, 'Неверный токен webhook');
+  const body = await request.json().catch(() => null);
+  if (!body) return json({ ok: true });
+  if (body.typeWebhook !== 'incomingMessageReceived') return json({ ok: true, skipped: body.typeWebhook || 'none' });
+  const chatId = (body.senderData && body.senderData.chatId) || '';
+  if (!/@c\.us$/.test(String(chatId))) return json({ ok: true, skipped: 'not-private' }); // групповые чаты игнорируем
+  const digits = String(chatId).replace(/@c\.us$/, '').replace(/\D/g, '');
+  if (!digits) return json({ ok: true, skipped: 'no-phone' });
+  const senderName = (body.senderData && body.senderData.senderName) || '';
+  const md = body.messageData || {};
+  let text = '';
+  if (md.textMessageData) text = md.textMessageData.textMessage || '';
+  else if (md.extendedTextMessageData) text = md.extendedTextMessageData.text || '';
+  else text = '[' + (md.typeMessage || 'сообщение') + ']';
+
+  const { clientId, created } = await findOrCreateClientByPhone(env, digits, senderName);
+  let dealId = await openDealForClient(env, clientId);
+  let newDeal = false;
+  if (!dealId) { dealId = await createIncomingDeal(env, clientId, text); newDeal = true; }
+
+  await env.DB.prepare(
+    `INSERT INTO messages (id, deal_id, client_id, phone, direction, channel, text, status, ext_id, user_id, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))`
+  ).bind(genId(), dealId, clientId, '+' + digits, 'in', 'whatsapp', text, 'received', body.idMessage || null, null).run();
+
+  return json({ ok: true, clientId, dealId, newClient: created, newDeal });
 }
 
 // Агрегаты раздела «Отчёты» — считаются в SQL по данным CRM (сделки/позиции).
