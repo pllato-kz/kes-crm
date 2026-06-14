@@ -1556,6 +1556,99 @@ function openShipmentDetail(id) {
   });
 }
 
+// Документ отгрузки → модалка со сводкой по сделке (без перехода в карточку).
+// Показывает сделку/клиента/сумму/товары/статус/дату; действия: смена статуса,
+// переход в сделку, печать ТТН. Всё синхронизируется со state без перезагрузки.
+async function openShipmentDoc(r) {
+  const ship = r.kind === 'ship' ? byId(state.shipments, r.id) : null;
+  const deal = byId(state.deals, r.deal);
+  const cl = clientById((ship && ship.client) || (deal && deal.client));
+  const created = (deal && deal.created) || (ship && ship.date) || '';
+  const amount = deal ? deal.amount : null;
+
+  const STMAP = { delivered:['Доставлено','pill-success'], planned:['Запланировано','pill-info'], shipped:['В пути','pill-warn'] };
+  const stKey = ship ? ((ship.status === 'delivered' || ship.status === 'planned') ? ship.status : 'shipped') : null;
+  const statusPill = ship
+    ? el('span', { class:'pill ' + STMAP[stKey][1] }, STMAP[stKey][0])
+    : el('span', { class:'pill pill-warn' }, 'Отгружена (по сделке)');
+
+  const itemsHost = el('div', { class:'muted', style:'font-size:13px' }, 'Загрузка позиций…');
+
+  const body = el('div', {}, [
+    el('dl', { class:'kv' }, [
+      el('dt', {}, 'Сделка'),        el('dd', { class:'strong' }, deal ? deal.title : (ship ? ship.no : '—')),
+      el('dt', {}, 'Клиент'),         el('dd', {}, cl.name),
+      el('dt', {}, 'Сумма'),          el('dd', { class:'strong', style:'font-size:16px' }, amount != null ? fmtMoney(amount) : '—'),
+      el('dt', {}, 'Дата создания'),  el('dd', {}, created ? fmtDate(created) : '—'),
+      el('dt', {}, 'Статус'),         el('dd', {}, statusPill),
+    ]),
+    el('div', { style:'margin-top:12px' }, [
+      el('div', { style:'font-weight:600;font-size:12px;margin-bottom:6px;color:#6B7280;text-transform:uppercase;letter-spacing:.5px' }, 'Товары'),
+      itemsHost,
+    ]),
+  ]);
+
+  const foot = [];
+  // Изменить статус (только для реальной отгрузки) — сразу синхронизирует и сделку
+  if (ship) {
+    const sel = el('select', { style:'padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;height:36px;cursor:pointer' }, [
+      el('option', { value:'planned' }, 'Запланировано'),
+      el('option', { value:'shipped' }, 'Отгружено / в пути'),
+      el('option', { value:'delivered' }, 'Доставлено'),
+    ]);
+    sel.value = stKey;
+    sel.onchange = async () => {
+      sel.disabled = true;
+      const ok = await setShipmentStatus(ship, sel.value);
+      sel.disabled = false;
+      if (ok) {
+        const k = (ship.status === 'delivered' || ship.status === 'planned') ? ship.status : 'shipped';
+        statusPill.textContent = STMAP[k][0]; statusPill.className = 'pill ' + STMAP[k][1];
+        toast('Статус обновлён · сделка синхронизирована', 'success');
+        if (CURRENT_VIEW) navigate(CURRENT_VIEW); // обновляем список под модалкой, без перезагрузки
+      } else { sel.value = (ship.status === 'delivered' || ship.status === 'planned') ? ship.status : 'shipped'; }
+    };
+    foot.push(sel);
+  }
+  if (deal) foot.push(el('button', { class:'btn', onclick: () => { closeModal(); openDealDetail(deal.id); } }, 'Открыть сделку'));
+  foot.push(el('button', { class:'btn btn-primary', onclick: () => printShipment(ship || {
+    no: 'ТТН (по сделке)', deal: r.deal, client: deal && deal.client, date: created,
+    transport: '', driver: '', destination: (deal && deal.address) || '', items: deal ? deal.items : 0, weight: 0,
+  }) }, '🖨 Печать ТТН'));
+
+  openModal({ title: ship ? ('Отгрузка ' + ship.no) : ('Документ · ' + (deal ? deal.title : '—')), body, foot });
+
+  // Подгрузка позиций по связанной сделке (с дозагрузкой недостающих товаров)
+  if (r.deal) {
+    try {
+      const d = await window.__API__.loadDeal(r.deal);
+      const lis = d.lineItems || [];
+      const missing = [...new Set(lis.map(it => it.product).filter(pid => pid && !byId(state.products, pid)))];
+      await Promise.all(missing.map(async pid => {
+        try { const row = await window.__API__.apiFetch('products/' + pid); const p = window.__API__.map.product(row); if (p && p.id && !byId(state.products, p.id)) state.products.push(p); } catch (e) {}
+      }));
+      itemsHost.innerHTML = '';
+      if (!lis.length) { itemsHost.append(el('div', { class:'muted', style:'font-size:13px' }, 'Позиций нет')); return; }
+      const tbl = el('table', { class:'data line-items-table' });
+      tbl.append(el('thead', {}, el('tr', {}, [el('th', {}, 'Товар'), el('th', { class:'num' }, 'Кол-во'), el('th', { class:'num' }, 'Цена'), el('th', { class:'num' }, 'Сумма')])));
+      const tb = el('tbody');
+      lis.forEach(it => {
+        const p = byId(state.products, it.product);
+        const price = it.priceUsed != null ? it.priceUsed : (p ? p.priceWholesale : 0);
+        tb.append(el('tr', {}, [
+          el('td', {}, p ? p.name : 'Товар'),
+          el('td', { class:'num' }, it.qty),
+          el('td', { class:'num' }, fmtMoney(price)),
+          el('td', { class:'num strong' }, fmtMoney(it.qty * price)),
+        ]));
+      });
+      tbl.append(tb); itemsHost.append(tbl);
+    } catch (e) { itemsHost.innerHTML = ''; itemsHost.append(el('div', { class:'muted', style:'font-size:13px' }, 'Не удалось загрузить позиции')); }
+  } else {
+    itemsHost.innerHTML = ''; itemsHost.append(el('div', { class:'muted', style:'font-size:13px' }, 'Нет связанной сделки'));
+  }
+}
+
 function openInvoiceDetail(id) {
   const iv = byId(state.invoices, id);
   if (!iv) return;
@@ -4553,7 +4646,7 @@ VIEWS.shipments = () => {
     const list = rowsData.filter(matches);
     const rows = list.map(r => {
       const cl = clientById(r.client);
-      const onclick = () => { const dl = byId(state.deals, r.deal); if (dl) openDealDetail(dl.id); else openShipmentDetail(r.id); };
+      const onclick = () => openShipmentDoc(r);
       return el('tr', { style:'cursor:pointer', onclick }, [
         el('td', { class:'strong' }, r.no),
         el('td', {}, r.date ? fmtDate(r.date) : '—'),
