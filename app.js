@@ -6183,7 +6183,7 @@ function renderShell() {
     { v: 'warehouse',  icon: '🏭', label: 'Склад' },
     { v: 'shipments',  icon: '🚚', label: 'Отгрузки' },
     { v: 'invoices',   icon: '📄', label: 'Документы' },
-    { v: 'suppliers',  icon: '🤝', label: 'Поставщики' },
+    { v: 'suppliers',  icon: '🏢', label: 'Поставщики' },
     { v: 'tasks',      icon: '✅', label: 'Задачи',     badge: visibleTasks().filter(t => !t.done).length },
     { v: 'reports',    icon: '📈', label: 'Отчёты' },
     { v: 'settings',   icon: '⚙️', label: 'Настройки' },
