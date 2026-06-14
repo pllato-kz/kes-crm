@@ -4056,10 +4056,11 @@ async function openStockDoc(type, docId, onDone) {
     const search = el('input', { placeholder:'Добавить товар: поиск по артикулу/названию…', style:'width:100%' });
     const list = el('div', { class:'product-picker', style:'margin-top:6px' });
     let seq = 0;
+    let pickerLimit = 100; // пагинация: показываем по 100, «Показать ещё» добавляет ещё 100 (доступ ко всему складу)
     async function fill(q = '') {
       const my = ++seq; const ql = q.trim();
       list.innerHTML = ''; list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Загрузка…'));
-      let rows; try { const resp = await window.__API__.apiFetch('products?limit=100' + (ql ? '&q=' + encodeURIComponent(ql) : '')); rows = (resp.data || []).map(window.__API__.map.product); } catch (e) { rows = []; }
+      let rows; try { const resp = await window.__API__.apiFetch('products?limit=' + pickerLimit + (ql ? '&q=' + encodeURIComponent(ql) : '')); rows = (resp.data || []).map(window.__API__.map.product); } catch (e) { rows = []; }
       if (my !== seq) return;
       list.innerHTML = '';
       rows.forEach(p => list.append(el('div', { class:'pp-item', onclick: () => {
@@ -4067,9 +4068,13 @@ async function openStockDoc(type, docId, onDone) {
         renderItems();
       } }, [el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku)]), el('span', { class:'pp-price' }, 'ост. ' + p.stock)])));
       if (!rows.length) list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено'));
+      else if (rows.length >= pickerLimit) {
+        list.append(el('div', { class:'pp-item', style:'justify-content:center;color:var(--brand);font-weight:600',
+          onclick: () => { pickerLimit += 100; fill(search.value); } }, '↓ Показать ещё'));
+      }
     }
-    let dt; search.oninput = (e) => { const v = e.target.value; clearTimeout(dt); dt = setTimeout(() => fill(v), 250); };
-    fill(); // показываем все товары сразу
+    let dt; search.oninput = (e) => { const v = e.target.value; clearTimeout(dt); dt = setTimeout(() => { pickerLimit = 100; fill(v); }, 250); };
+    fill(); // показываем товары со склада
     pickerHost.append(search, list);
   }
 
