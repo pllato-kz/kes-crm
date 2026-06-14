@@ -5725,6 +5725,28 @@ VIEWS.settings = () => {
   info.append(el('div', { style:'padding:4px 4px 0' }, cFields.map(f => f.row)));
   wrap.append(info);
 
+  // Обслуживание: удаление демо/захардкоженных данных (только директор)
+  if (currentUser && currentUser.roleKey === 'director') {
+    const maint = el('div', { class:'card', style:'margin-top:16px' });
+    maint.append(el('div', { class:'card-head' }, el('h3', {}, 'Обслуживание')));
+    const clearBtn = el('button', { class:'btn btn-danger btn-sm', onclick: async (e) => {
+      if (!(await confirmModal({ title:'Удаление демо-данных', message:'Удалить все фиктивные (демо) записи: сделки, клиентов, документы, поставщиков, товары, отгрузки? Данные, синхронизированные из 1С, будут сохранены. Действие необратимо.', confirmText:'Удалить', cancelText:'Отмена', danger:true }))) return;
+      const btn = e.currentTarget; const old = btn.textContent; btn.disabled = true; btn.textContent = 'Удаление…';
+      try {
+        const res = await window.__API__.apiFetch('admin/clear-demo', { method:'POST' });
+        const c = (res && res.cleared) || {};
+        await loadData();
+        toast(`Удалено: сделок ${c.deals||0}, клиентов ${c.clients||0}, счетов ${c.invoices||0}, поставщиков ${c.suppliers||0}, товаров ${c.products||0}, отгрузок ${c.shipments||0}`, 'success');
+        navigate('settings');
+      } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); btn.disabled = false; btn.textContent = old; }
+    } }, '🧹 Удалить демо-данные');
+    maint.append(el('div', { style:'padding:12px 16px' }, [
+      el('div', { class:'muted', style:'font-size:13px;margin-bottom:10px;line-height:1.5' }, 'Удаляет фиктивные записи из исходного наполнения (сделки, клиенты, документы, поставщики, товары, отгрузки). Записи, подтянутые из 1С, не затрагиваются.'),
+      clearBtn,
+    ]));
+    wrap.append(maint);
+  }
+
   return wrap;
 };
 
