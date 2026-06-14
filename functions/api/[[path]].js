@@ -1688,12 +1688,33 @@ async function pushInvoiceWithStatus(env, invoiceId) {
   } catch (e) {}
 }
 
+// Уникальный номер счёта присваивает сервер: фронт нумерует по длине списка
+// (без архивных), а в БД номера архивных счетов остаются занятыми → коллизии.
+// Берём предложенный номер, если он свободен, иначе инкрементируем хвостовое число.
+function splitInvoiceNo(no) {
+  const m = String(no || '').match(/^(.*?)(\d+)(\D*)$/);
+  if (!m) return null;
+  return { prefix: m[1], num: parseInt(m[2], 10), width: m[2].length, suffix: m[3] };
+}
+async function uniqueInvoiceNo(env, preferred) {
+  const all = await env.DB.prepare('SELECT no FROM invoices').all();
+  const used = new Set((all.results || []).map((r) => String(r.no)));
+  if (preferred && !used.has(String(preferred))) return preferred;
+  const base = splitInvoiceNo(preferred) || { prefix: `СФ-${new Date().getFullYear()}-`, num: 0, width: 4, suffix: '' };
+  for (let i = 1; i <= 100000; i++) {
+    const cand = base.prefix + String(base.num + i).padStart(base.width, '0') + base.suffix;
+    if (!used.has(cand)) return cand;
+  }
+  return base.prefix + Date.now(); // крайний случай — гарантированно уникально
+}
+
 // Сохранение счёта в CRM + фоновая отправка черновика в 1С (не задерживает ответ).
 async function writeInvoice(env, request, method, id, ctx) {
   const body = await request.json().catch(() => ({}));
   await ensureArchiveColumns(env);
   await ensureInvoiceExtRef(env);
   const invId = id || body.id || genId();
+  if (method === 'POST') body.no = await uniqueInvoiceNo(env, body.no);
   const cols = (await columns(env, 'invoices')).map((c) => c.name);
   const data = { ...body, id: invId };
   const keys = Object.keys(data).filter((k) => cols.includes(k));
