@@ -4680,26 +4680,8 @@ VIEWS.suppliers = () => {
   const wrap = el('div');
   wrap.append(el('div', { class:'page-head' }, [
     el('div', {}, [el('h1', {}, 'Поставщики'), el('div', { class:'sub' }, `${state.suppliers.length} партнёров · главный — EKF (78%)`)]),
-    el('div', { class:'actions' }, [
-      (currentUser && currentUser.roleKey === 'director') ? el('button', { class:'btn', onclick: (e) => syncSuppliers1C(e.currentTarget) }, '🔄 Подтянуть из 1С') : null,
-      el('button', { class:'btn btn-primary', onclick: openNewSupplier }, '+ Поставщик'),
-    ]),
+    el('div', { class:'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewSupplier }, '+ Поставщик')]),
   ]));
-
-  // Ручная синхронизация поставщиков с 1С (директор)
-  async function syncSuppliers1C(btn) {
-    const old = btn.textContent; btn.disabled = true; btn.textContent = 'Синхронизация…';
-    try {
-      const res = await window.__API__.apiFetch('sync/1c/suppliers', { method: 'POST' });
-      const list = await window.__API__.apiFetch('suppliers');
-      state.suppliers = (list || []).map(window.__API__.map.supplier);
-      toast(`Из 1С: новых ${res.created || 0}, обновлено ${res.updated || 0}`, 'success');
-      navigate('suppliers');
-    } catch (err) {
-      toast('Ошибка синхронизации: ' + ((err && err.message) || err), 'error');
-      btn.disabled = false; btn.textContent = old;
-    }
-  }
 
   // Поиск по названию / БИН / контакту / телефону / email
   let q = '', page = 1; const PAGE_SIZE = 12;
@@ -4745,6 +4727,16 @@ VIEWS.suppliers = () => {
   renderGrid();
   wrap.append(grid);
   wrap.append(pager);
+
+  // Тихо подтягиваем актуальный список из БД (его наполняет фоновая синхронизация с 1С),
+  // чтобы новые поставщики появлялись со временем без ручных действий и перезагрузки.
+  (async () => {
+    try {
+      const list = await window.__API__.apiFetch('suppliers');
+      if (Array.isArray(list)) { state.suppliers = list.map(window.__API__.map.supplier); page = 1; renderGrid(); }
+    } catch (e) { /* офлайн/ошибка — оставляем текущие данные */ }
+  })();
+
   return wrap;
 };
 
