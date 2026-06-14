@@ -1749,13 +1749,16 @@ async function writeInvoice(env, request, method, id, ctx) {
 }
 
 // --------------------------------------------------------------------------
-// CRM → 1С (этап 3): отгрузка CRM -> черновик «Реализация товаров и услуг».
+// CRM → 1С (этап 3): отгрузка CRM -> документ «Реализация товаров и услуг»
+// с АВТО-ПРОВЕДЕНИЕМ (списание склада).
 //
-// ⚠ Самый ответственный обмен — влияет на налоги/ЭСФ. Поэтому он ВЫКЛЮЧЕН по
-// умолчанию и срабатывает, только если задан секрет ONEC_SHIPMENTS=1 (включать
-// после этапа 2 и согласования с бухгалтером). Документ всегда непроведённый
-// черновик (Posted=false) — ничего не списывает и не формирует ЭСФ сам по себе.
+// ⚠ Самый ответственный обмен — влияет на налоги/ЭСФ и реально списывает склад.
+// Поэтому ВЫКЛЮЧЕН по умолчанию: срабатывает только при секрете ONEC_SHIPMENTS=1
+// или включённом тумблере в CRM (Настройки → Синхронизация, директор). Включать
+// после этапа 2 и согласования с бухгалтером.
 //
+// Документ создаётся и сразу ПРОВОДИТСЯ командой Post() — в 1С уменьшается остаток
+// по номенклатуре. Затем CRM мгновенно подтягивает новые остатки из 1С.
 // Реквизиты резолвятся по названию (как на этапе 2) + склад «по умолчанию».
 // --------------------------------------------------------------------------
 const ONEC_SHIP_DOC = 'Document_РеализацияТоваровУслуг'; // документ реализации в 1С
@@ -1851,7 +1854,7 @@ async function pushShipmentToOnec(env, shipmentId) {
 
   const doc = {
     Date: onecDate(sh.date),
-    Posted: false, // черновик — не проводим
+    Posted: false, // создаём непроведённым, проводим отдельной командой Post() ниже
     'Организация_Key': orgRef,
     'Контрагент_Key': cl.ext_ref,
     'ДоговорКонтрагента_Key': dogRef,
@@ -1864,21 +1867,41 @@ async function pushShipmentToOnec(env, shipmentId) {
 
   let ref = sh.ext_ref;
   if (ref) {
+    // обновление: снимаем проведение (если было), правим, проведём заново ниже
+    try { await odataWrite(env, 'POST', `${ONEC_SHIP_DOC}(guid'${ref}')/Unpost`, {}); } catch (e) {}
     await odataWrite(env, 'PATCH', `${ONEC_SHIP_DOC}(guid'${ref}')`, doc);
   } else {
     const created = await odataWrite(env, 'POST', ONEC_SHIP_DOC, doc);
     ref = created && created.Ref_Key;
     if (ref) await env.DB.prepare('UPDATE shipments SET ext_ref=? WHERE id=?').bind(ref, shipmentId).run();
   }
-  return ref;
+  if (!ref) throw new Error('1С не вернула ссылку на документ реализации');
+
+  // Проведение = реальное списание склада. Проводим только если есть позиции с привязкой к 1С;
+  // пустой документ оставляем черновиком (списывать нечего). PostingModeOperational=false —
+  // обычное (неоперативное) проведение, не блокируется проверкой оперативных остатков.
+  let posted = false;
+  if (lines.length) {
+    await odataWrite(env, 'POST', `${ONEC_SHIP_DOC}(guid'${ref}')/Post?PostingModeOperational=false`, {});
+    posted = true;
+  }
+  return { ref, posted, lines: lines.length };
 }
 
 async function pushShipmentWithStatus(env, shipmentId) {
   if (!env.ODATA_URL || !(await isShipmentsPushEnabled(env))) return;
   let info;
   try {
-    const ref = await pushShipmentToOnec(env, shipmentId);
-    info = `ok: отгрузка ${shipmentId} → 1С${ref ? ` (${ref})` : ''}`;
+    const r = await pushShipmentToOnec(env, shipmentId);
+    if (r && r.posted) {
+      info = `ok: отгрузка ${shipmentId} → реализация проведена, склад списан (позиций ${r.lines})`;
+      // мгновенно обновляем остатки в CRM из 1С (не ждём 15-минутной автосинхронизации)
+      try { await syncStock(env); } catch (e) {}
+    } else if (r && r.ref) {
+      info = `ok: отгрузка ${shipmentId} → черновик без проведения (нет позиций с привязкой к 1С)`;
+    } else {
+      info = `пропуск: отгрузка ${shipmentId} — нет клиента/данных`;
+    }
   } catch (e) {
     info = `ошибка: отгрузка ${shipmentId} — ${(e && e.message) || e}`;
   }
