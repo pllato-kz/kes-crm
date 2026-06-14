@@ -113,7 +113,7 @@ export async function onRequest(context) {
       if (seg[1] === 'status' && request.method === 'GET') return syncStatus(env);
       // этап 4: очередь отправки в 1С — сводка/лог (GET) и принудительный досыл (POST)
       if (seg[1] === 'queue' && request.method === 'GET') return onecQueueStatus(env);
-      if (seg[1] === 'queue' && request.method === 'POST') return json(await processOnecQueue(env, 50));
+      if (seg[1] === 'queue' && request.method === 'POST') return json(await processOnecQueue(env, 50, true));
       // переключатель этапа 3 (отгрузки → 1С): только директор (проверка выше)
       if (seg[1] === 'flags' && request.method === 'GET') {
         return json({ shipments: await isShipmentsPushEnabled(env), shipments_env_forced: onecShipmentsEnvForced(env) });
@@ -2021,12 +2021,15 @@ function tryOnecNow(env, kind, refId, ctx) {
 }
 
 // Обработать «созревшие» задачи очереди (вызывается из cron runDueSyncs и по кнопке).
-async function processOnecQueue(env, limit = 25) {
+// force=true (ручной «Досыл сейчас») игнорирует паузу backoff и берёт также задачи
+// в статусе error — чтобы можно было сразу повторить и увидеть актуальную ошибку.
+async function processOnecQueue(env, limit = 25, force = false) {
   if (!env.ODATA_URL) return { processed: 0, ok: 0, fail: 0 };
   await ensureOnecQueue(env);
-  const dueRows = await env.DB.prepare(
-    `SELECT kind, ref_id FROM onec_queue WHERE status='pending' AND (next_at IS NULL OR next_at <= datetime('now')) ORDER BY next_at LIMIT ?`
-  ).bind(limit).all();
+  const sql = force
+    ? `SELECT kind, ref_id FROM onec_queue WHERE status IN ('pending','error') ORDER BY updated_at LIMIT ?`
+    : `SELECT kind, ref_id FROM onec_queue WHERE status='pending' AND (next_at IS NULL OR next_at <= datetime('now')) ORDER BY next_at LIMIT ?`;
+  const dueRows = await env.DB.prepare(sql).bind(limit).all();
   let ok = 0, fail = 0;
   for (const r of (dueRows.results || [])) {
     if (await attemptOnec(env, r.kind, r.ref_id)) ok++; else fail++;
@@ -2124,12 +2127,26 @@ async function filesRoute({ request, env }, seg) {
 // --------------------------------------------------------------------------
 // Синхронизация с 1С (OData). Креды — в секретах ODATA_URL/USER/PASSWORD.
 // --------------------------------------------------------------------------
+// Извлекает человекочитаемое сообщение об ошибке из тела ответа 1С (OData error JSON или HTML).
+function onecErrText(txt) {
+  if (!txt) return '';
+  try {
+    const j = JSON.parse(txt);
+    const m = (j['odata.error'] && j['odata.error'].message) || j.message;
+    if (m) return String(m.value || m).slice(0, 220);
+  } catch (e) {}
+  return String(txt).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 220);
+}
+
 async function odataGet(env, path) {
   if (!env.ODATA_URL) throw new Error('ODATA_URL не задан (секрет)');
   const url = encodeURI(env.ODATA_URL.replace(/\/+$/, '') + '/' + path);
   const auth = 'Basic ' + btoa(`${env.ODATA_USER}:${env.ODATA_PASSWORD}`);
   const res = await fetch(url, { headers: { Authorization: auth, Accept: 'application/json' } });
-  if (!res.ok) throw new Error('1С OData ' + res.status + ' на ' + path.split('?')[0]);
+  if (!res.ok) {
+    let d = ''; try { d = onecErrText(await res.text()); } catch (e) {}
+    throw new Error('1С OData ' + res.status + ' на ' + path.split('?')[0] + (d ? ' — ' + d : ''));
+  }
   return res.json();
 }
 
@@ -2145,7 +2162,10 @@ async function odataWrite(env, method, path, body) {
     body: JSON.stringify(body || {}),
     signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
   });
-  if (!res.ok) throw new Error('1С OData ' + method + ' ' + res.status + ' на ' + path.split('?')[0]);
+  if (!res.ok) {
+    let d = ''; try { d = onecErrText(await res.text()); } catch (e) {}
+    throw new Error('1С OData ' + method + ' ' + res.status + ' на ' + path.split('?')[0] + (d ? ' — ' + d : ''));
+  }
   return res.json().catch(() => null);
 }
 
