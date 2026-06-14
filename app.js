@@ -2780,6 +2780,7 @@ async function openDealDetail(id, opts) {
     const search = el('input', { placeholder:'Поиск товара по артикулу/названию…', style:'width:100%;padding:8px 10px;border:1px solid #E5E7EB;border-radius:6px;font-size:13px;outline:none' });
     const list = el('div', { class:'product-picker' });
     let seq = 0;
+    let pickerLimit = 100; // сколько товаров показываем; «Показать ещё» увеличивает
     // Поиск идёт по живому каталогу (актуальные товары и цены), а не по кешу в памяти
     async function fill(q = '') {
       const my = ++seq;
@@ -2788,11 +2789,11 @@ async function openDealDetail(id, opts) {
       list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Поиск…'));
       let rows;
       try {
-        const resp = await window.__API__.apiFetch('products?limit=50' + (ql ? '&q=' + encodeURIComponent(ql) : ''));
+        const resp = await window.__API__.apiFetch('products?limit=' + pickerLimit + (ql ? '&q=' + encodeURIComponent(ql) : ''));
         rows = (resp.data || resp || []).map(window.__API__.map.product);
         rows.forEach(p => { const ex = byId(state.products, p.id); if (ex) Object.assign(ex, p); else state.products.push(p); }); // держим каталог в памяти актуальным
       } catch (e) {
-        rows = state.products.filter(p => !ql || (p.name + p.sku).toLowerCase().includes(ql.toLowerCase())).slice(0, 50);
+        rows = state.products.filter(p => !ql || (p.name + p.sku).toLowerCase().includes(ql.toLowerCase())).slice(0, pickerLimit);
       }
       if (my !== seq) return; // пришёл более свежий запрос
       list.innerHTML = '';
@@ -2816,8 +2817,14 @@ async function openDealDetail(id, opts) {
         ]));
       });
       if (!rows.length) list.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено'));
+      // если уперлись в лимит — даём подгрузить ещё (доступ ко всему складу)
+      else if (rows.length >= pickerLimit) {
+        list.append(el('div', { class:'pp-item', style:'justify-content:center;color:var(--brand);font-weight:600',
+          onclick: () => { pickerLimit += 100; fill(search.value); } }, '↓ Показать ещё'));
+      }
     }
-    let dt; search.oninput = (e) => { const v = e.target.value; clearTimeout(dt); dt = setTimeout(() => fill(v), 250); };
+    // при новом поиске начинаем со 100; «Показать ещё» докручивает текущий запрос
+    let dt; search.oninput = (e) => { const v = e.target.value; clearTimeout(dt); dt = setTimeout(() => { pickerLimit = 100; fill(v); }, 250); };
     fill();
     pickerHost.append(
       el('div', { style:'font-weight:600;font-size:12px;margin:14px 0 6px;color:#6B7280;text-transform:uppercase;letter-spacing:.5px' }, 'Добавить товар со склада'),
