@@ -1591,7 +1591,7 @@ async function openShipmentDoc(r) {
   const foot = [];
   // Изменить статус (только для реальной отгрузки) — сразу синхронизирует и сделку
   if (ship) {
-    const sel = el('select', { style:'padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;height:36px;cursor:pointer' }, [
+    const sel = el('select', { class:'status-select', title:'Изменить статус' }, [
       el('option', { value:'planned' }, 'Запланировано'),
       el('option', { value:'shipped' }, 'Отгружено / в пути'),
       el('option', { value:'delivered' }, 'Доставлено'),
