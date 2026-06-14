@@ -112,6 +112,7 @@ export async function onRequest(context) {
       if (auth.role !== 'director') return err(403, 'Только директор может запускать синхронизацию');
       if (seg[1] === 'status' && request.method === 'GET') return syncStatus(env);
       if (seg[1] === '1c' && seg[2] === 'clients' && request.method === 'POST') return syncClients(env);
+      if (seg[1] === '1c' && seg[2] === 'suppliers' && request.method === 'POST') return syncSuppliers(env);
       if (seg[1] === '1c' && seg[2] === 'categories' && request.method === 'POST') return syncCategories(env);
       if (seg[1] === '1c' && seg[2] === 'stock' && request.method === 'POST') return syncStock(env);
       if (seg[1] === '1c' && seg[2] === 'receipts' && request.method === 'POST') return syncReceipts(env);
@@ -1572,6 +1573,7 @@ async function syncStatus(env) {
 // Интервалы фоновой синхронизации (минуты), по требованиям заказчика
 const SYNC_INTERVALS = {
   clients_1c: 20,     // контрагенты — каждые 20 мин
+  suppliers_1c: 30,   // поставщики — 20–60 мин
   products_1c: 45,    // номенклатура — 20–60 мин
   categories_1c: 360, // категории — редко
   stock_1c: 15,       // остатки — 10–20 мин
@@ -1593,6 +1595,7 @@ async function runDueSyncs(env) {
   const run = async (name, fn) => { try { await fn(); ran.push(name); } catch (e) { errors.push(name + ': ' + ((e && e.message) || e)); } };
 
   if (due('clients_1c')) await run('clients', () => syncClients(env));
+  if (due('suppliers_1c')) await run('suppliers', () => syncSuppliers(env));
   if (due('categories_1c')) await run('categories', () => syncCategories(env));
   if (due('products_1c')) await run('products', () => syncProducts(env, 1000, 0));
   if (due('stock_1c')) await run('stock', () => syncStock(env));
@@ -1649,6 +1652,63 @@ async function syncClients(env) {
   const info = `получено ${fetched}, новых ${created}, обновлено ${updated}`;
   await env.DB.prepare(
     `INSERT INTO sync_state (entity, last_at, info) VALUES ('clients_1c', datetime('now'), ?)
+     ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+  ).bind(info).run();
+  return json({ fetched, created, updated });
+}
+
+// Колонка ext_ref у поставщиков (для идемпотентной синхронизации с 1С) — добавляем на лету
+let SUPPLIER_EXTREF_OK = false;
+async function ensureSupplierExtRef(env) {
+  if (SUPPLIER_EXTREF_OK) return;
+  try { await env.DB.prepare('ALTER TABLE suppliers ADD COLUMN ext_ref TEXT').run(); } catch (e) {}
+  SUPPLIER_EXTREF_OK = true;
+}
+
+// Поставщики 1С (контрагенты с признаком «Поставщик») -> поставщики CRM.
+// Идемпотентно по ext_ref (Ref_Key) и наименованию.
+async function syncSuppliers(env) {
+  await ensureSupplierExtRef(env);
+  const ex = await env.DB.prepare('SELECT id, ext_ref, name FROM suppliers').all();
+  const byRef = {}, byName = {};
+  for (const s of ex.results) { if (s.ext_ref) byRef[s.ext_ref] = s.id; if (s.name) byName[String(s.name).toLowerCase()] = s.id; }
+
+  const top = 1000;
+  let skip = 0, fetched = 0, created = 0, updated = 0;
+  const base = 'Catalog_Контрагенты?$format=json'
+    + '&$filter=DeletionMark eq false and IsFolder eq false and Поставщик eq true'
+    + '&$orderby=Ref_Key'
+    + '&$select=Ref_Key,Description,НаименованиеПолное';
+
+  while (true) {
+    const data = await odataGet(env, `${base}&$top=${top}&$skip=${skip}`);
+    const rows = data.value || [];
+    if (!rows.length) break;
+    fetched += rows.length;
+    const stmts = [];
+    for (const r of rows) {
+      const ref = r.Ref_Key;
+      const name = String(r.Description || r['НаименованиеПолное'] || '').trim();
+      if (!ref || !name) continue;
+      let id = byRef[ref] || byName[name.toLowerCase()] || null;
+      if (id) {
+        stmts.push(env.DB.prepare('UPDATE suppliers SET name=?, ext_ref=? WHERE id=?').bind(name, ref, id));
+        updated++;
+      } else {
+        id = genId();
+        stmts.push(env.DB.prepare('INSERT INTO suppliers (id,name,share,ext_ref) VALUES (?,?,0,?)').bind(id, name, ref));
+        created++;
+      }
+      byRef[ref] = id; byName[name.toLowerCase()] = id;
+    }
+    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+    if (rows.length < top) break;
+    skip += top;
+  }
+
+  const info = `получено ${fetched}, новых ${created}, обновлено ${updated}`;
+  await env.DB.prepare(
+    `INSERT INTO sync_state (entity, last_at, info) VALUES ('suppliers_1c', datetime('now'), ?)
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
   ).bind(info).run();
   return json({ fetched, created, updated });
