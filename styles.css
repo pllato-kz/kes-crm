@@ -505,8 +505,13 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .k-col-head {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
-  display: flex; align-items: flex-start; gap: 8px;
+  display: flex; flex-direction: column; gap: 7px;
 }
+.k-head-top { display: flex; align-items: flex-start; gap: 8px; }
+.k-head-bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
+.k-head-bottom .stage-sum { font-size: 12px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.k-head-bottom .stage-actions { display: inline-flex; gap: 6px; flex: none; }
+.k-col-head .stage-grip { margin-top: 2px; }
 .k-col-head .stage-dot {
   width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex: none;
 }
