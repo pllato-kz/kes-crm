@@ -494,8 +494,8 @@ table.data .muted { color: var(--muted); font-size: 12px; }
   scrollbar-width: thin;
 }
 .k-col {
-  flex: 1 1 240px;
-  min-width: 240px;
+  flex: 0 0 250px;            /* все этапы одного фиксированного размера */
+  width: 250px; min-width: 250px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -505,19 +505,22 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .k-col-head {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: flex-start; gap: 8px;
 }
 .k-col-head .stage-dot {
-  width: 8px; height: 8px; border-radius: 50%;
+  width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex: none;
 }
-.k-col-head .stage-label { font-weight: 600; font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.k-col-head .stage-label-input {
-  flex: 1; min-width: 0; border: 0; background: transparent;
-  font-weight: 600; font-size: 12px; color: var(--ink);
-  font-family: inherit; padding: 3px 5px; border-radius: 5px; outline: none;
+/* Название этапа: видно целиком — переносится, без обрезки и многоточия */
+.k-col-head .stage-label {
+  font-weight: 600; font-size: 12px; flex: 1; min-width: 0;
+  white-space: normal; overflow-wrap: anywhere; word-break: break-word;
+  line-height: 1.3; padding-top: 1px;
 }
-.k-col-head .stage-label-input:hover { background: #fff; box-shadow: inset 0 0 0 1px var(--border); }
-.k-col-head .stage-label-input:focus { background: #fff; box-shadow: 0 0 0 2px rgba(0,166,226,.25); }
+.k-col-head .stage-label-edit {
+  cursor: text; padding: 2px 5px; border-radius: 5px; outline: none;
+}
+.k-col-head .stage-label-edit:hover { background: #fff; box-shadow: inset 0 0 0 1px var(--border); }
+.k-col-head .stage-label-edit:focus { background: #fff; box-shadow: 0 0 0 2px rgba(0,166,226,.25); }
 .k-col-head .stage-count {
   background: var(--bg); color: var(--muted);
   font-size: 11px;

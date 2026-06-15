@@ -2666,16 +2666,16 @@ VIEWS.deals = () => {
       const canManageThis = canStages && !protectedStage;
       let labelEl;
       if (canManageThis) {
-        labelEl = el('input', { class:'stage-label-input', value: s.label, title:'Кликните, чтобы изменить название' });
+        // contenteditable-span: название переносится (видно целиком) и редактируется
+        labelEl = el('span', { class: 'stage-label stage-label-edit', contenteditable: 'true', title: 'Кликните, чтобы изменить название' }, s.label);
         const saveLabel = () => {
-          const v = labelEl.value.trim();
-          if (!v || v === s.label) { labelEl.value = s.label; return; }
+          const v = labelEl.textContent.replace(/\s+/g, ' ').trim();
+          if (!v || v === s.label) { labelEl.textContent = s.label; return; }
           s.label = v;
           window.__API__.apiFetch('deal_stages/' + encodeURIComponent(s.id), { method:'PUT', body:{ label: v } }).catch(() => toast('Название не сохранено', 'error'));
         };
-        let lt; labelEl.oninput = () => { clearTimeout(lt); lt = setTimeout(saveLabel, 600); };
-        labelEl.onblur = () => { clearTimeout(lt); saveLabel(); };
-        labelEl.onkeydown = (e) => { if (e.key === 'Enter') labelEl.blur(); };
+        labelEl.onblur = saveLabel;
+        labelEl.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); labelEl.blur(); } };
       } else {
         labelEl = el('span', { class: 'stage-label' }, s.label);
       }
@@ -2817,7 +2817,10 @@ VIEWS.deals = () => {
     });
     if (FOCUS_STAGE) {
       const fid = FOCUS_STAGE; FOCUS_STAGE = null;
-      setTimeout(() => { const inp = kanban.querySelector(`.k-col[data-stage="${fid}"] .stage-label-input`); if (inp) { inp.focus(); inp.select(); } }, 40);
+      setTimeout(() => {
+        const inp = kanban.querySelector(`.k-col[data-stage="${fid}"] .stage-label-edit`);
+        if (inp) { inp.focus(); try { const r = document.createRange(); r.selectNodeContents(inp); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); } catch (e) {} }
+      }, 40);
     }
     return kanban;
   }
