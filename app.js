@@ -2579,7 +2579,6 @@ VIEWS.deals = () => {
 
   function buildDealsKanban(deals) {
     let dragged = null;        // перетаскиваемая карточка-сделка
-    let draggedStage = null;   // перетаскиваемый этап (столбец)
     const kanban = el('div', { class: 'kanban' });
 
     // Захардкоженные (protected) этапы фиксированы: их нельзя двигать, и они задают границы,
@@ -2705,18 +2704,9 @@ VIEWS.deals = () => {
         } }, '+'));
       }
       // Ручка перетаскивания этапа — только у движимых (незахардкоженных) этапов.
+      let grip = null;
       if (canManageThis) {
-        const grip = el('span', { class: 'stage-grip', draggable: 'true', title: 'Перетащите, чтобы изменить порядок этапов' }, '⠿');
-        grip.addEventListener('dragstart', (e) => {
-          draggedStage = { id: s.id, index: idx };
-          col.classList.add('stage-dragging');
-          e.dataTransfer.effectAllowed = 'move';
-          try { e.dataTransfer.setData('text/plain', 'stage:' + s.id); } catch (_) {}
-        });
-        grip.addEventListener('dragend', () => {
-          draggedStage = null; col.classList.remove('stage-dragging');
-          kanban.querySelectorAll('.stage-drop-target').forEach(c => c.classList.remove('stage-drop-target'));
-        });
+        grip = el('span', { class: 'stage-grip', title: 'Перетащите, чтобы изменить порядок этапов' }, '⠿');
         headKids.unshift(grip);
       }
 
@@ -2725,21 +2715,64 @@ VIEWS.deals = () => {
         body,
       ]);
 
-      // Перетаскивание ЭТАПА: разрешаем drop только внутри сегмента движимых этапов (между protected).
-      col.addEventListener('dragover', (e) => {
-        if (!draggedStage) return;
-        const [lo, hi] = runRange(stages, draggedStage.index);
-        if (idx < lo || idx > hi) return; // вне допустимых границ — нельзя
-        e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('stage-drop-target');
-      });
-      col.addEventListener('dragleave', (e) => { if (e.target === col) col.classList.remove('stage-drop-target'); });
-      col.addEventListener('drop', (e) => {
-        if (!draggedStage) return;
-        const [lo, hi] = runRange(stages, draggedStage.index);
-        if (idx < lo || idx > hi) return;
-        e.preventDefault(); col.classList.remove('stage-drop-target');
-        moveStage(draggedStage.index, idx);
-      });
+      // Кастомный drag этапа: клон-столбец следует за курсором, столбцы перестраиваются
+      // в реальном времени; перемещение ограничено сегментом между protected-этапами.
+      if (grip) {
+        const fromIdx = idx;
+        grip.addEventListener('pointerdown', (e) => {
+          if (e.button != null && e.button !== 0) return;
+          e.preventDefault();
+          const startX = e.clientX, startY = e.clientY;
+          const [lo, hi] = runRange(stages, fromIdx);
+          let started = false, ghost = null, offX = 0, offY = 0, beforeProt = null, afterProt = null;
+          const begin = () => {
+            started = true;
+            const rect = col.getBoundingClientRect();
+            offX = startX - rect.left; offY = startY - rect.top;
+            ghost = col.cloneNode(true);
+            ghost.classList.add('k-col-ghost');
+            ghost.style.width = rect.width + 'px';
+            ghost.style.left = rect.left + 'px'; ghost.style.top = rect.top + 'px';
+            document.body.appendChild(ghost);
+            col.classList.add('k-col-placeholder');
+            document.body.classList.add('dragging-stage');
+            const all = Array.from(kanban.querySelectorAll('.k-col'));
+            beforeProt = lo > 0 ? all[lo - 1] : null;       // фикс. protected-этап слева (граница)
+            afterProt = hi < all.length - 1 ? all[hi + 1] : null; // фикс. protected-этап справа
+          };
+          const onMove = (ev) => {
+            if (!started) {
+              if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
+              begin();
+            }
+            ghost.style.left = (ev.clientX - offX) + 'px';
+            ghost.style.top = (ev.clientY - offY) + 'px';
+            // целевая позиция внутри сегмента (между beforeProt и afterProt)
+            const all = Array.from(kanban.querySelectorAll('.k-col'));
+            const startI = beforeProt ? all.indexOf(beforeProt) + 1 : 0;
+            const endI = afterProt ? all.indexOf(afterProt) : all.length;
+            let ref = afterProt; // по умолчанию — в конец сегмента (перед afterProt либо в конец доски)
+            for (let i = startI; i < endI; i++) {
+              const c = all[i]; if (c === col) continue;
+              const r = c.getBoundingClientRect();
+              if (ev.clientX < r.left + r.width / 2) { ref = c; break; }
+            }
+            if (col.nextSibling !== ref) kanban.insertBefore(col, ref);
+          };
+          const onUp = () => {
+            document.removeEventListener('pointermove', onMove);
+            document.removeEventListener('pointerup', onUp);
+            if (!started) return;
+            if (ghost) ghost.remove();
+            col.classList.remove('k-col-placeholder');
+            document.body.classList.remove('dragging-stage');
+            const newIdx = Array.from(kanban.querySelectorAll('.k-col')).indexOf(col);
+            if (newIdx >= 0 && newIdx !== fromIdx) moveStage(fromIdx, newIdx);
+          };
+          document.addEventListener('pointermove', onMove);
+          document.addEventListener('pointerup', onUp);
+        });
+      }
 
       // Перетаскивание КАРТОЧЕК (сделок) между столбцами.
       col.addEventListener('dragover', (e) => { if (!dragged) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('drag-over'); });
