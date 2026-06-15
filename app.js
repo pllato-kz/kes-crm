@@ -5411,9 +5411,11 @@ VIEWS.tasks = () => {
     else body.append(el('div', { class:'muted', style:'font-size:12px;text-align:center;padding:18px 6px' }, 'Нет задач'));
     return el('div', { class:'k-col' }, [
       el('div', { class:'k-col-head' }, [
-        el('span', { class:'stage-dot', style:`background:${color}` }),
-        el('span', { class:'stage-label' }, label),
-        el('span', { class:'stage-count' }, tasks.length),
+        el('div', { class:'k-head-top' }, [
+          el('span', { class:'stage-dot', style:`background:${color}` }),
+          el('span', { class:'stage-label' }, label),
+          el('span', { class:'stage-count' }, tasks.length),
+        ]),
       ]),
       body,
     ]);
