@@ -1166,9 +1166,45 @@ function openNewTask(dealId) {
     'medium');
   const due = fDateField('Дата окончания', today);
   const time = fTimeField('Время выполнения', '18:00');
+
+  // Поле «Сделка» (поиск + список) — показываем, когда создаём не из карточки сделки.
+  let selectedDealId = null;
+  const nrm = (v) => String(v || '').toLowerCase();
+  const dealSearch = el('input', { placeholder:'Поиск сделки по названию/клиенту… (необязательно)', style:'width:100%;padding:8px 10px;border:1px solid #E5E7EB;border-radius:6px;font-size:13px;outline:none' });
+  const dealListEl = el('div', { class:'product-picker' });
+  const dealLabel = el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, 'Сделка не выбрана');
+  const dealRow = el('div', { class:'form-row' }, [el('label', {}, 'Сделка'), el('div', {}, [dealSearch, dealListEl, dealLabel])]);
+  let dealLimit = 30;
+  const clearDeal = () => { selectedDealId = null; dealLabel.textContent = 'Сделка не выбрана'; dealLabel.style.cssText = 'font-size:12px;margin-top:6px'; fillDeals(dealSearch.value); };
+  const selectDeal = (d) => {
+    selectedDealId = d.id; const cl = clientById(d.client);
+    dealLabel.textContent = '✓ ' + (d.title || '—') + (cl && cl.name ? ' · ' + cl.name : '');
+    dealLabel.style.cssText = 'font-size:12px;margin-top:6px;color:#10B981;font-weight:600';
+    fillDeals(dealSearch.value);
+  };
+  function fillDeals(q = '') {
+    const ql = nrm(q).trim();
+    dealListEl.innerHTML = '';
+    dealListEl.append(el('div', { class:'pp-item', onclick: clearDeal }, [el('div', { class:'muted' }, '— Без сделки —')]));
+    const all = (state.deals || []).filter(d => !ql || nrm(d.title).includes(ql) || nrm((clientById(d.client) || {}).name).includes(ql));
+    const shown = all.slice(0, dealLimit);
+    shown.forEach(d => {
+      const cl = clientById(d.client);
+      dealListEl.append(el('div', { class:'pp-item', onclick: () => selectDeal(d) }, [
+        el('div', {}, [el('div', {}, d.title || '—'), el('div', { class:'pp-sku' }, cl ? cl.name : '—')]),
+        d.id === selectedDealId ? el('span', { class:'pp-price', style:'color:#10B981' }, '✓') : null,
+      ]));
+    });
+    if (all.length > shown.length) {
+      dealListEl.append(el('div', { class:'pp-item', style:'justify-content:center;color:var(--brand);font-weight:600', onclick: () => { dealLimit += 30; fillDeals(dealSearch.value); } }, `↓ Показать ещё (${all.length - shown.length})`));
+    }
+  }
+  let dt; dealSearch.oninput = () => { dealLimit = 30; clearTimeout(dt); dt = setTimeout(() => fillDeals(dealSearch.value), 150); };
+  fillDeals();
+
   openModal({
     title: 'Новая задача',
-    body: el('div', {}, [title.row, desc.row, owner.row, prio.row, due.row, time.row]),
+    body: el('div', {}, [title.row, desc.row, owner.row, prio.row, due.row, time.row, ...(linkedDeal ? [] : [dealRow])]),
     foot: [
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
       el('button', { class: 'btn btn-primary', onclick: async () => {
@@ -1178,7 +1214,7 @@ function openNewTask(dealId) {
         const t = {
           title: title.get().trim(), description: desc.get(), owner: owner.get(),
           due: due.getDate() + ' ' + (time.get() || '18:00'),
-          deal: linkedDeal, priority: prio.get(),
+          deal: linkedDeal || selectedDealId, priority: prio.get(),
         };
         try {
           const saved = await window.__API__.apiFetch('tasks', { method: 'POST', body: window.__API__.toApi.task(t) });
