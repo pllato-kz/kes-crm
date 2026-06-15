@@ -673,7 +673,25 @@ async function ensurePipelineSchema(env) {
   } catch (e) {}
   // привязываем «бесхозные» этапы к дефолтной воронке
   try { await env.DB.prepare("UPDATE deal_stages SET pipeline_id='default' WHERE pipeline_id IS NULL OR pipeline_id=''").run(); } catch (e) {}
+  await ensureClosedStageRemoved(env); // убираем этап «Закрыта» из воронок (по запросу)
   PIPELINES_SCHEMA_OK = true;
+}
+
+// Удаление этапа «Закрыта» из всех воронок: сделки переносятся на «Отгружено»
+// (иначе «Оплачено», иначе последний по порядку), затем этап удаляется. Идемпотентно.
+async function ensureClosedStageRemoved(env) {
+  try {
+    const rows = await env.DB.prepare("SELECT id, pipeline_id FROM deal_stages WHERE id='closed' OR label LIKE 'Закры%'").all();
+    for (const r of (rows.results || [])) {
+      const pid = r.pipeline_id || 'default';
+      const fb = await env.DB.prepare(
+        "SELECT id FROM deal_stages WHERE id<>? AND pipeline_id=? ORDER BY (label LIKE 'Отгруж%') DESC, (label LIKE 'Оплач%') DESC, sort DESC LIMIT 1"
+      ).bind(r.id, pid).first();
+      if (!fb) continue; // единственный этап — не трогаем
+      await env.DB.prepare('UPDATE deals SET stage_id=? WHERE stage_id=?').bind(fb.id, r.id).run();
+      await env.DB.prepare('DELETE FROM deal_stages WHERE id=?').bind(r.id).run();
+    }
+  } catch (e) {}
 }
 
 // Создание воронки + стартовый набор этапов
@@ -688,7 +706,7 @@ async function createPipeline(env, request) {
   const starter = [
     ['Новая', '#9CA3AF', 0], ['КП отправлено', '#3B82F6', 0], ['Согласовано', '#8B5CF6', 0],
     ['Счёт выставлен', '#F59E0B', 0], ['Оплачено', '#10B981', 1], ['Отгружено', '#06B6D4', 1],
-    ['Закрыта', '#22C55E', 0], ['Отказ', '#EF4444', 1],
+    ['Отказ', '#EF4444', 1],
   ];
   let i = 0;
   for (const [label, color, prot] of starter) {

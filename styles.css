@@ -1021,12 +1021,16 @@ table.data tbody tr.active-row { background: var(--brand-soft); }
 .k-col.drag-over { background: var(--brand-soft); }
 .k-col.drag-over .k-col-body { background: rgba(0, 166, 226, .04); }
 
-/* Перетаскивание этапов (порядок столбцов) */
-.k-col-head .stage-grip { cursor: grab; opacity: .4; font-size: 13px; line-height: 1; padding: 0 1px; user-select: none; flex: none; }
+/* Перетаскивание этапов (порядок столбцов) — клон следует за курсором */
+.k-col-head .stage-grip { cursor: grab; opacity: .4; font-size: 13px; line-height: 1; padding: 0 1px; user-select: none; flex: none; touch-action: none; }
 .k-col-head .stage-grip:hover { opacity: .85; }
 .k-col-head .stage-grip:active { cursor: grabbing; }
-.k-col.stage-dragging { opacity: .55; }
-.k-col.stage-drop-target { outline: 2px dashed var(--brand); outline-offset: -2px; border-radius: 10px; }
+.k-col-ghost { position: fixed; z-index: 1000; pointer-events: none; margin: 0;
+  box-shadow: 0 14px 34px rgba(17,20,24,.24); opacity: .96; transform: rotate(1.5deg);
+  max-height: 70vh; overflow: hidden; }
+.k-col-placeholder { opacity: .35; }
+.k-col-placeholder * { visibility: hidden; }
+body.dragging-stage { user-select: none; cursor: grabbing; }
 
 /* ---------- Login screen ---------- */
 .login-page {
