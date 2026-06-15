@@ -2578,8 +2578,46 @@ VIEWS.deals = () => {
   }
 
   function buildDealsKanban(deals) {
-    let dragged = null;
+    let dragged = null;        // перетаскиваемая карточка-сделка
+    let draggedStage = null;   // перетаскиваемый этап (столбец)
     const kanban = el('div', { class: 'kanban' });
+
+    // Захардкоженные (protected) этапы фиксированы: их нельзя двигать, и они задают границы,
+    // за которые нельзя переносить остальные. runRange — диапазон индексов «сегмента» движимых
+    // этапов вокруг позиции i (между ближайшими protected-этапами / краями доски).
+    const isProtStage = (st) => !!st.protected || STAGE_PROTECTED.has(st.id);
+    const runRange = (arr, i) => {
+      let lo = i, hi = i;
+      while (lo > 0 && !isProtStage(arr[lo - 1])) lo--;
+      while (hi < arr.length - 1 && !isProtStage(arr[hi + 1])) hi++;
+      return [lo, hi];
+    };
+    // Перестановка этапа внутри его сегмента + пересчёт sort (только у движимых, между границами).
+    async function moveStage(fromIdx, toIdx) {
+      if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0) return;
+      const arr = stages.slice();
+      const [moved] = arr.splice(fromIdx, 1);
+      arr.splice(toIdx, 0, moved);
+      const [lo, hi] = runRange(arr, arr.indexOf(moved));
+      const run = arr.slice(lo, hi + 1);
+      const loS = lo > 0 ? Number(arr[lo - 1].sort) : null;          // sort protected-этапа слева (или нет)
+      const hiS = hi < arr.length - 1 ? Number(arr[hi + 1].sort) : null; // sort protected-этапа справа
+      const N = run.length;
+      const updates = [];
+      run.forEach((st, k) => {
+        let ns;
+        if (loS != null && hiS != null) ns = loS + (hiS - loS) * (k + 1) / (N + 1);
+        else if (loS != null) ns = loS + (k + 1);
+        else if (hiS != null) ns = hiS - (N - k);
+        else ns = k;
+        if (Number(st.sort) !== ns) {
+          st.sort = ns; // st — ссылка из STAGES, порядок применится при перерисовке
+          updates.push(window.__API__.apiFetch('deal_stages/' + encodeURIComponent(st.id), { method: 'PUT', body: { sort: ns } }));
+        }
+      });
+      renderContent();
+      if (updates.length) { try { await Promise.all(updates); } catch (e) { toast('Порядок этапов не сохранён', 'error'); } }
+    }
 
     // Авто-прокрутка доски при перетаскивании у края экрана
     const EDGE = 70, SPEED = 22;
@@ -2642,8 +2680,7 @@ VIEWS.deals = () => {
       } else {
         labelEl = el('span', { class: 'stage-label' }, s.label);
       }
-      const headKids = [el('span', { class: 'stage-dot', style: `background:${s.color}` }), labelEl, el('span', { class: 'stage-count' }, dealsOnStage.length)];
-      if (canManageThis) {
+      const headKids = [el('span', { class: 'stage-dot', style: `background:${s.color}` }), labelEl, el('span', { class: 'stage-count' }, dealsOnStage.length)];      if (canManageThis) {
         headKids.push(el('button', { class:'stage-del', title:'Удалить этап', onclick: async (e) => {
           e.stopPropagation();
           if (!(await confirmModal({ title:'Удаление этапа', message:`Удалить этап «${s.label}»? Его сделки перейдут на другой этап.`, confirmText:'Удалить', danger:true }))) return;
@@ -2667,10 +2704,44 @@ VIEWS.deals = () => {
           } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); btn.disabled = false; }
         } }, '+'));
       }
-      const col = el('div', { class: 'k-col', 'data-stage': s.id }, [
+      // Ручка перетаскивания этапа — только у движимых (незахардкоженных) этапов.
+      if (canManageThis) {
+        const grip = el('span', { class: 'stage-grip', draggable: 'true', title: 'Перетащите, чтобы изменить порядок этапов' }, '⠿');
+        grip.addEventListener('dragstart', (e) => {
+          draggedStage = { id: s.id, index: idx };
+          col.classList.add('stage-dragging');
+          e.dataTransfer.effectAllowed = 'move';
+          try { e.dataTransfer.setData('text/plain', 'stage:' + s.id); } catch (_) {}
+        });
+        grip.addEventListener('dragend', () => {
+          draggedStage = null; col.classList.remove('stage-dragging');
+          kanban.querySelectorAll('.stage-drop-target').forEach(c => c.classList.remove('stage-drop-target'));
+        });
+        headKids.unshift(grip);
+      }
+
+      const col = el('div', { class: 'k-col' + (canManageThis ? '' : ' k-col-fixed'), 'data-stage': s.id }, [
         el('div', { class: 'k-col-head' }, headKids),
         body,
       ]);
+
+      // Перетаскивание ЭТАПА: разрешаем drop только внутри сегмента движимых этапов (между protected).
+      col.addEventListener('dragover', (e) => {
+        if (!draggedStage) return;
+        const [lo, hi] = runRange(stages, draggedStage.index);
+        if (idx < lo || idx > hi) return; // вне допустимых границ — нельзя
+        e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('stage-drop-target');
+      });
+      col.addEventListener('dragleave', (e) => { if (e.target === col) col.classList.remove('stage-drop-target'); });
+      col.addEventListener('drop', (e) => {
+        if (!draggedStage) return;
+        const [lo, hi] = runRange(stages, draggedStage.index);
+        if (idx < lo || idx > hi) return;
+        e.preventDefault(); col.classList.remove('stage-drop-target');
+        moveStage(draggedStage.index, idx);
+      });
+
+      // Перетаскивание КАРТОЧЕК (сделок) между столбцами.
       col.addEventListener('dragover', (e) => { if (!dragged) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('drag-over'); });
       col.addEventListener('dragleave', (e) => { if (e.target === col) col.classList.remove('drag-over'); });
       col.addEventListener('drop', async (e) => {
