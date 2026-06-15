@@ -2492,7 +2492,7 @@ VIEWS.deals = () => {
     updateHash('deals', true); // отражаем фильтры в URL (без записи в историю)
     drawer.refreshBadge();
     const deals = filtered();
-    subEl.textContent = `${deals.length} ${role().seeAllData ? 'сделок' : 'ваших сделок'} · сумма ${fmtMoneyK(deals.reduce((s, d) => s + d.amount, 0))}`;
+    subEl.textContent = `${deals.length} ${role().seeAllData ? 'сделок' : 'ваших сделок'} · сумма ${fmtMoney(deals.reduce((s, d) => s + (Number(d.amount) || 0), 0))}`;
     content.innerHTML = '';
     content.append(isList ? buildDealsTable(deals) : buildDealsKanban(deals));
   }
