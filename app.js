@@ -2725,6 +2725,7 @@ VIEWS.deals = () => {
           const startX = e.clientX, startY = e.clientY;
           const [lo, hi] = runRange(stages, fromIdx);
           let started = false, ghost = null, offX = 0, offY = 0, beforeProt = null, afterProt = null;
+          let lastX = startX, lastY = startY, autoDir = 0, autoRaf = null;
           const begin = () => {
             started = true;
             const rect = col.getBoundingClientRect();
@@ -2740,14 +2741,11 @@ VIEWS.deals = () => {
             beforeProt = lo > 0 ? all[lo - 1] : null;       // фикс. protected-этап слева (граница)
             afterProt = hi < all.length - 1 ? all[hi + 1] : null; // фикс. protected-этап справа
           };
-          const onMove = (ev) => {
-            if (!started) {
-              if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
-              begin();
-            }
-            ghost.style.left = (ev.clientX - offX) + 'px';
-            ghost.style.top = (ev.clientY - offY) + 'px';
-            // целевая позиция внутри сегмента (между beforeProt и afterProt)
+          // Позиционирование клона у курсора + перестановка столбца внутри сегмента.
+          const reposition = (cx, cy) => {
+            lastX = cx; lastY = cy;
+            ghost.style.left = (cx - offX) + 'px';
+            ghost.style.top = (cy - offY) + 'px';
             const all = Array.from(kanban.querySelectorAll('.k-col'));
             const startI = beforeProt ? all.indexOf(beforeProt) + 1 : 0;
             const endI = afterProt ? all.indexOf(afterProt) : all.length;
@@ -2755,13 +2753,38 @@ VIEWS.deals = () => {
             for (let i = startI; i < endI; i++) {
               const c = all[i]; if (c === col) continue;
               const r = c.getBoundingClientRect();
-              if (ev.clientX < r.left + r.width / 2) { ref = c; break; }
+              if (cx < r.left + r.width / 2) { ref = c; break; }
             }
             if (col.nextSibling !== ref) kanban.insertBefore(col, ref);
+          };
+          // Автоскролл воронки при подходе курсора к её краю — чтобы тащить за пределы видимой области.
+          const EDGE = 90, SPEED = 24;
+          const autoLoop = () => {
+            if (!autoDir) { autoRaf = null; return; }
+            kanban.scrollLeft += autoDir * SPEED;
+            reposition(lastX, lastY); // пересчитываем позицию при прокрутке (курсор стоит у края)
+            autoRaf = requestAnimationFrame(autoLoop);
+          };
+          const updateAuto = (cx) => {
+            const kr = kanban.getBoundingClientRect();
+            const atStart = kanban.scrollLeft <= 0;
+            const atEnd = kanban.scrollLeft >= kanban.scrollWidth - kanban.clientWidth - 1;
+            autoDir = (cx < kr.left + EDGE && !atStart) ? -1 : ((cx > kr.right - EDGE && !atEnd) ? 1 : 0);
+            if (autoDir && !autoRaf) autoRaf = requestAnimationFrame(autoLoop);
+            else if (!autoDir && autoRaf) { cancelAnimationFrame(autoRaf); autoRaf = null; }
+          };
+          const onMove = (ev) => {
+            if (!started) {
+              if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
+              begin();
+            }
+            reposition(ev.clientX, ev.clientY);
+            updateAuto(ev.clientX);
           };
           const onUp = () => {
             document.removeEventListener('pointermove', onMove);
             document.removeEventListener('pointerup', onUp);
+            autoDir = 0; if (autoRaf) { cancelAnimationFrame(autoRaf); autoRaf = null; }
             if (!started) return;
             if (ghost) ghost.remove();
             col.classList.remove('k-col-placeholder');
