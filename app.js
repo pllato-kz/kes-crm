@@ -1780,6 +1780,15 @@ function taskReminders() {
 }
 
 // ---------- Notification dropdown ----------
+// Красная точка у колокольчика — только если есть уведомления (напоминания по задачам
+// или уведомления). Иначе просто колокольчик.
+function updateNotifDot() {
+  const dot = document.querySelector('#notif-btn .dot');
+  if (!dot) return;
+  const has = taskReminders().length || (state.notifications || []).length;
+  dot.classList.toggle('show', !!has);
+}
+
 function toggleNotifications() {
   const root = $('#dropdown-root');
   if (root.firstChild) { root.innerHTML = ''; return; }
@@ -1806,6 +1815,7 @@ function toggleNotifications() {
     }) : [el('div', { class: 'dropdown-item muted', style: 'justify-content:center' }, 'Нет уведомлений')]),
   ]);
   root.append(backdrop, panel);
+  updateNotifDot();
 }
 
 // ---------- About modal ----------
@@ -6439,10 +6449,7 @@ async function bootApp() {
 // После фоновой дозагрузки: перерисовать текущий раздел и обновить индикатор уведомлений.
 function afterDataLoaded() {
   try { if (CURRENT_VIEW) navigate(CURRENT_VIEW); } catch (e) {}
-  try {
-    const dot = document.querySelector('#notif-btn .dot');
-    if (dot) dot.style.display = (taskReminders().length || (state.notifications || []).length) ? '' : 'none';
-  } catch (e) {}
+  try { updateNotifDot(); } catch (e) {}
 }
 
 function renderShell() {
@@ -6555,8 +6562,7 @@ function renderShell() {
   routeFromHash();
 
   // Напоминания по задачам: индикатор на колокольчике + тост о просроченных
-  const dot = $('#notif-btn .dot');
-  if (dot) dot.style.display = (taskReminders().length || (state.notifications || []).length) ? '' : 'none';
+  updateNotifDot();
   const overdueCount = visibleTasks().filter(t => !t.done && taskDue(t).kind === 'overdue').length;
   if (overdueCount) setTimeout(() => toast(`У вас ${overdueCount} ${plural(overdueCount, 'просроченная задача', 'просроченные задачи', 'просроченных задач')}`, 'warn'), 700);
 
