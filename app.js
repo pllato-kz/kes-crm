@@ -1780,12 +1780,13 @@ function taskReminders() {
 }
 
 // ---------- Notification dropdown ----------
-// Красная точка у колокольчика — только если есть уведомления (напоминания по задачам
-// или уведомления). Иначе просто колокольчик.
+// Красная точка у колокольчика — только если есть НЕпрочитанные уведомления
+// (напоминания по задачам или уведомления). После «Прочитать все» точка скрывается.
+let NOTIFS_READ = false;
 function updateNotifDot() {
   const dot = document.querySelector('#notif-btn .dot');
   if (!dot) return;
-  const has = taskReminders().length || (state.notifications || []).length;
+  const has = !NOTIFS_READ && (taskReminders().length || (state.notifications || []).length);
   dot.classList.toggle('show', !!has);
 }
 
@@ -1801,7 +1802,7 @@ function toggleNotifications() {
   const panel = el('div', { class: 'dropdown' }, [
     el('div', { class: 'dropdown-head' }, [
       el('h4', {}, 'Уведомления' + (reminders.length ? ` · ${reminders.length}` : '')),
-      el('button', { class: 'btn btn-ghost btn-sm', onclick: () => { root.innerHTML = ''; toast('Все уведомления отмечены прочитанными'); } }, 'Прочитать все'),
+      el('button', { class: 'btn btn-ghost btn-sm', onclick: () => { NOTIFS_READ = true; state.notifications = []; root.innerHTML = ''; updateNotifDot(); toast('Все уведомления отмечены прочитанными'); } }, 'Прочитать все'),
     ]),
     el('div', { class: 'dropdown-body' }, items.length ? items.map(n => {
       const ic = { error: '⚠️', warn: '🟡', info: 'ℹ️' }[n.type] || 'ℹ️';
