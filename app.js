@@ -2679,8 +2679,10 @@ VIEWS.deals = () => {
       } else {
         labelEl = el('span', { class: 'stage-label' }, s.label);
       }
-      const headKids = [el('span', { class: 'stage-dot', style: `background:${s.color}` }), labelEl, el('span', { class: 'stage-count' }, dealsOnStage.length)];      if (canManageThis) {
-        headKids.push(el('button', { class:'stage-del', title:'Удалить этап', onclick: async (e) => {
+      // Кнопки управления этапом (удалить / добавить) — только у движимых (директор).
+      let delBtn = null, addBtn = null;
+      if (canManageThis) {
+        delBtn = el('button', { class:'stage-del', title:'Удалить этап', onclick: async (e) => {
           e.stopPropagation();
           if (!(await confirmModal({ title:'Удаление этапа', message:`Удалить этап «${s.label}»? Его сделки перейдут на другой этап.`, confirmText:'Удалить', danger:true }))) return;
           try {
@@ -2689,8 +2691,8 @@ VIEWS.deals = () => {
             const i = STAGES.findIndex(x => x.id === s.id); if (i >= 0) STAGES.splice(i, 1);
             renderContent(); toast('Этап удалён', 'success');
           } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
-        } }, '×'));
-        headKids.push(el('button', { class:'stage-add', title:'Добавить этап после этого', onclick: async (e) => {
+        } }, '×');
+        addBtn = el('button', { class:'stage-add', title:'Добавить этап после этого', onclick: async (e) => {
           e.stopPropagation();
           const btn = e.currentTarget; btn.disabled = true;
           const cur = stages[idx], next = stages[idx + 1];
@@ -2701,17 +2703,27 @@ VIEWS.deals = () => {
             FOCUS_STAGE = saved.id;
             renderContent();
           } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); btn.disabled = false; }
-        } }, '+'));
+        } }, '+');
       }
-      // Ручка перетаскивания этапа — только у движимых (незахардкоженных) этапов.
+      // Ручка перетаскивания этапа — только у движимых (незахардкоженных).
       let grip = null;
-      if (canManageThis) {
-        grip = el('span', { class: 'stage-grip', title: 'Перетащите, чтобы изменить порядок этапов' }, '⠿');
-        headKids.unshift(grip);
-      }
+      if (canManageThis) grip = el('span', { class: 'stage-grip', title: 'Перетащите, чтобы изменить порядок этапов' }, '⠿');
+
+      // Шапка этапа: верх — название + количество сделок (справа); низ — сумма (слева) и кнопки (справа).
+      const stageSum = dealsOnStage.reduce((a, d) => a + (Number(d.amount) || 0), 0);
+      const topRow = el('div', { class: 'k-head-top' }, [
+        grip,
+        el('span', { class: 'stage-dot', style: `background:${s.color}` }),
+        labelEl,
+        el('span', { class: 'stage-count', title: 'Сделок на этапе' }, dealsOnStage.length),
+      ]);
+      const bottomRow = el('div', { class: 'k-head-bottom' }, [
+        el('span', { class: 'stage-sum', title: 'Сумма сделок этапа' }, fmtMoney(stageSum)),
+        (delBtn || addBtn) ? el('span', { class: 'stage-actions' }, [delBtn, addBtn]) : null,
+      ]);
 
       const col = el('div', { class: 'k-col' + (canManageThis ? '' : ' k-col-fixed'), 'data-stage': s.id }, [
-        el('div', { class: 'k-col-head' }, headKids),
+        el('div', { class: 'k-col-head' }, [topRow, bottomRow]),
         body,
       ]);
 
