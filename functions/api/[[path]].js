@@ -384,6 +384,7 @@ async function dataRoute(ctx, seg, url, auth) {
   // задачи: расширенные поля (описание/дата начала/статус/комментарии) — добавляем на лету
   if (resource === 'tasks') await ensureTaskColumns(env);
   if (resource === 'deals' || resource === 'clients' || resource === 'invoices') await ensureArchiveColumns(env);
+  if (resource === 'shipments') await ensureShipmentsCleared(env); // одноразовая очистка всех отгрузок
   if (resource === 'shipments' && ['POST', 'PUT', 'PATCH'].includes(method)) await ensureShipmentStatuses(env);
   if (resource === 'suppliers') await ensureSupplierExtRef(env); // колонки ext_ref/bin
   if (resource === 'roles') await ensureArchiveRight(env); // выдать директору право «Архив»
@@ -1567,6 +1568,20 @@ async function ensureShipmentStatuses(env) {
     try { await env.DB.prepare('INSERT OR IGNORE INTO shipment_statuses (id,label,color) VALUES (?,?,?)').bind(idv, label, color).run(); } catch (e) {}
   }
   SHIP_STATUS_OK = true;
+}
+
+// Одноразовое удаление ВСЕХ отгрузок (по запросу). Флаг в app_settings, чтобы новые
+// отгрузки после очистки сохранялись и не удалялись повторно.
+let SHIP_CLEARED_OK = false;
+async function ensureShipmentsCleared(env) {
+  if (SHIP_CLEARED_OK) return;
+  try {
+    if (!(await getSetting(env, 'shipments_cleared_v1'))) {
+      await env.DB.prepare('DELETE FROM shipments').run();
+      await setSetting(env, 'shipments_cleared_v1', '1');
+    }
+  } catch (e) {}
+  SHIP_CLEARED_OK = true;
 }
 
 // История смены этапов сделки

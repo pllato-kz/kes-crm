@@ -1680,15 +1680,6 @@ function openInvoiceDetail(id) {
     statusSel.disabled = false;
   };
 
-  // Печать ТТН: реальная отгрузка по сделке, иначе — по данным сделки/счёта
-  const printTTN = () => {
-    const ship = state.shipments.find(s => s.deal === iv.deal);
-    printShipment(ship || {
-      no: 'ТТН' + (iv.no ? ' по ' + iv.no : ''), deal: iv.deal, client: iv.client, date: iv.date,
-      transport: '', driver: '', destination: (d && d.address) || (cl && cl.address) || '', items: d ? d.items : 0, weight: 0,
-    });
-  };
-
   openModal({
     title: 'Счёт ' + iv.no,
     body: el('div', {}, [
@@ -1704,8 +1695,7 @@ function openInvoiceDetail(id) {
     ]),
     foot: [
       d ? el('button', { class: 'btn', onclick: () => { closeModal(); openDealDetail(d.id); } }, 'Открыть сделку') : null,
-      el('button', { class: 'btn', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl); else toast('Сделка не найдена', 'warn'); } }, '🖨 Счёт PDF'),
-      el('button', { class: 'btn btn-primary', onclick: printTTN }, '🖨 Печать ТТН'),
+      el('button', { class: 'btn btn-primary', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl); else toast('Сделка не найдена', 'warn'); } }, '🖨 Счёт PDF'),
     ].filter(Boolean),
   });
 }
