@@ -1890,6 +1890,9 @@ function printInvoice(deal, invNoArg) {
   // Номер счёта — настоящий: из переданного, иначе из связанного счёта сделки, иначе по номеру сделки
   const linkedInv = (state.invoices || []).find(iv => iv.deal === deal.id);
   const invNo = invNoArg || (linkedInv && linkedInv.no) || ('СФ-' + (deal.no || today.getFullYear()));
+  // Реквизиты продавца — из 1С (state.meta), с запасными значениями
+  const seller = state.meta || {};
+  const sellerName = seller.legalName || seller.tenant || 'ТОО «KazEnergoSnab»';
 
   // Открываем новое окно с print-friendly разметкой
   const w = window.open('', '_blank', 'width=900,height=1100');
@@ -1923,12 +1926,12 @@ function printInvoice(deal, invNoArg) {
       <div class="pr-parties">
         <div>
           <div class="party-title">Поставщик</div>
-          <div class="party-name">ТОО «KazEnergoSnab»</div>
-          <div class="party-line">БИН: 180440099887</div>
-          <div class="party-line">Адрес: г. Караганда, ул. Бытовая, 13/1</div>
-          <div class="party-line">Тел: +7 (7212) 98-04-41</div>
-          <div class="party-line">ИИК: KZ_____________________ в АО «Народный Банк»</div>
-          <div class="party-line">БИК: HSBKKZKX</div>
+          <div class="party-name">${sellerName}</div>
+          <div class="party-line">БИН: ${seller.bin || '—'}</div>
+          <div class="party-line">Адрес: ${seller.address || '—'}</div>
+          ${seller.phone ? `<div class="party-line">Тел: ${seller.phone}</div>` : ''}
+          ${seller.bankAccount ? `<div class="party-line">ИИК: ${seller.bankAccount}${seller.bankName ? ' в ' + seller.bankName : ''}</div>` : ''}
+          ${seller.bankBik ? `<div class="party-line">БИК: ${seller.bankBik}</div>` : ''}
         </div>
         <div>
           <div class="party-title">Покупатель</div>
@@ -2011,6 +2014,7 @@ function printShipment(sh) {
   (async () => {
     const cl = clientById(sh.client);
     const deal = byId(state.deals, sh.deal);
+    const shipSeller = state.meta || {}; // реквизиты отправителя — из 1С
     let items = [];
     if (sh.deal) {
       try {
@@ -2029,7 +2033,7 @@ function printShipment(sh) {
         <div class="pr-meta">${deal ? `<div>По сделке: <b>${deal.title}</b></div>` : ''}<div style="margin-top:6px;color:#888">Образец — не имеет юридической силы</div></div>
       </div>
       <div class="pr-parties">
-        <div><div class="party-title">Грузоотправитель</div><div class="party-name">ТОО «KazEnergoSnab»</div><div class="party-line">г. Караганда, ул. Бытовая, 13/1</div><div class="party-line">Тел: +7 (7212) 98-04-41</div></div>
+        <div><div class="party-title">Грузоотправитель</div><div class="party-name">${shipSeller.legalName || shipSeller.tenant || 'ТОО «KazEnergoSnab»'}</div><div class="party-line">${shipSeller.address || '—'}</div>${shipSeller.phone ? `<div class="party-line">Тел: ${shipSeller.phone}</div>` : ''}</div>
         <div><div class="party-title">Грузополучатель</div><div class="party-name">${cl.name}</div><div class="party-line">БИН: ${cl.bin || '—'}</div><div class="party-line">${cl.city || ''}${cl.address ? ', ' + cl.address : ''}</div><div class="party-line">Контакт: ${cl.contact || '—'} · ${cl.phone || ''}</div></div>
       </div>
       <div class="pr-parties">
@@ -2154,7 +2158,7 @@ function exportReportPDF() {
   const inner = `
     <div class="pr-head">
       <div class="pr-logo">${PRINT_LOGO}<div><h2>СВОДНЫЙ ОТЧЁТ</h2><div style="color:#666;font-size:12px;margin-top:4px">на ${dateStr}</div></div></div>
-      <div class="pr-meta"><div>ТОО «KazEnergoSnab»</div><div style="margin-top:6px;color:#888">Образец</div></div>
+      <div class="pr-meta"><div>${(state.meta && (state.meta.legalName || state.meta.tenant)) || 'ТОО «KazEnergoSnab»'}</div><div style="margin-top:6px;color:#888">Образец</div></div>
     </div>
     ${h3('Ключевые показатели')}
     <table class="pr-table"><tbody>
@@ -2336,7 +2340,7 @@ VIEWS.dashboard = () => {
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, `${greet}, ${firstName} 👋`),
-      el('div', { class: 'sub' }, `Сводка по KazEnergoSnab · ${role().seeAllData ? 'все данные компании' : 'ваши клиенты и сделки'}`),
+      el('div', { class: 'sub' }, `Сводка по ${(state.meta && state.meta.tenant) || 'KazEnergoSnab'} · ${role().seeAllData ? 'все данные компании' : 'ваши клиенты и сделки'}`),
     ]),
   ]));
 
@@ -4827,7 +4831,7 @@ function printCountSheet(doc, items) {
   const inner = `
     <div class="pr-head">
       <div class="pr-logo">${PRINT_LOGO}<div><h2>ИНВЕНТАРИЗАЦИОННЫЙ ЛИСТ ${doc.no}</h2><div style="color:#666;font-size:12px;margin-top:4px">от ${dateStr} · лист пересчёта</div></div></div>
-      <div class="pr-meta"><div>ТОО «KazEnergoSnab»</div><div>Склад: Караганда</div><div style="margin-top:6px;color:#888">Ответственный: ${doc.responsible_name || '____________'}</div></div>
+      <div class="pr-meta"><div>${(state.meta && (state.meta.legalName || state.meta.tenant)) || 'ТОО «KazEnergoSnab»'}</div><div>Склад: ${(state.meta && state.meta.city) || 'Караганда'}</div><div style="margin-top:6px;color:#888">Ответственный: ${doc.responsible_name || '____________'}</div></div>
     </div>
     <table class="pr-table"><thead><tr><th style="width:32px">#</th><th style="width:110px">Артикул</th><th>Наименование</th><th class="num" style="width:120px">Факт</th></tr></thead><tbody>${rows}</tbody></table>
     <div class="pr-foot">
@@ -4858,7 +4862,7 @@ function printInventoryAct(doc, items, kind) {
   const inner = `
     <div class="pr-head">
       <div class="pr-logo">${PRINT_LOGO}<div><h2>${title}</h2><div style="color:#666;font-size:12px;margin-top:4px">по инвентаризации ${doc.no} от ${dateStr}</div></div></div>
-      <div class="pr-meta"><div>ТОО «KazEnergoSnab»</div><div>Склад: Караганда</div><div style="margin-top:6px;color:#888">Ответственный: ${doc.responsible_name || '____________'}</div></div>
+      <div class="pr-meta"><div>${(state.meta && (state.meta.legalName || state.meta.tenant)) || 'ТОО «KazEnergoSnab»'}</div><div>Склад: ${(state.meta && state.meta.city) || 'Караганда'}</div><div style="margin-top:6px;color:#888">Ответственный: ${doc.responsible_name || '____________'}</div></div>
     </div>
     <table class="pr-table"><thead><tr><th style="width:32px">#</th><th style="width:100px">Артикул</th><th>Наименование</th><th class="num">Учёт</th><th class="num">Факт</th><th class="num">Откл.</th><th class="num">Закуп</th><th class="num">Сумма</th></tr></thead><tbody>${rows}</tbody></table>
     <div class="pr-totals"><div class="total-line grand"><span>Итого ${isShort ? 'недостача' : 'излишки'}:</span> <span>${fmtMoney(total)}</span></div></div>

@@ -177,6 +177,7 @@
     const state = {
       meta: { id: meta.id || 1, tenant: meta.tenant, city: meta.city, currency: meta.currency || '₸',
               legalName: meta.legal_name, bin: meta.bin, address: meta.address,
+              phone: meta.phone, bankAccount: meta.bank_account, bankBik: meta.bank_bik, bankName: meta.bank_name,
               workHours: meta.work_hours, website: meta.website, note: meta.note, version: 1 },
       users: (usersRows || []).map((u) => M.user(u, rolesByKey)),
       categories: (cats || []).map((c) => ({ id: c.id, name: c.name, icon: c.icon, count: 0 })),
