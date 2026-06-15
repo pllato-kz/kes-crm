@@ -1731,7 +1731,7 @@ function openInvoiceDetail(id) {
     ]),
     foot: [
       d ? el('button', { class: 'btn', onclick: () => { closeModal(); openDealDetail(d.id); } }, 'Открыть сделку') : null,
-      el('button', { class: 'btn btn-primary', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl); else toast('Сделка не найдена', 'warn'); } }, '🖨 Счёт PDF'),
+      el('button', { class: 'btn btn-primary', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl, iv.no); else toast('Сделка не найдена', 'warn'); } }, '🖨 Счёт PDF'),
     ].filter(Boolean),
   });
 }
@@ -1870,7 +1870,7 @@ function openAbout() {
 }
 
 // ---------- Print invoice (PDF via window.print) ----------
-function printInvoice(deal) {
+function printInvoice(deal, invNoArg) {
   const cl = clientById(deal.client);
   const items = (deal.lineItems || []).map(it => {
     const p = byId(state.products, it.product);
@@ -1887,7 +1887,9 @@ function printInvoice(deal) {
   const total = subtotal + vat;
   const today = new Date();
   const dateStr = today.toLocaleDateString('ru-RU', { day:'2-digit', month:'long', year:'numeric' });
-  const invNo = 'СФ-' + today.getFullYear() + '-0' + Math.floor(Math.random()*900 + 100);
+  // Номер счёта — настоящий: из переданного, иначе из связанного счёта сделки, иначе по номеру сделки
+  const linkedInv = (state.invoices || []).find(iv => iv.deal === deal.id);
+  const invNo = invNoArg || (linkedInv && linkedInv.no) || ('СФ-' + (deal.no || today.getFullYear()));
 
   // Открываем новое окно с print-friendly разметкой
   const w = window.open('', '_blank', 'width=900,height=1100');
@@ -5001,10 +5003,11 @@ VIEWS.invoices = () => {
     el('div', { class: 'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewInvoice }, '+ Счёт')]),
   ]));
 
+  const overdueInvCount = state.invoices.filter(i => i.status === 'overdue').length;
   wrap.append(el('div', { class:'grid grid-3' }, [
-    statCard('Оплачено',         fmtMoneyK(totalPaid),                                  '+12%', 'up',   '✅'),
-    statCard('Ожидает оплаты',   fmtMoneyK(totalDue),                                   '', '',          '⏳'),
-    statCard('Просрочено',       state.invoices.filter(i => i.status==='overdue').length, 'требует внимания', 'down', '⚠️'),
+    statCard('Оплачено',         fmtMoneyK(totalPaid),  '', '', '✅'),
+    statCard('Ожидает оплаты',   fmtMoneyK(totalDue),   '', '', '⏳'),
+    statCard('Просрочено',       overdueInvCount, overdueInvCount ? 'требует внимания' : '', overdueInvCount ? 'down' : '', '⚠️'),
   ]));
 
   // --- Поиск и фильтры ---
