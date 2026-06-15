@@ -4763,11 +4763,10 @@ VIEWS.shipments = () => {
           ? el('span', { class:'muted', style:'font-size:11.5px' }, 'по сделке')
           : [r.transport, el('div', { class:'muted', style:'font-size:11.5px' }, r.driver)]),
         el('td', { class:'num' }, r.positions),
-        el('td', { class:'num' }, r.weight == null ? '—' : r.weight),
         el('td', {}, statusPill(r.status)),
       ]);
     });
-    return el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 8, class:'muted', style:'text-align:center;padding:20px' }, 'Отгрузок нет'))]);
+    return el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 7, class:'muted', style:'text-align:center;padding:20px' }, 'Отгрузок нет'))]);
   }
 
   const t = el('div', { class:'mt-16 table-wrap' });
@@ -4781,7 +4780,6 @@ VIEWS.shipments = () => {
     el('th', {}, 'Куда'),
     el('th', {}, 'Транспорт / водитель'),
     el('th', { class:'num' }, 'Позиций'),
-    el('th', { class:'num' }, 'Вес, кг'),
     el('th', {}, 'Статус'),
   ])));
   tab.append(buildTbody());
