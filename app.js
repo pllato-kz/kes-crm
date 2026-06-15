@@ -4683,32 +4683,22 @@ function printInventoryAct(doc, items, kind) {
 // ============================================================
 VIEWS.shipments = () => {
   const wrap = el('div');
-  // Сделки на этапе «Отгружено» показываем как отгрузки (без дублей с реальными ТТН)
-  const isShippedStage = (sid) => /отгруж/i.test((stageById(sid) || {}).label || '');
-  const shippedDeals = visibleDeals().filter(d => isShippedStage(d.stage) && !state.shipments.some(s => s.deal === d.id));
 
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Отгрузки'),
-      el('div', { class: 'sub' }, `${state.shipments.length + shippedDeals.length} отгрузок · ${shippedDeals.length} по сделкам`),
+      el('div', { class: 'sub' }, `${state.shipments.length} отгрузок`),
     ]),
     el('div', { class: 'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewShipment }, '+ Отгрузка')]),
   ]));
 
-  // Нормализуем реальные отгрузки и «по сделке» в единый список для поиска/фильтров
+  // Только реальные отгрузки (ТТН). Строки «по сделке» больше не показываем.
   const normStatus = (s) => (s === 'delivered' || s === 'planned') ? s : 'shipped';
-  const rowsData = [
-    ...state.shipments.map(s => ({
-      kind:'ship', id:s.id, deal:s.deal, no:s.no, date:s.date, client:s.client,
-      dest:s.destination || '', transport:s.transport || '', driver:s.driver || '',
-      positions:Number(s.items) || 0, weight:s.weight, status:normStatus(s.status),
-    })),
-    ...shippedDeals.map(d => ({
-      kind:'deal', id:d.id, deal:d.id, no:d.title, date:d.target || d.created, client:d.client,
-      dest:d.address || '', transport:'по сделке', driver:'',
-      positions:Number(d.items) || 0, weight:null, status:'deal',
-    })),
-  ];
+  const rowsData = state.shipments.map(s => ({
+    kind:'ship', id:s.id, deal:s.deal, no:s.no, date:s.date, client:s.client,
+    dest:s.destination || '', transport:s.transport || '', driver:s.driver || '',
+    positions:Number(s.items) || 0, weight:s.weight, status:normStatus(s.status),
+  }));
 
   // --- Поиск и фильтры ---
   const fs = { q:'', status:'', dateFrom:'', dateTo:'', posFrom:'', posTo:'' };
@@ -4719,7 +4709,6 @@ VIEWS.shipments = () => {
     el('option', { value:'planned' }, 'Запланировано'),
     el('option', { value:'shipped' }, 'В пути'),
     el('option', { value:'delivered' }, 'Доставлено'),
-    el('option', { value:'deal' }, 'По сделке'),
   ]);
   const dateFromI = el('input', { type:'date', onchange: e => { fs.dateFrom = e.target.value; refresh(); } });
   const dateToI = el('input', { type:'date', onchange: e => { fs.dateTo = e.target.value; refresh(); } });
