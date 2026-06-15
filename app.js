@@ -1654,37 +1654,59 @@ function openInvoiceDetail(id) {
   if (!iv) return;
   const cl = clientById(iv.client);
   const d = byId(state.deals, iv.deal);
-  // Статус документа синхронизируется только через сами документы (общий state.invoices),
-  // этапы сделки на статус не влияют. Объект iv — ссылка из state, поэтому статус
-  // сразу актуален во всех разделах.
-  const setStatus = async (status, msg) => {
-    const prev = iv.status; iv.status = status;
+
+  const ST = { paid: ['Оплачено', 'pill-success'], overdue: ['Просрочка', 'pill-danger'], pending: ['Ожидает', 'pill-warn'] };
+  const stKey = ST[iv.status] ? iv.status : 'pending';
+  const statusPill = el('span', { class: 'pill ' + ST[stKey][1] }, ST[stKey][0]);
+
+  // Смена статуса — стилизованный селект; обновляет статус сразу и перерисовывает список под модалкой
+  const statusSel = el('select', { class: 'status-select', title: 'Изменить статус' }, [
+    el('option', { value: 'pending' }, 'Ожидает'),
+    el('option', { value: 'paid' }, 'Оплачено'),
+    el('option', { value: 'overdue' }, 'Просрочка'),
+  ]);
+  statusSel.value = stKey;
+  statusSel.onchange = async () => {
+    const prev = iv.status, val = statusSel.value;
+    statusSel.disabled = true;
     try {
-      const saved = await window.__API__.apiFetch('invoices/' + iv.id, { method: 'PUT', body: { status_id: status } });
-      if (saved) Object.assign(iv, window.__API__.map.invoice(saved)); // объект из state синхронизируется с сервером
-      closeModal(); toast(msg, 'success');
-      if (CURRENT_VIEW) navigate(CURRENT_VIEW); // перерисовать открытый раздел, чтобы статус обновился везде
-    } catch (err) { iv.status = prev; toast('Не удалось сохранить', 'error'); }
+      const saved = await window.__API__.apiFetch('invoices/' + iv.id, { method: 'PUT', body: { status_id: val } });
+      if (saved) Object.assign(iv, window.__API__.map.invoice(saved)); else iv.status = val;
+      const k = ST[iv.status] ? iv.status : 'pending';
+      statusPill.textContent = ST[k][0]; statusPill.className = 'pill ' + ST[k][1];
+      toast('Статус счёта обновлён', 'success');
+      if (CURRENT_VIEW) navigate(CURRENT_VIEW);
+    } catch (e) { iv.status = prev; statusSel.value = prev; toast('Не удалось сохранить', 'error'); }
+    statusSel.disabled = false;
   };
-  const isPaid = iv.status === 'paid';
+
+  // Печать ТТН: реальная отгрузка по сделке, иначе — по данным сделки/счёта
+  const printTTN = () => {
+    const ship = state.shipments.find(s => s.deal === iv.deal);
+    printShipment(ship || {
+      no: 'ТТН' + (iv.no ? ' по ' + iv.no : ''), deal: iv.deal, client: iv.client, date: iv.date,
+      transport: '', driver: '', destination: (d && d.address) || (cl && cl.address) || '', items: d ? d.items : 0, weight: 0,
+    });
+  };
+
   openModal({
     title: 'Счёт ' + iv.no,
     body: el('div', {}, [
-      el('dl', { class:'kv' }, [
-        el('dt', {}, 'Клиент'),  el('dd', { class:'strong' }, cl.name + ' · БИН ' + cl.bin),
-        el('dt', {}, 'Сделка'),  el('dd', {}, d ? d.title : '—'),
-        el('dt', {}, 'Дата'),    el('dd', {}, fmtDate(iv.date)),
-        el('dt', {}, 'Сумма'),    el('dd', { class:'strong', style:'font-size:18px' }, fmtMoney(iv.amount)),
-        el('dt', {}, 'Срок'),    el('dd', {}, fmtDate(iv.due)),
-        el('dt', {}, 'Статус'),   el('dd', {}, el('span', { class:'pill ' + (isPaid ? 'pill-success' : iv.status === 'overdue' ? 'pill-danger' : 'pill-warn') }, isPaid ? 'Оплачено' : iv.status === 'overdue' ? 'Просрочка' : 'Ожидает')),
+      el('dl', { class: 'kv' }, [
+        el('dt', {}, 'Клиент'), el('dd', { class: 'strong' }, cl.name + (cl.bin ? ' · БИН ' + cl.bin : '')),
+        el('dt', {}, 'Сделка'), el('dd', {}, d ? d.title : '—'),
+        el('dt', {}, 'Дата'), el('dd', {}, fmtDate(iv.date)),
+        el('dt', {}, 'Сумма'), el('dd', { class: 'strong', style: 'font-size:18px' }, fmtMoney(iv.amount)),
+        el('dt', {}, 'Срок'), el('dd', {}, fmtDate(iv.due)),
+        el('dt', {}, 'Статус'), el('dd', {}, statusPill),
       ]),
+      el('div', { class: 'form-row', style: 'margin-top:8px' }, [el('label', {}, 'Изменить статус'), statusSel]),
     ]),
     foot: [
-      el('button', { class:'btn', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl); else toast('Сделка не найдена', 'warn'); } }, '🖨 PDF'),
-      isPaid
-        ? el('button', { class:'btn btn-danger', onclick: () => setStatus('pending', 'Оплата отменена — ожидает') }, '↩ Отменить оплату')
-        : el('button', { class:'btn btn-primary', onclick: () => setStatus('paid', 'Счёт оплачен') }, '✓ Оплачено'),
-    ],
+      d ? el('button', { class: 'btn', onclick: () => { closeModal(); openDealDetail(d.id); } }, 'Открыть сделку') : null,
+      el('button', { class: 'btn', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl); else toast('Сделка не найдена', 'warn'); } }, '🖨 Счёт PDF'),
+      el('button', { class: 'btn btn-primary', onclick: printTTN }, '🖨 Печать ТТН'),
+    ].filter(Boolean),
   });
 }
 
@@ -4824,7 +4846,7 @@ VIEWS.invoices = () => {
 
   // Список документов = только реальные счета (строки «по сделке» больше не показываем)
   function computeDocs() {
-    return state.invoices.map(iv => ({ invId: iv.id, no: iv.no, date: iv.date, client: iv.client, deal: iv.deal, amount: iv.amount, due: iv.due, status: iv.status, onopen: () => { const dl = byId(state.deals, iv.deal); if (dl) openDealDetail(dl.id); else openInvoiceDetail(iv.id); } }));
+    return state.invoices.map(iv => ({ invId: iv.id, no: iv.no, date: iv.date, client: iv.client, deal: iv.deal, amount: iv.amount, due: iv.due, status: iv.status, onopen: () => openInvoiceDetail(iv.id) }));
   }
 
   // Массовое редактирование: выбор счетов (только реальные счета, не строки «по сделке»)
