@@ -1021,6 +1021,13 @@ table.data tbody tr.active-row { background: var(--brand-soft); }
 .k-col.drag-over { background: var(--brand-soft); }
 .k-col.drag-over .k-col-body { background: rgba(0, 166, 226, .04); }
 
+/* Перетаскивание этапов (порядок столбцов) */
+.k-col-head .stage-grip { cursor: grab; opacity: .4; font-size: 13px; line-height: 1; padding: 0 1px; user-select: none; flex: none; }
+.k-col-head .stage-grip:hover { opacity: .85; }
+.k-col-head .stage-grip:active { cursor: grabbing; }
+.k-col.stage-dragging { opacity: .55; }
+.k-col.stage-drop-target { outline: 2px dashed var(--brand); outline-offset: -2px; border-radius: 10px; }
+
 /* ---------- Login screen ---------- */
 .login-page {
   min-height: 100vh;
