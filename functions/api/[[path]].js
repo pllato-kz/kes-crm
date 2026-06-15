@@ -639,6 +639,10 @@ async function ensureCompanyColumns(env) {
     'ALTER TABLE company ADD COLUMN work_hours TEXT',
     'ALTER TABLE company ADD COLUMN website TEXT',
     'ALTER TABLE company ADD COLUMN note TEXT',
+    'ALTER TABLE company ADD COLUMN phone TEXT',
+    'ALTER TABLE company ADD COLUMN bank_account TEXT',
+    'ALTER TABLE company ADD COLUMN bank_bik TEXT',
+    'ALTER TABLE company ADD COLUMN bank_name TEXT',
   ]) { try { await env.DB.prepare(ddl).run(); } catch (e) { /* уже есть */ } }
   // значения по умолчанию (если пусто) — чтобы карточка не была пустой
   try {
@@ -654,6 +658,73 @@ async function ensureCompanyColumns(env) {
     ).run();
   } catch (e) {}
   COMPANY_SCHEMA_OK = true;
+}
+
+// Реквизиты организации из 1С (Catalog_Организации + контактная информация + банковский счёт).
+// Имена реквизитов в КЗ-конфигурациях отличаются, поэтому берём ВСЕ поля (без $select) и
+// пробуем несколько вариантов. Обновляем только непустыми значениями (existing не затираем пустым).
+async function syncCompany1C(env) {
+  if (!env.ODATA_URL) return;
+  await ensureCompanyColumns(env);
+  let org = null;
+  try {
+    const data = await odataGet(env, 'Catalog_Организации?$format=json&$top=50');
+    const rows = (data.value || []).filter((r) => !r.DeletionMark);
+    const want = ONEC_ORG_NAME.toLowerCase();
+    org = rows.find((r) => String(r['НаименованиеПолное'] || r.Description || '').toLowerCase().includes(want)) || rows[0];
+  } catch (e) { return; }
+  if (!org) return;
+  const pick = (...keys) => { for (const k of keys) { const v = org[k]; if (v != null && String(v).trim() !== '') return String(v).trim(); } return null; };
+  const name = pick('НаименованиеПолное', 'Description');
+  const bin = pick('БИН', 'ИИН', 'ИдентификационныйКодЛичности', 'ИНН', 'РегистрационныйНомер');
+
+  // контактная информация (адрес/телефон) — подчинённая таблица, фильтруем по владельцу
+  let address = null, phone = null;
+  try {
+    const ci = await odataGet(env, 'Catalog_Организации_КонтактнаяИнформация?$format=json&$top=300');
+    for (const r of (ci.value || [])) {
+      if (r.Ref_Key !== org.Ref_Key) continue;
+      const t = String(r['Тип'] || '').toLowerCase(); const rep = String(r['Представление'] || '').trim();
+      if (!rep) continue;
+      if (!address && /адрес/.test(t)) address = rep;
+      if (!phone && /телефон/.test(t)) phone = rep;
+    }
+  } catch (e) {}
+
+  // банковский счёт организации (+ БИК/название банка)
+  let acc = null, bik = null, bankName = null;
+  try {
+    const bs = await odataGet(env, 'Catalog_БанковскиеСчета?$format=json&$top=300');
+    const rows = (bs.value || []).filter((r) => !r.DeletionMark && (r.Owner_Key === org.Ref_Key || r.Owner === org.Ref_Key));
+    const main = rows.find((r) => r.Ref_Key === org['ОсновнойБанковскийСчет_Key']) || rows[0];
+    if (main) {
+      acc = (main['НомерСчета'] && String(main['НомерСчета']).trim()) || null;
+      const bankRef = main['Банк_Key'] || main['БанкДляРасчетов_Key'];
+      if (bankRef && bankRef !== '00000000-0000-0000-0000-000000000000') {
+        try {
+          const bank = await odataGet(env, `Catalog_Банки(guid'${bankRef}')?$format=json`);
+          bik = (bank.Code && String(bank.Code).trim()) || null;
+          bankName = (bank.Description && String(bank.Description).trim()) || null;
+        } catch (e) {}
+      }
+    }
+  } catch (e) {}
+
+  await env.DB.prepare(
+    `UPDATE company SET
+       legal_name   = COALESCE(?, legal_name),
+       bin          = COALESCE(?, bin),
+       address      = COALESCE(?, address),
+       phone        = COALESCE(?, phone),
+       bank_account = COALESCE(?, bank_account),
+       bank_bik     = COALESCE(?, bank_bik),
+       bank_name    = COALESCE(?, bank_name)
+     WHERE id = 1`
+  ).bind(name, bin, address, phone, acc, bik, bankName).run();
+  await env.DB.prepare(
+    `INSERT INTO sync_state (entity, last_at, info) VALUES ('company_1c', datetime('now'), ?)
+     ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+  ).bind(`орг: ${name || '—'}, БИН ${bin || '—'}, счёт ${acc ? 'есть' : 'нет'}`).run();
 }
 
 // Воронки продаж: таблица pipelines + колонка pipeline_id у этапов.
@@ -2398,6 +2469,7 @@ const SYNC_INTERVALS = {
   suppliers_1c: 10,   // поставщики — ~10 мин
   products_1c: 10,    // номенклатура (тяжёлый полный пул) — ~10 мин
   categories_1c: 60,  // категории — редко меняются
+  company_1c: 360,    // реквизиты организации — редко (раз в ~6 ч)
   stock_1c: 4,        // остатки — на каждом прогоне (~5 мин)
   receipts_1c: 4,     // приходы — на каждом прогоне (~5 мин)
   prices_1c: 8,       // цены/средняя закупка — ~10 мин (и сразу после прихода)
@@ -2419,6 +2491,7 @@ async function runDueSyncs(env) {
   if (due('clients_1c')) await run('clients', () => syncClients(env));
   if (due('suppliers_1c')) await run('suppliers', () => syncSuppliers(env));
   if (due('categories_1c')) await run('categories', () => syncCategories(env));
+  if (due('company_1c')) await run('company', () => syncCompany1C(env));
   if (due('products_1c')) await run('products', () => syncProducts(env, 1000, 0));
   if (due('stock_1c')) await run('stock', () => syncStock(env));
   let receiptsRan = false;
