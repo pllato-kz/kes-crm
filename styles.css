@@ -290,12 +290,14 @@ a:hover { text-decoration: underline; }
 }
 .icon-btn:hover { background: var(--bg); border-color: var(--border); }
 .icon-btn .dot {
+  display: none;                 /* по умолчанию точки нет — просто колокольчик */
   position: absolute; top: 7px; right: 8px;
   width: 8px; height: 8px;
   background: var(--red);
   border-radius: 50%;
   border: 2px solid #fff;
 }
+.icon-btn .dot.show { display: block; } /* красная точка при наличии уведомлений */
 
 .user-chip {
   display: flex; align-items: center; gap: 9px;
