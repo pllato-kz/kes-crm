@@ -3087,8 +3087,9 @@ function detectPriceFields(sample) {
 }
 
 // Читаем регистр «Цены номенклатуры». $select не задаём жёстко — определяем поля по образцу.
-// Если регистр ПОДЧИНЁН РЕГИСТРАТОРУ (поля Recorder/RecordSet вместо измерений), реальные
-// строки лежат в навигационном свойстве RecordSet — разворачиваем через $expand и склеиваем.
+// Если регистр ПОДЧИНЁН РЕГИСТРАТОРУ (поля Recorder/RecordSet вместо измерений), записи нельзя
+// получить через $expand (1С: 501 — $expand только для ссылочных реквизитов), поэтому читаем
+// исходный документ установки цен (его табличную часть), как делаем с приходами.
 async function fetchPriceRegister(env) {
   const REG = 'InformationRegister_ЦеныНоменклатуры';
   const d0 = await odataGet(env, `${REG}?$format=json&$top=1`);
@@ -3096,22 +3097,11 @@ async function fetchPriceRegister(env) {
   if (!sample) return { rows: [], fields: null, keys: [] };
   const keys = Object.keys(sample);
 
-  // регистр подчинён регистратору: записи вложены в RecordSet
+  // регистр подчинён регистратору — читаем документ установки цен
   const recorderBound = keys.includes('RecordSet') && !keys.some((k) => /_key$/i.test(k));
-  if (recorderBound) {
-    let out = [], skip = 0;
-    while (true) {
-      const d = await odataGet(env, `${REG}?$format=json&$expand=RecordSet&$top=1000&$skip=${skip}`);
-      const recs = d.value || [];
-      for (const e of recs) { const rs = e.RecordSet || []; if (Array.isArray(rs)) for (const r of rs) out.push(r); }
-      if (recs.length < 1000) break; skip += 1000;
-    }
-    const s = out[0] || null;
-    if (!s) return { rows: [], fields: null, keys: ['RecordSet(пусто/не развёрнут)'], nested: true };
-    return { rows: out, fields: detectPriceFields(s), keys: Object.keys(s), nested: true };
-  }
+  if (recorderBound) return await fetchPriceRegisterFromDoc(env);
 
-  // плоский (независимый) регистр
+  // плоский (независимый) регистр — читаем напрямую
   let out = [], skip = 0;
   while (true) {
     const d = await odataGet(env, `${REG}?$format=json&$top=5000&$skip=${skip}`);
@@ -3119,6 +3109,61 @@ async function fetchPriceRegister(env) {
     if (rows.length < 5000) break; skip += 5000;
   }
   return { rows: out, fields: detectPriceFields(sample), keys, nested: false };
+}
+
+// Цены из документа установки цен (регистратор регистра ЦеныНоменклатуры). Имя документа берём
+// из Recorder_Type, табличную часть и её поля определяем перебором/по образцу. За «последнюю»
+// цену берём строку из самого позднего по дате документа (как в приходах).
+async function fetchPriceRegisterFromDoc(env) {
+  const REG = 'InformationRegister_ЦеныНоменклатуры';
+  // 1) типы регистраторов (документы установки цен) — хватает первых страниц
+  const recTypes = new Set();
+  let skip = 0;
+  for (let p = 0; p < 3; p++) {
+    const d = await odataGet(env, `${REG}?$format=json&$top=5000&$skip=${skip}`);
+    const rows = d.value || [];
+    for (const r of rows) if (r.Recorder_Type) recTypes.add(String(r.Recorder_Type));
+    if (rows.length < 5000) break; skip += 5000;
+  }
+  const docNames = [...recTypes].map((t) => t.split('.').pop()).filter((n) => /^Document_/.test(n));
+  if (!docNames.length) docNames.push('Document_УстановкаЦенНоменклатуры');
+
+  let out = [], fields = null, usedDoc = null, usedTab = null;
+  for (const doc of docNames) {
+    // табличная часть: подбираем по наличию полей номенклатуры и цены
+    let tabName = null, f = null;
+    for (const ts of ['Товары', 'ЦеныНоменклатуры', 'Цены', 'СтрокиЦен', 'ТоварыЦены']) {
+      try {
+        const pr = await odataGet(env, `${doc}_${ts}?$format=json&$top=1`);
+        const s = (pr.value || [])[0]; if (!s) continue;
+        const ff = detectPriceFields(s);
+        if (ff.nomKey && ff.priceField) { tabName = ts; f = ff; break; }
+      } catch (e) {}
+    }
+    if (!tabName) continue;
+    usedDoc = doc; usedTab = tabName; fields = f;
+
+    // даты документов (для выбора последней цены)
+    const dateByDoc = {};
+    let sk = 0;
+    while (true) {
+      const d = await odataGet(env, `${doc}?$format=json&$orderby=Ref_Key&$select=Ref_Key,Date&$top=5000&$skip=${sk}`);
+      const rows = d.value || []; for (const r of rows) dateByDoc[r.Ref_Key] = String(r.Date || '');
+      if (rows.length < 5000) break; sk += 5000;
+    }
+    // строки табличной части
+    sk = 0;
+    while (true) {
+      const d = await odataGet(env, `${doc}_${tabName}?$format=json&$orderby=Ref_Key,LineNumber&$top=5000&$skip=${sk}`);
+      const rows = d.value || [];
+      for (const r of rows) { r.__date = dateByDoc[r.Ref_Key] || ''; out.push(r); }
+      if (rows.length < 5000) break; sk += 5000;
+    }
+    break; // обычно один тип документа установки цен
+  }
+  if (!fields) return { rows: [], fields: null, keys: ['регистратор: ' + ([...recTypes].join(' | ') || '—')], nested: true, fromDoc: true };
+  fields.periodField = '__date'; // дата документа как «период» для выбора последней цены
+  return { rows: out, fields, keys: Object.keys(out[0] || {}), nested: true, fromDoc: true, doc: usedDoc, tab: usedTab };
 }
 
 async function syncSalePrices(env) {
@@ -3194,7 +3239,8 @@ async function syncSalePrices(env) {
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
   const foundTypes = [...new Set(Object.values(typeName))].filter(Boolean).slice(0, 10).join(', ');
-  await logState(`строк ${(reg.rows || []).length}${reg.nested ? ' (из RecordSet)' : ''} [ном=${f.nomKey}, вид=${f.typeKey || '—'}, цена=${f.priceField}]; закуп ${updC}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
+  const src = reg.fromDoc ? ` (док ${reg.doc}_${reg.tab})` : (reg.nested ? ' (из RecordSet)' : '');
+  await logState(`строк ${(reg.rows || []).length}${src} [ном=${f.nomKey}, вид=${f.typeKey || '—'}, цена=${f.priceField}]; закуп ${updC}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
   return json({ rows: (reg.rows || []).length, fields: f, cost: updC, wholesale: updW, retail: updR, missing: miss, types: foundTypes });
 }
 
