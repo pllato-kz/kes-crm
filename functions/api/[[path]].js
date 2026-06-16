@@ -195,6 +195,16 @@ export async function onRequest(context) {
       return err(405, 'Метод не поддерживается');
     }
 
+    // резерв товаров под сделку
+    if (seg[0] === 'deals' && seg[1] && seg[2] === 'reserve' && request.method === 'POST') {
+      const b = await request.json().catch(() => ({}));
+      return reserveDeal(env, seg[1], !!b.release);
+    }
+    // какие сделки держат резерв по товару (проваливание со склада)
+    if (seg[0] === 'products' && seg[1] && seg[2] === 'reservations' && request.method === 'GET') {
+      return getProductReservations(env, seg[1]);
+    }
+
     // агрегаты для раздела «Отчёты» (всё из данных CRM)
     if (seg[0] === 'reports' && seg[1] === 'summary' && request.method === 'GET') return reportsSummary(env, url);
 
@@ -1240,6 +1250,61 @@ async function adjustStock(env, productId, delta) {
   try { await env.DB.prepare('INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?, ?, ?, 0)').bind(productId, 'w1', newStock).run(); } catch (e) {}
   return newStock;
 }
+// Изменить резерв товара на delta (не ниже 0) — на той же строке склада, что и остаток.
+async function adjustReserved(env, productId, delta) {
+  if (!delta) return;
+  const row = await env.DB.prepare('SELECT warehouse_id, reserved FROM product_stock WHERE product_id=? ORDER BY stock DESC LIMIT 1').bind(productId).first();
+  if (row) {
+    const nv = Math.max(0, num(row.reserved) + delta);
+    await env.DB.prepare('UPDATE product_stock SET reserved=? WHERE product_id=? AND warehouse_id=?').bind(nv, productId, row.warehouse_id).run();
+    return nv;
+  }
+  if (delta > 0) { try { await env.DB.prepare("INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?, 'w1', 0, ?)").bind(productId, Math.max(0, delta)).run(); } catch (e) {} }
+  return Math.max(0, delta);
+}
+
+// Резерв товаров под сделку. Хранит, сколько зарезервировано по каждой сделке
+// (deal_reservations), чтобы повторный «Резерв» не задваивал, а снятие/удаление —
+// корректно освобождало. reserved в product_stock держим = сумме резервов сделок.
+let RESV_SCHEMA_OK = false;
+async function ensureReservationsSchema(env) {
+  if (RESV_SCHEMA_OK) return;
+  try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS deal_reservations (deal_id TEXT, product_id TEXT, qty REAL, PRIMARY KEY (deal_id, product_id))').run(); } catch (e) {}
+  RESV_SCHEMA_OK = true;
+}
+// Привести резерв сделки к её текущим позициям (release=true — снять весь резерв сделки).
+async function reserveDeal(env, dealId, release) {
+  await ensureReservationsSchema(env);
+  const cur = await env.DB.prepare('SELECT product_id, qty FROM deal_reservations WHERE deal_id=?').bind(dealId).all();
+  const curMap = {}; for (const r of (cur.results || [])) curMap[r.product_id] = num(r.qty);
+
+  const want = {};
+  if (!release) {
+    const items = await env.DB.prepare('SELECT product_id, qty FROM deal_items WHERE deal_id=?').bind(dealId).all();
+    for (const it of (items.results || [])) { if (!it.product_id) continue; want[it.product_id] = (want[it.product_id] || 0) + num(it.qty); }
+  }
+  const pids = new Set([...Object.keys(curMap), ...Object.keys(want)]);
+  for (const pid of pids) { const delta = (want[pid] || 0) - (curMap[pid] || 0); if (delta) await adjustReserved(env, pid, delta); }
+
+  await env.DB.prepare('DELETE FROM deal_reservations WHERE deal_id=?').bind(dealId).run();
+  const stmts = [];
+  for (const pid of Object.keys(want)) if (want[pid] > 0) stmts.push(env.DB.prepare('INSERT INTO deal_reservations (deal_id, product_id, qty) VALUES (?,?,?)').bind(dealId, pid, want[pid]));
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+  const totalQty = Object.values(want).reduce((s, v) => s + v, 0);
+  return json({ ok: true, released: !!release, products: Object.keys(want).length, totalQty });
+}
+// Какие сделки держат резерв по товару (для проваливания со склада).
+async function getProductReservations(env, productId) {
+  await ensureReservationsSchema(env);
+  const r = await env.DB.prepare(
+    `SELECT dr.qty AS qty, d.id AS deal_id, d.no AS no, d.title AS title, d.manager_id AS manager_id, c.name AS client_name
+       FROM deal_reservations dr
+       JOIN deals d ON d.id = dr.deal_id
+       LEFT JOIN clients c ON c.id = d.client_id
+      WHERE dr.product_id=? ORDER BY dr.qty DESC`
+  ).bind(productId).all();
+  return json({ reservations: r.results || [] });
+}
 
 // --------------------------------------------------------------------------
 // Движения склада (приход/расход) — журнал + корректировка остатка product_stock.
@@ -1471,6 +1536,7 @@ async function deleteDeal(env, id, auth) {
   if (!d) return err(404, 'Сделка не найдена');
   if (auth.role !== 'director') return err(403, 'Удалять сделки может только директор');
   await ensureArchiveColumns(env);
+  try { await reserveDeal(env, id, true); } catch (e) {} // освобождаем резерв при архивации
   await env.DB.prepare('UPDATE deals SET archived_at=? WHERE id=?').bind(new Date().toISOString(), id).run();
   return json({ archived: 1, id });
 }
