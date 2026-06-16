@@ -201,7 +201,7 @@
     apiFetch('notifications/scan-overdue', { method: 'POST' }).catch(() => {});
     const [leadSources, suppliers, productsResp, clients, deals, leads, tasks, invoices, shipments, receipts, notifications] = await Promise.all([
       apiFetch('lead_sources'),
-      apiFetch('suppliers'), apiFetch('products?limit=1000'), apiFetch('clients?limit=1000'),
+      apiFetch('suppliers'), apiFetch('products?limit=1000'), apiFetch('clients?limit=100000'),
       apiFetch('deals'), apiFetch('leads'), apiFetch('tasks'), apiFetch('invoices'),
       apiFetch('shipments'), apiFetch('receipts'), apiFetch('notifications'),
     ]);
