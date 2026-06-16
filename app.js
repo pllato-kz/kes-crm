@@ -1596,7 +1596,6 @@ function openShipmentDetail(id) {
       ]),
     ]),
     foot: [
-      el('button', { class:'btn', onclick: () => printShipment(s) }, '🖨 Печать ТТН'),
       el('button', { class:'btn btn-primary', onclick: async () => { if (await setShipmentStatus(s, 'delivered')) { closeModal(); toast('Отгрузка доставлена · сделка синхронизирована', 'success'); if (CURRENT_VIEW) navigate(CURRENT_VIEW); } } }, '✓ Доставлено'),
     ],
   });
@@ -1684,11 +1683,6 @@ async function openShipmentDoc(r) {
     foot.push(photoInput, el('button', { class:'btn btn-primary', onclick: () => photoInput.click() }, '✅ Доставлено + фото'));
   }
   if (deal) foot.push(el('button', { class:'btn', onclick: () => { closeModal(); openDealDetail(deal.id); } }, 'Открыть сделку'));
-  foot.push(el('button', { class:'btn btn-primary', onclick: () => printShipment(ship || {
-    no: 'ТТН (по сделке)', deal: r.deal, client: deal && deal.client, date: created,
-    transport: '', driver: '', destination: (deal && deal.address) || '', items: deal ? deal.items : 0, weight: 0,
-  }) }, '🖨 Печать ТТН'));
-
   openModal({ title: ship ? ('Отгрузка ' + ship.no) : ('Документ · ' + (deal ? deal.title : '—')), body, foot });
 
   // Подгрузка позиций по связанной сделке (с дозагрузкой недостающих товаров)
@@ -1913,8 +1907,10 @@ function openAbout() {
   });
 }
 
-// ---------- Print invoice (PDF via window.print) ----------
-function printInvoice(deal, invNoArg) {
+// ---------- Печать документа: «Счёт на оплату» или «КП» (PDF via window.print) ----------
+function printKP(deal, noArg) { return printInvoice(deal, noArg, 'kp'); }
+function printInvoice(deal, invNoArg, kind) {
+  const isKP = kind === 'kp';
   const cl = clientById(deal.client);
   const items = (deal.lineItems || []).map(it => {
     const p = byId(state.products, it.product);
@@ -1933,7 +1929,9 @@ function printInvoice(deal, invNoArg) {
   const dateStr = today.toLocaleDateString('ru-RU', { day:'2-digit', month:'long', year:'numeric' });
   // Номер счёта — настоящий: из переданного, иначе из связанного счёта сделки, иначе по номеру сделки
   const linkedInv = (state.invoices || []).find(iv => iv.deal === deal.id);
-  const invNo = invNoArg || (linkedInv && linkedInv.no) || ('СФ-' + (deal.no || today.getFullYear()));
+  const invNo = invNoArg || (isKP
+    ? ('КП-' + (deal.no || today.getFullYear()))
+    : ((linkedInv && linkedInv.no) || ('СФ-' + (deal.no || today.getFullYear()))));
   // Реквизиты продавца — из 1С (state.meta), с запасными значениями
   const seller = state.meta || {};
   const sellerName = seller.legalName || seller.tenant || 'ТОО «KazEnergoSnab»';
@@ -1956,13 +1954,13 @@ function printInvoice(deal, invNoArg) {
             <text x="50" y="62" text-anchor="middle" font-family="Arial" font-weight="900" font-size="32" fill="#111">KES</text>
           </svg>
           <div>
-            <h2>СЧЁТ-ФАКТУРА ${invNo}</h2>
+            <h2>${isKP ? 'КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ' : 'СЧЁТ НА ОПЛАТУ'} ${invNo}</h2>
             <div style="color:#666;font-size:12px;margin-top:4px">от ${dateStr}</div>
           </div>
         </div>
         <div class="pr-meta">
           <div>По сделке: <b>${deal.title}</b></div>
-          <div>Срок оплаты: 5 раб. дней</div>
+          <div>${isKP ? 'Предложение действительно: 14 дней' : 'Срок оплаты: 5 раб. дней'}</div>
           <div style="margin-top:6px;color:#888">Образец — не имеет юридической силы</div>
         </div>
       </div>
@@ -2014,7 +2012,7 @@ function printInvoice(deal, invNoArg) {
       <div class="pr-totals">
         <div class="total-line"><span>Сумма без НДС:</span> <span>${fmtMoney(subtotal)}</span></div>
         <div class="total-line"><span>НДС 12%:</span> <span>${fmtMoney(vat)}</span></div>
-        <div class="total-line grand"><span>ИТОГО К ОПЛАТЕ:</span> <span>${fmtMoney(total)}</span></div>
+        <div class="total-line grand"><span>${isKP ? 'ИТОГО:' : 'ИТОГО К ОПЛАТЕ:'}</span> <span>${fmtMoney(total)}</span></div>
       </div>
 
       <div style="margin-top:14px;padding:12px;background:#FAFBFC;border-radius:6px;font-size:11px;color:#555">
@@ -3313,7 +3311,8 @@ async function openDealDetail(id, opts) {
   renderClient();
 
   const fieldRow = (label, input) => el('div', { class:'form-row' }, [el('label', {}, label), input]);
-  const printBtn = el('button', { class:'btn btn-sm', onclick: () => printInvoice(d) }, '🖨 Печать СФ');
+  const invoiceBtn = el('button', { class:'btn btn-sm', onclick: () => printInvoice(d) }, '🖨 Счёт на оплату');
+  const kpBtn = el('button', { class:'btn btn-sm', onclick: () => printKP(d) }, '📋 КП');
   const delBtn = (currentUser && currentUser.roleKey === 'director') ? el('button', { class:'btn btn-sm btn-danger', onclick: async () => {
     if (!(await confirmModal({ title:'Удаление сделки', message:`Удалить сделку «${d.title}»? Она переместится в архив на 30 дней, затем удалится навсегда.`, confirmText:'Удалить', danger:true }))) return;
     try {
@@ -3344,7 +3343,7 @@ async function openDealDetail(id, opts) {
         el('div', { class:'muted', style:'font-size:11px;margin-top:2px' }, 'Адрес доставки берётся из поля «Адрес» выше.'),
       ]);
     })(),
-    el('div', { class:'deal-actions' }, [printBtn, delBtn]),
+    el('div', { class:'deal-actions' }, [invoiceBtn, kpBtn, delBtn]),
   ]);
 
   // ----- Правая панель: вкладки (Комментарии / WhatsApp / История) -----
@@ -3462,7 +3461,6 @@ async function openDealDetail(id, opts) {
           el('dt', {}, 'Позиций'), el('dd', {}, s.items != null ? s.items : '—'),
         ]),
         canEdit ? el('div', { style:'margin-top:8px' }, [el('label', { class:'muted', style:'font-size:12px;display:block;margin-bottom:4px' }, 'Статус отгрузки'), sel]) : null,
-        el('button', { class:'btn btn-sm', style:'margin-top:8px', onclick: () => printShipment(s) }, '🖨 Печать ТТН'),
       ]));
     });
   }
@@ -6360,7 +6358,7 @@ VIEWS.settings = () => {
     window.__API__.apiFetch('sync/status').then(rows => {
       rows = rows || [];
       const f = (e) => rows.find(x => x.entity === e);
-      const cl = f('clients_1c'), pr = f('products_1c'), un = f('units_1c'), st = f('stock_1c'), px = f('prices_1c'), spr = f('saleprices_1c'), rc = f('receipts_1c'), ip = f('invoices_push'), sp = f('shipments_push');
+      const cl = f('clients_1c'), pr = f('products_1c'), un = f('units_1c'), st = f('stock_1c'), px = f('prices_1c'), spr = f('saleprices_1c'), rc = f('receipts_1c'), ip = f('invoices_push'), ipay = f('invoice_payments_1c'), sp = f('shipments_push');
       statusHost.innerHTML = '';
       statusHost.append(
         el('div', {}, cl ? `Контрагенты: ${String(cl.last_at).slice(0, 16)} · ${cl.info}` : 'Контрагенты ещё не синхронизировались'),
@@ -6371,6 +6369,7 @@ VIEWS.settings = () => {
         el('div', {}, spr ? `Закуп + опт/розница (регистр 1С): ${String(spr.last_at).slice(0, 16)} · ${spr.info}` : 'Регистр цен ещё не синхронизировался'),
         el('div', {}, rc ? `Приходы: ${String(rc.last_at).slice(0, 16)} · ${rc.info}` : 'Приходы ещё не синхронизировались'),
         el('div', {}, ip ? `Счета → 1С: ${String(ip.last_at).slice(0, 16)} · ${ip.info}` : 'Счета в 1С ещё не отправлялись'),
+        el('div', {}, ipay ? `Оплата счетов (из 1С): ${String(ipay.last_at).slice(0, 16)} · ${ipay.info}` : 'Статус оплаты из 1С ещё не синхронизировался'),
         el('div', {}, sp ? `Отгрузки → 1С (черновик): ${String(sp.last_at).slice(0, 16)} · ${sp.info}` : 'Отгрузки в 1С ещё не отправлялись (этап 3 выключен)'),
       );
     }).catch(() => { statusHost.textContent = ''; });
