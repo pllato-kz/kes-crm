@@ -3179,7 +3179,15 @@ async function openDealDetail(id, opts) {
         } }, [
           el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku + (p.brand ? ' · ' + p.brand : ''))]),
           el('div', { style:'text-align:right;white-space:nowrap' }, [
-            el('div', { class:'pp-price' }, fmtMoney(p.priceWholesale)),
+            (() => {
+              const cost = Number(p.priceCost) || 0, opt = Number(p.priceWholesale) || 0, rozn = Number(p.priceRetail) || 0;
+              const sale = rozn || opt; // эффективная цена продажи (розница, иначе опт)
+              const lbl = rozn ? 'розн' : (opt ? 'опт' : '');
+              return el('div', { class:'pp-price', title: 'Закуп ' + (cost ? fmtMoney(cost) : '—') + ' · Опт ' + (opt ? fmtMoney(opt) : '—') + ' · Розн ' + (rozn ? fmtMoney(rozn) : '—') }, [
+                sale ? fmtMoney(sale) : '—',
+                (sale && lbl) ? el('span', { style:'font-size:10px;font-weight:500;color:#9CA3AF;margin-left:3px' }, lbl) : null,
+              ]);
+            })(),
             el('div', { style:'font-size:11px;margin-top:2px;font-weight:600;color:' + (out ? '#EF4444' : '#10B981') },
               out ? 'нет на складе' : ('в наличии: ' + free + (p.unit ? ' ' + p.unit : ''))),
           ]),
