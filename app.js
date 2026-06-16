@@ -3367,10 +3367,24 @@ async function openDealDetail(id, opts) {
 
   const chatBody = el('div', { class:'chat-body' });
   const chatInputEl = el('input', { placeholder:'Сообщение…' });
+  // Прикрепление файла/фото: грузим в R2, затем отправляем в WhatsApp (caption — текст из поля)
+  const chatFileInput = el('input', { type:'file', accept:'image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt', style:'display:none' });
+  chatFileInput.onchange = async () => {
+    const f = chatFileInput.files && chatFileInput.files[0]; if (!f) return;
+    const caption = chatInputEl.value.trim();
+    toast('Отправка файла…', 'info');
+    try {
+      const up = await window.__API__.uploadFile(f);
+      await window.__API__.apiFetch('greenapi/sendfile', { method:'POST', body:{ dealId: d.id, url: up.url, fileName: f.name, caption } });
+      chatInputEl.value = ''; renderChat(true);
+    } catch (e) { toast('Не удалось отправить файл: ' + ((e && e.message) || e), 'error'); }
+    chatFileInput.value = '';
+  };
   const paneWhats = el('div', { class:'chat-pane active', 'data-pane':'whatsapp' }, [
     chatBody,
     el('div', { class:'chat-input' }, [
-      el('button', { title:'Прикрепить файл', onclick: () => toast('Прикрепление файлов — скоро', 'info') }, '📎'),
+      chatFileInput,
+      el('button', { title:'Прикрепить файл/фото', onclick: () => chatFileInput.click() }, '📎'),
       chatInputEl,
       el('button', { title:'Отправить', onclick: () => sendChat() }, '📨'),
     ]),
@@ -3530,7 +3544,22 @@ async function openDealDetail(id, opts) {
   function bubble(mm) {
     const out = mm.direction === 'out';
     const mark = out ? (mm.status === 'sent' ? ' ✓' : (mm.status === 'error' ? ' ✕' : '')) : '';
-    return el('div', { class:'msg ' + (out ? 'out' : 'in') }, [el('div', {}, mm.text || ''), el('div', { class:'time' }, String(mm.created_at || '').slice(11, 16) + mark)]);
+    const kids = [];
+    if (mm.file_url) {
+      const isImg = /\.(jpe?g|png|gif|webp|bmp|heic)(\?|$)/i.test(mm.file_url);
+      if (isImg) {
+        kids.push(el('a', { href: mm.file_url, target:'_blank' }, el('img', { src: mm.file_url, alt:'', style:'max-width:200px;max-height:200px;border-radius:8px;display:block' })));
+        if (mm.text && mm.text !== '[файл]') kids.push(el('div', { style:'margin-top:4px' }, mm.text));
+      } else {
+        kids.push(el('a', { href: mm.file_url, target:'_blank', class:'msg-file', style:'text-decoration:none;color:inherit' }, [
+          el('span', { class:'fi' }, '📄'), el('div', {}, el('div', { class:'fn' }, mm.text || 'файл')),
+        ]));
+      }
+    } else {
+      kids.push(el('div', {}, mm.text || ''));
+    }
+    kids.push(el('div', { class:'time' }, String(mm.created_at || '').slice(11, 16) + mark));
+    return el('div', { class:'msg ' + (out ? 'out' : 'in') }, kids);
   }
   function exampleChat() {
     chatBody.append(
