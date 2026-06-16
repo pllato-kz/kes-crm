@@ -1760,7 +1760,7 @@ async function writeDeal(env, request, method, id, auth) {
 let SHIP_STATUS_OK = false;
 async function ensureShipmentStatuses(env) {
   if (SHIP_STATUS_OK) return;
-  for (const [idv, label, color] of [['planned','Запланирована','#F59E0B'], ['shipped','В пути','#06B6D4'], ['delivered','Доставлена','#22C55E']]) {
+  for (const [idv, label, color] of [['planned','Запланирована','#F59E0B'], ['shipped','Отгружена','#06B6D4'], ['transit','В пути','#3B82F6'], ['delivered','Доставлена','#22C55E']]) {
     try { await env.DB.prepare('INSERT OR IGNORE INTO shipment_statuses (id,label,color) VALUES (?,?,?)').bind(idv, label, color).run(); } catch (e) {}
   }
   SHIP_STATUS_OK = true;
