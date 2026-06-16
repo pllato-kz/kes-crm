@@ -134,6 +134,7 @@ export async function onRequest(context) {
       }
       if (seg[1] === '1c' && seg[2] === 'saleprices' && request.method === 'POST') return syncSalePrices(env);
       if (seg[1] === '1c' && seg[2] === 'units' && request.method === 'POST') return syncUnits(env);
+      if (seg[1] === '1c' && seg[2] === 'invoice-payments' && request.method === 'POST') return syncInvoicePayments(env);
       if (seg[1] === '1c' && seg[2] === 'products' && request.method === 'POST') {
         const u = new URL(request.url);
         const lim = parseInt(u.searchParams.get('limit'), 10);
@@ -1939,6 +1940,73 @@ async function ensureInvoiceExtRef(env) {
   INVOICE_EXTREF_OK = true;
 }
 
+// Статус оплаты счетов из 1С → CRM. Имя поля оплаты в Document_СчетНаОплатуПокупателю
+// отличается в конфигурациях (Оплачен/СтатусОплаты/СуммаОплаты/ПроцентОплаты), поэтому
+// определяем его по образцу документа и логируем для диагностики. Только тянем из 1С (в 1С
+// ничего не пишем). Сопоставление по invoices.ext_ref (Ref_Key документа).
+async function syncInvoicePayments(env) {
+  await ensureInvoiceExtRef(env);
+  await ensureArchiveColumns(env);
+  const logState = async (msg) => {
+    try {
+      await env.DB.prepare(
+        `INSERT INTO sync_state (entity, last_at, info) VALUES ('invoice_payments_1c', datetime('now'), ?)
+         ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+      ).bind(String(msg).slice(0, 300)).run();
+    } catch (e) {}
+  };
+
+  const inv = await env.DB.prepare("SELECT id, ext_ref, due, status_id FROM invoices WHERE ext_ref IS NOT NULL AND ext_ref<>'' AND (archived_at IS NULL OR archived_at='')").all();
+  const rows = inv.results || [];
+  if (!rows.length) { await logState('счетов с привязкой к 1С нет'); return json({ ok: true, invoices: 0 }); }
+
+  // 1) образец документа — определяем поле оплаты и поле суммы
+  let payField = null, sumField = null, keys = [];
+  try {
+    const d0 = await odataGet(env, `${ONEC_DOC}?$format=json&$top=1`);
+    const s = (d0.value || [])[0];
+    if (s) {
+      keys = Object.keys(s);
+      payField = keys.find(k => /оплач/i.test(k)) || keys.find(k => /статусоплат|состояниеоплат/i.test(k)) || keys.find(k => /(сумма|процент)оплат/i.test(k)) || null;
+      sumField = keys.find(k => /^суммадокумента$/i.test(k)) || keys.find(k => /суммадокумент|^сумма$/i.test(k)) || null;
+    }
+  } catch (e) { await logState('ошибка чтения счёта 1С: ' + ((e && e.message) || e)); return json({ ok: false }); }
+  if (!payField) { await logState('поле оплаты не найдено; поля документа: ' + (keys.join(', ') || '—')); return json({ ok: false, keys }); }
+
+  // 2) читаем все счета: Ref_Key + поле оплаты (+ сумма)
+  const paidByRef = {};
+  const sel = ['Ref_Key', payField].concat(sumField ? [sumField] : []).join(',');
+  let skip = 0;
+  while (true) {
+    const d = await odataGet(env, `${ONEC_DOC}?$format=json&$select=${sel}&$top=5000&$skip=${skip}`);
+    const list = d.value || [];
+    for (const r of list) {
+      const v = r[payField];
+      let paid = false;
+      if (typeof v === 'boolean') paid = v;
+      else if (typeof v === 'number') { const sum = sumField ? Number(r[sumField]) || 0 : 0; paid = sum > 0 ? v >= sum - 0.01 : v > 0; }
+      else if (typeof v === 'string') paid = /оплач|оплат/i.test(v) && !/не\s*оплач|частичн/i.test(v);
+      paidByRef[r.Ref_Key] = paid;
+    }
+    if (list.length < 5000) break; skip += 5000;
+  }
+
+  // 3) обновляем статусы CRM по данным 1С (paid / overdue по сроку / pending)
+  const today = new Date().toISOString().slice(0, 10);
+  const stmts = []; let setPaid = 0, setOverdue = 0, setPending = 0, miss = 0;
+  for (const r of rows) {
+    if (!(r.ext_ref in paidByRef)) { miss++; continue; }
+    let st;
+    if (paidByRef[r.ext_ref]) { st = 'paid'; setPaid++; }
+    else if (r.due && String(r.due).slice(0, 10) < today) { st = 'overdue'; setOverdue++; }
+    else { st = 'pending'; setPending++; }
+    if (st !== r.status_id) stmts.push(env.DB.prepare('UPDATE invoices SET status_id=? WHERE id=?').bind(st, r.id));
+  }
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+  await logState(`поле «${payField}»: счетов ${rows.length}, оплачено ${setPaid}, просрочено ${setOverdue}, ожидает ${setPending}, не найдено в 1С ${miss}`);
+  return json({ field: payField, invoices: rows.length, paid: setPaid, overdue: setOverdue, pending: setPending, missing: miss });
+}
+
 async function onecRefGet(env, kind, key = '') {
   const r = await env.DB.prepare('SELECT ref FROM onec_refs WHERE kind=? AND key=?').bind(kind, key).first();
   return (r && r.ref) || null;
@@ -2633,6 +2701,7 @@ const SYNC_INTERVALS = {
   receipts_1c: 4,     // приходы — на каждом прогоне (~5 мин)
   prices_1c: 8,       // опт/розница из приходов по единице измерения — ~10 мин (и сразу после прихода)
   saleprices_1c: 10,  // закуп из регистра цен 1С + опт/розница в пробелы — ~10 мин (+ сразу после полного прохода номенклатуры)
+  invoice_payments_1c: 5, // статус оплаты счетов из 1С — ~5 мин
 };
 // Запускает только «просроченные» синхронизации (по last_at в sync_state).
 async function runDueSyncs(env) {
@@ -2663,6 +2732,8 @@ async function runDueSyncs(env) {
   if (receiptsRan || due('prices_1c')) await run('prices', () => syncPrices(env, 'last'));
   // закуп из регистра цен 1С + опт/розница в незаполненные приходами позиции
   if (due('saleprices_1c')) await run('saleprices', () => syncSalePrices(env));
+  // статус оплаты счетов из 1С (только чтение)
+  if (due('invoice_payments_1c')) await run('invoice_payments', () => syncInvoicePayments(env));
   // единицы измерения — в самом конце (резюмируемо), чтобы тяжёлый проход не вытеснял цены
   const unitOff = parseInt((await getSetting(env, 'units_offset')) || '0', 10) || 0;
   if (unitOff > 0 || due('units_1c')) await run('units', () => syncUnits(env));
