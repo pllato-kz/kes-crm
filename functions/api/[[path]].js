@@ -132,6 +132,7 @@ export async function onRequest(context) {
         const mode = new URL(request.url).searchParams.get('mode');
         return syncPrices(env, mode === 'avg' ? 'avg' : 'last');
       }
+      if (seg[1] === '1c' && seg[2] === 'saleprices' && request.method === 'POST') return syncSalePrices(env);
       if (seg[1] === '1c' && seg[2] === 'products' && request.method === 'POST') {
         const u = new URL(request.url);
         const lim = parseInt(u.searchParams.get('limit'), 10);
@@ -2472,7 +2473,8 @@ const SYNC_INTERVALS = {
   company_1c: 360,    // реквизиты организации — редко (раз в ~6 ч)
   stock_1c: 4,        // остатки — на каждом прогоне (~5 мин)
   receipts_1c: 4,     // приходы — на каждом прогоне (~5 мин)
-  prices_1c: 8,       // цены/средняя закупка — ~10 мин (и сразу после прихода)
+  prices_1c: 8,       // закупочная цена из приходов — ~10 мин (и сразу после прихода)
+  saleprices_1c: 30,  // опт/розница из регистра цен 1С — ~30 мин
 };
 // Запускает только «просроченные» синхронизации (по last_at в sync_state).
 async function runDueSyncs(env) {
@@ -2504,6 +2506,8 @@ async function runDueSyncs(env) {
     await run('prices_last', () => syncPrices(env, 'last'));
     await run('prices_avg', () => syncPrices(env, 'avg'));
   }
+  // опт/розница из регистра цен 1С
+  if (due('saleprices_1c')) await run('saleprices', () => syncSalePrices(env));
   // этап 4: до-сылаем отложенные/упавшие отправки в 1С (контрагенты/счета/отгрузки)
   try { const q = await processOnecQueue(env); if (q.processed) ran.push(`queue ${q.ok}/${q.processed}`); }
   catch (e) { errors.push('queue: ' + ((e && e.message) || e)); }
@@ -2957,6 +2961,88 @@ async function syncPrices(env, mode) {
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
   ).bind(info).run();
   return json({ mode: isAvg ? 'avg' : 'last', docs, lines, priced, updated, missing });
+}
+
+// Опт/розница из регистра «Цены номенклатуры» 1С (РегистрСведений ЦеныНоменклатуры).
+// Берём последнюю цену по каждому виду цен и раскладываем по опт/рознице (по названию
+// вида цены). Закупочная сюда не входит — она тянется из приходов (syncPrices).
+async function fetchPriceRegister(env) {
+  const sel = '$format=json&$select=Номенклатура_Key,ВидЦены_Key,Цена';
+  // 1) срез последних (компактно) — если доступна функция SliceLast
+  try {
+    let out = [], skip = 0;
+    while (true) {
+      const d = await odataGet(env, `InformationRegister_ЦеныНоменклатуры/SliceLast()?${sel}&$top=5000&$skip=${skip}`);
+      const rows = d.value || []; out = out.concat(rows);
+      if (rows.length < 5000) break; skip += 5000;
+    }
+    return { rows: out, sliceLast: true };
+  } catch (e) { /* имя/функция отличается — читаем полный регистр ниже */ }
+  // 2) fallback: весь регистр по периоду (последняя запись перезапишет предыдущие)
+  let out = [], skip = 0;
+  const base = 'InformationRegister_ЦеныНоменклатуры?$format=json&$select=Период,Номенклатура_Key,ВидЦены_Key,Цена&$orderby=Период';
+  while (true) {
+    const d = await odataGet(env, `${base}&$top=5000&$skip=${skip}`);
+    const rows = d.value || []; out = out.concat(rows);
+    if (rows.length < 5000) break; skip += 5000;
+  }
+  return { rows: out, sliceLast: false };
+}
+
+async function syncSalePrices(env) {
+  const logState = async (msg) => {
+    try {
+      await env.DB.prepare(
+        `INSERT INTO sync_state (entity, last_at, info) VALUES ('saleprices_1c', datetime('now'), ?)
+         ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+      ).bind(String(msg).slice(0, 300)).run();
+    } catch (e) {}
+  };
+
+  const prods = await env.DB.prepare('SELECT id, ext_ref FROM products WHERE ext_ref IS NOT NULL').all();
+  const byRef = {}; for (const p of prods.results) byRef[p.ext_ref] = p.id;
+
+  // виды цен: Ref_Key -> название (пробуем несколько вариантов имени справочника)
+  const typeName = {};
+  for (const cat of ['Catalog_ВидыЦен', 'Catalog_ВидыЦенНоменклатуры', 'Catalog_ТипыЦенНоменклатуры']) {
+    try {
+      const d = await odataGet(env, `${cat}?$format=json&$select=Ref_Key,Description`);
+      for (const r of (d.value || [])) typeName[r.Ref_Key] = String(r.Description || '');
+      if (Object.keys(typeName).length) break;
+    } catch (e) {}
+  }
+  const kindOf = (refKey) => {
+    const n = (typeName[refKey] || '').toLowerCase();
+    if (/оптов|опт\b/.test(n)) return 'wholesale';
+    if (/рознич|розниц/.test(n)) return 'retail';
+    return null;
+  };
+
+  let reg;
+  try { reg = await fetchPriceRegister(env); }
+  catch (e) { await logState('ошибка чтения регистра цен: ' + ((e && e.message) || e)); return json({ ok: false }); }
+
+  const latest = {}; // nk -> { wholesale, retail }
+  for (const r of (reg.rows || [])) {
+    const nk = r['Номенклатура_Key']; if (!nk) continue;
+    const kind = kindOf(r['ВидЦены_Key']); if (!kind) continue;
+    const price = Number(r['Цена']); if (!Number.isFinite(price) || price <= 0) continue;
+    (latest[nk] || (latest[nk] = {}))[kind] = price;
+  }
+
+  const stmts = []; let updW = 0, updR = 0, miss = 0;
+  for (const nk in latest) {
+    const pid = byRef[nk]; if (!pid) { miss++; continue; }
+    const v = latest[nk];
+    if (v.wholesale != null && v.retail != null) { stmts.push(env.DB.prepare('UPDATE products SET price_wholesale=?, price_retail=? WHERE id=?').bind(Math.round(v.wholesale * 100) / 100, Math.round(v.retail * 100) / 100, pid)); updW++; updR++; }
+    else if (v.wholesale != null) { stmts.push(env.DB.prepare('UPDATE products SET price_wholesale=? WHERE id=?').bind(Math.round(v.wholesale * 100) / 100, pid)); updW++; }
+    else if (v.retail != null) { stmts.push(env.DB.prepare('UPDATE products SET price_retail=? WHERE id=?').bind(Math.round(v.retail * 100) / 100, pid)); updR++; }
+  }
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+
+  const foundTypes = [...new Set(Object.values(typeName))].filter(Boolean).slice(0, 10).join(', ');
+  await logState(`${reg.sliceLast ? 'срез' : 'полный'}: строк ${(reg.rows || []).length}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
+  return json({ rows: (reg.rows || []).length, wholesale: updW, retail: updR, missing: miss, types: foundTypes });
 }
 
 // --------------------------------------------------------------------------
