@@ -3773,6 +3773,16 @@ VIEWS.clients = () => {
     searchI,
     drawer.btn,
     el('div', { style:'display:flex;gap:8px;margin-left:auto' }, [
+      isDir ? el('button', { class: 'btn', title:'Назначить менеджеров клиентам без ответственного по кругу', onclick: async () => {
+        const ok = await confirmModal({ title:'Распределить базу', confirmText:'Распределить',
+          message:'Назначить менеджеров по кругу (поровну) всем клиентам БЕЗ ответственного? Уже закреплённые клиенты не меняются.' });
+        if (!ok) return;
+        try {
+          const r = await window.__API__.apiFetch('clients/distribute', { method:'POST', body:{ onlyUnassigned:true } });
+          toast(`Распределено клиентов: ${r.assigned} на ${r.managers} менеджеров`, 'success');
+          await window.__API__.loadRest(state); navigate('clients');
+        } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
+      } }, '👥 Распределить базу') : null,
       el('button', { class: 'btn', onclick: () => openImport('clients') }, '📥 Импорт'),
       el('button', { class: 'btn', onclick: () => exportClientsCSV() }, [svgIconEl('download', 16), ' Экспорт']),
     ]),

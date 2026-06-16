@@ -423,6 +423,10 @@ async function dataRoute(ctx, seg, url, auth) {
   if (resource === 'deals' && method === 'GET' && !id) return listDeals(env, url);
   if (resource === 'deals' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeDeal(env, request, method, id, auth);
   if (resource === 'deals' && method === 'DELETE' && id) return deleteDeal(env, id, auth);
+  if (resource === 'clients' && id === 'distribute' && method === 'POST') {
+    if (!auth || auth.role !== 'director') return err(403, 'Распределять базу может только директор');
+    return distributeClients(env, request);
+  }
   if (resource === 'clients' && method === 'GET') return id ? getClient(env, id) : listClients(env, url);
   if (resource === 'clients' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeClient(env, request, method, id, ctx);
   if (resource === 'clients' && method === 'DELETE' && id) return deleteClient(env, id, auth);
@@ -1022,6 +1026,33 @@ async function pickRoundRobinManager(env) {
   return next;
 }
 
+// Онбординг: разовое распределение базы клиентов по менеджерам поровну (round-robin).
+// body: { onlyUnassigned: true (по умолчанию) — только без ответственного; false — переназначить всех;
+//         excluded: [userId,...] — кого не включать }.
+async function distributeClients(env, request) {
+  const body = await request.json().catch(() => ({}));
+  const onlyUnassigned = body.onlyUnassigned !== false;
+  let excluded = Array.isArray(body.excluded) ? body.excluded : [];
+  const mr = await env.DB.prepare("SELECT id FROM users WHERE role_key='manager' AND active=1 ORDER BY id").all();
+  const managers = (mr.results || []).map((x) => x.id).filter((id) => !excluded.includes(id));
+  if (!managers.length) return err(400, 'Нет активных менеджеров для распределения');
+
+  const where = onlyUnassigned ? "WHERE manager_id IS NULL OR manager_id=''" : '';
+  const cr = await env.DB.prepare(`SELECT id FROM clients ${where} ORDER BY name`).all();
+  const ids = (cr.results || []).map((x) => x.id);
+  const stmts = [];
+  let i = 0;
+  for (const cid of ids) {
+    const mgr = managers[i % managers.length];
+    stmts.push(env.DB.prepare('UPDATE clients SET manager_id=? WHERE id=?').bind(mgr, cid));
+    i++;
+  }
+  for (let j = 0; j < stmts.length; j += 100) await env.DB.batch(stmts.slice(j, j + 100));
+  // следующее авто-распределение продолжит круг с последнего назначенного
+  if (ids.length) await setSetting(env, 'roundrobin_last', managers[(ids.length - 1) % managers.length]);
+  return json({ assigned: ids.length, managers: managers.length, onlyUnassigned });
+}
+
 // Клиент по номеру телефона: ищем по совпадению цифр (и по последним 10), иначе создаём нового.
 async function findOrCreateClientByPhone(env, digits, name) {
   const norm = (s) => String(s || '').replace(/\D/g, '');
@@ -1047,11 +1078,19 @@ async function openDealForClient(env, clientId) {
   return r ? r.id : null;
 }
 
-// Новая сделка из входящего сообщения: первый этап воронки + менеджер по Round Robin.
+// Новая сделка из входящего сообщения: первый этап воронки + менеджер.
+// Закрепление за менеджером: если у клиента уже есть ответственный (clients.manager_id) —
+// берём его (повторные обращения идут к тому же); иначе назначаем по Round Robin и
+// СРАЗУ закрепляем менеджера за клиентом, чтобы дальше обращения шли к нему.
 async function createIncomingDeal(env, clientId, text) {
   const stage = await env.DB.prepare('SELECT id FROM deal_stages ORDER BY sort, rowid LIMIT 1').first();
   if (!stage || !stage.id) throw new Error('нет этапов воронки');
-  const mgr = await pickRoundRobinManager(env);
+  let mgr = null;
+  try { const c = await env.DB.prepare('SELECT manager_id FROM clients WHERE id=?').bind(clientId).first(); if (c && c.manager_id) mgr = c.manager_id; } catch (e) {}
+  if (!mgr) {
+    mgr = await pickRoundRobinManager(env);
+    if (mgr) { try { await env.DB.prepare("UPDATE clients SET manager_id=? WHERE id=? AND (manager_id IS NULL OR manager_id='')").bind(mgr, clientId).run(); } catch (e) {} }
+  }
   const id = genId();
   const no = 'WA-' + Date.now();
   const title = (String(text || '').trim().slice(0, 60)) || 'Заявка из WhatsApp';
@@ -2537,6 +2576,29 @@ async function syncClients(env) {
   const byRef = {}, byBin = {};
   for (const c of ex.results) { if (c.ext_ref) byRef[c.ext_ref] = c.id; if (c.bin) byBin[c.bin] = c.id; }
 
+  // Контактная информация контрагентов: телефон/email по Ref_Key (табличная часть
+  // КонтактнаяИнформация). Нужны для сопоставления входящих WhatsApp/звонков с клиентом.
+  // Необязательно — если сущность недоступна, синк продолжается без телефонов.
+  const phoneByRef = {}, emailByRef = {};
+  try {
+    let cskip = 0;
+    const cbase = 'Catalog_Контрагенты_КонтактнаяИнформация?$format=json&$orderby=Ref_Key&$select=Ref_Key,Тип,Представление';
+    while (true) {
+      const data = await odataGet(env, `${cbase}&$top=1000&$skip=${cskip}`);
+      const rows = data.value || [];
+      if (!rows.length) break;
+      for (const r of rows) {
+        const ref = r.Ref_Key; const val = String(r['Представление'] || '').trim();
+        if (!ref || !val) continue;
+        const type = String(r['Тип'] || '');
+        if (/тел/i.test(type)) { if (!phoneByRef[ref]) phoneByRef[ref] = val; }
+        else if (/почт|email|mail/i.test(type)) { if (!emailByRef[ref]) emailByRef[ref] = val; }
+      }
+      if (rows.length < 1000) break;
+      cskip += 1000;
+    }
+  } catch (e) { /* контактная информация недоступна — пропускаем */ }
+
   const top = 1000;
   let skip = 0, fetched = 0, created = 0, updated = 0;
   const base = 'Catalog_Контрагенты?$format=json'
@@ -2555,13 +2617,21 @@ async function syncClients(env) {
       const bin = String(r['ИдентификационныйКодЛичности'] || '').trim();
       const name = String(r.Description || r['НаименованиеПолное'] || '').trim();
       if (!ref || !name) continue;
+      const phone = String(phoneByRef[ref] || '').trim();
+      const email = String(emailByRef[ref] || '').trim();
       let id = byRef[ref] || (bin && byBin[bin]) || null;
       if (id) {
-        stmts.push(env.DB.prepare('UPDATE clients SET name=?, bin=?, ext_ref=? WHERE id=?').bind(name, bin, ref, id));
+        // телефон/email из 1С не затирают вручную заполненные значения
+        stmts.push(env.DB.prepare(
+          `UPDATE clients SET name=?, bin=?, ext_ref=?,
+             phone=COALESCE(NULLIF(phone,''), NULLIF(?,'')),
+             email=COALESCE(NULLIF(NULLIF(email,''),'—'), NULLIF(?,''), email)
+           WHERE id=?`
+        ).bind(name, bin, ref, phone, email, id));
         updated++;
       } else {
         id = genId();
-        stmts.push(env.DB.prepare('INSERT INTO clients (id,name,bin,type_key,ext_ref,balance,ltv,email) VALUES (?,?,?,?,?,0,0,?)').bind(id, name, bin, 'opt', ref, '—'));
+        stmts.push(env.DB.prepare('INSERT INTO clients (id,name,bin,type_key,ext_ref,balance,ltv,phone,email) VALUES (?,?,?,?,?,0,0,?,?)').bind(id, name, bin, 'opt', ref, phone || null, email || '—'));
         created++;
       }
       byRef[ref] = id; if (bin) byBin[bin] = id;
@@ -2571,7 +2641,7 @@ async function syncClients(env) {
     skip += top;
   }
 
-  const info = `получено ${fetched}, новых ${created}, обновлено ${updated}`;
+  const info = `получено ${fetched}, новых ${created}, обновлено ${updated}, с телефоном ${Object.keys(phoneByRef).length}`;
   await env.DB.prepare(
     `INSERT INTO sync_state (entity, last_at, info) VALUES ('clients_1c', datetime('now'), ?)
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
