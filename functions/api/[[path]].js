@@ -2553,14 +2553,15 @@ async function writeShipment(env, request, method, id, ctx) {
     }
   }
 
-  // Уведомление бухгалтеру (и директору) при отметке «Доставлено». ref делает его
-  // идемпотентным — повторное сохранение не плодит дубликаты.
+  // Уведомление бухгалтеру (кто оплачивает доставку) и директору при отметке «Доставлено»
+  // (в т.ч. при загрузке фото-подтверждения). ref делает его идемпотентным.
   if (String(body.status_id) === 'delivered') {
     try {
       await ensureNotifSchema(env);
-      const sh = await env.DB.prepare('SELECT s.no AS no, c.name AS client_name FROM shipments s LEFT JOIN clients c ON c.id=s.client_id WHERE s.id=?').bind(shId).first();
+      const sh = await env.DB.prepare('SELECT s.no AS no, s.delivery_photo AS photo, c.name AS client_name FROM shipments s LEFT JOIN clients c ON c.id=s.client_id WHERE s.id=?').bind(shId).first();
       const accs = await env.DB.prepare("SELECT id FROM users WHERE role_key IN ('accountant','director') AND active=1").all();
-      const txt = `Отгрузка ${sh && sh.no ? sh.no : ''} доставлена${sh && sh.client_name ? ' — ' + sh.client_name : ''}`;
+      const withPhoto = (sh && sh.photo) ? ' (фото загружено)' : '';
+      const txt = `Доставка выполнена${withPhoto}: ${sh && sh.no ? sh.no : 'отгрузка'}${sh && sh.client_name ? ' — ' + sh.client_name : ''}. Оплата доставки.`;
       const stmts = [];
       for (const u of (accs.results || [])) {
         stmts.push(env.DB.prepare("INSERT OR IGNORE INTO notifications (text, type, read, created_at, user_id, ref) VALUES (?, 'info', 0, datetime('now'), ?, ?)").bind(txt, u.id, `delivered:${shId}:${u.id}`));
