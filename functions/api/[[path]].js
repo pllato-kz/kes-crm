@@ -482,7 +482,8 @@ async function dataRoute(ctx, seg, url, auth) {
 }
 
 async function listGeneric(env, table, meta, url) {
-  const limit = clampInt(url.searchParams.get('limit'), 500, 1, 1000);
+  // фронт держит списки в памяти и пагинирует сам — отдаём с запасом (раньше лимит 500 терял часть)
+  const limit = clampInt(url.searchParams.get('limit'), 5000, 1, 100000);
   const offset = clampInt(url.searchParams.get('offset'), 0, 0, 1e9);
   const r = await env.DB.prepare(`SELECT * FROM ${table} LIMIT ? OFFSET ?`).bind(limit, offset).all();
   return json(r.results.map((x) => hide(meta, x)));
@@ -1994,7 +1995,8 @@ async function getClient(env, id) {
 }
 
 async function listClients(env, url) {
-  const limit = clampInt(url.searchParams.get('limit'), 500, 1, 1000);
+  // список фильтруется/пагинируется на фронте — отдаём всех (раньше лимит 500 терял часть)
+  const limit = clampInt(url.searchParams.get('limit'), 100000, 1, 100000);
   const offset = clampInt(url.searchParams.get('offset'), 0, 0, 1e9);
   const manager = url.searchParams.get('manager');
   const where = ['archived_at IS NULL']; // архивные клиенты в обычном списке не показываем
