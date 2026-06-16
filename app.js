@@ -1387,7 +1387,7 @@ function openNewInvoice() {
         if (!selectedDealId) { toast('Выберите сделку из списка', 'warn'); dealSearch.focus(); return; }
         const d = byId(state.deals, selectedDealId);
         const iv = {
-          no: 'СФ-2026-0' + (240 + state.invoices.length),
+          no: 'Сч-2026-0' + (240 + state.invoices.length),
           deal: selectedDealId, client: d && d.client, date: new Date().toISOString().slice(0,10),
           amount: +amountInput.value || 0, status: 'pending', due: due.get(),
         };
@@ -1542,7 +1542,7 @@ async function autoCreateShipmentForDeal(d) {
 async function autoCreateInvoiceForDeal(d) {
   const due = new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString().slice(0, 10); // срок оплаты +5 дней
   const iv = {
-    no: 'СФ-2026-0' + (240 + state.invoices.length),
+    no: 'Сч-2026-0' + (240 + state.invoices.length),
     deal: d.id, client: d.client, date: new Date().toISOString().slice(0, 10),
     amount: d.amount || 0, status: 'pending', due,
   };
@@ -1762,7 +1762,7 @@ function openInvoiceDetail(id) {
     ]),
     foot: [
       d ? el('button', { class: 'btn', onclick: () => { closeModal(); openDealDetail(d.id); } }, 'Открыть сделку') : null,
-      el('button', { class: 'btn btn-primary', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl, iv.no); else toast('Сделка не найдена', 'warn'); } }, '🖨 Счёт PDF'),
+      el('button', { class: 'btn btn-primary', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl, iv.no); else toast('Сделка не найдена', 'warn'); } }, '🖨 Счёт на оплату'),
     ].filter(Boolean),
   });
 }
@@ -1931,7 +1931,7 @@ function printInvoice(deal, invNoArg, kind) {
   const linkedInv = (state.invoices || []).find(iv => iv.deal === deal.id);
   const invNo = invNoArg || (isKP
     ? ('КП-' + (deal.no || today.getFullYear()))
-    : ((linkedInv && linkedInv.no) || ('СФ-' + (deal.no || today.getFullYear()))));
+    : ((linkedInv && linkedInv.no) || ('Сч-' + (deal.no || today.getFullYear()))));
   // Реквизиты продавца — из 1С (state.meta), с запасными значениями
   const seller = state.meta || {};
   const sellerName = seller.legalName || seller.tenant || 'ТОО «KazEnergoSnab»';
@@ -3311,8 +3311,10 @@ async function openDealDetail(id, opts) {
   renderClient();
 
   const fieldRow = (label, input) => el('div', { class:'form-row' }, [el('label', {}, label), input]);
-  const invoiceBtn = el('button', { class:'btn btn-sm', onclick: () => printInvoice(d) }, '🖨 Счёт на оплату');
-  const kpBtn = el('button', { class:'btn btn-sm', onclick: () => printKP(d) }, '📋 КП');
+  // Счёт на оплату и КП формируют только менеджеры (и директор-владелец)
+  const canDocs = currentUser && (currentUser.roleKey === 'manager' || currentUser.roleKey === 'director');
+  const invoiceBtn = canDocs ? el('button', { class:'btn btn-sm', onclick: () => printInvoice(d) }, '🖨 Счёт на оплату') : null;
+  const kpBtn = canDocs ? el('button', { class:'btn btn-sm', onclick: () => printKP(d) }, '📋 КП') : null;
   const delBtn = (currentUser && currentUser.roleKey === 'director') ? el('button', { class:'btn btn-sm btn-danger', onclick: async () => {
     if (!(await confirmModal({ title:'Удаление сделки', message:`Удалить сделку «${d.title}»? Она переместится в архив на 30 дней, затем удалится навсегда.`, confirmText:'Удалить', danger:true }))) return;
     try {
@@ -3408,11 +3410,11 @@ async function openDealDetail(id, opts) {
       })));
       docsList.append(t);
     }
-    docsList.append(el('button', { class:'btn btn-sm btn-primary', style:'margin-top:10px', onclick: async (e) => {
+    if (canDocs) docsList.append(el('button', { class:'btn btn-sm btn-primary', style:'margin-top:10px', onclick: async (e) => {
       e.currentTarget.disabled = true;
-      try { await autoCreateInvoiceForDeal(d); renderDocs(); toast('Счёт создан из сделки', 'success'); }
+      try { await autoCreateInvoiceForDeal(d); renderDocs(); toast('Счёт на оплату создан из сделки', 'success'); }
       catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); e.currentTarget.disabled = false; }
-    } }, '+ Создать счёт из сделки'));
+    } }, '+ Создать счёт на оплату'));
   }
   renderDocs();
   const paneDocs = el('div', { class:'chat-pane', 'data-pane':'docs' }, [el('div', { class:'section-title', style:'padding:12px 14px 6px' }, 'Счета клиента'), docsList]);
@@ -5109,9 +5111,8 @@ VIEWS.invoices = () => {
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Документы'),
-      el('div', { class: 'sub' }, `Счета · всего ${state.invoices.length}`),
+      el('div', { class: 'sub' }, `Счета на оплату · всего ${state.invoices.length} · создаются из сделки менеджером`),
     ]),
-    el('div', { class: 'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewInvoice }, '+ Счёт')]),
   ]));
 
   const overdueInvCount = state.invoices.filter(i => i.status === 'overdue').length;
