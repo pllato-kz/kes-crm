@@ -3063,12 +3063,13 @@ async function openDealDetail(id, opts) {
         const sumCell = el('td', { class:'num strong' }, fmtMoney(it.qty * it.priceUsed));
         const recalc = () => { sumCell.textContent = fmtMoney(it.qty * it.priceUsed); recomputeAmount(); };
 
-        // Блок цены: ручная цена + наценка % от закупа + быстрые базы (закуп/опт/розница).
+        // Блок цены: в колонке цены — поле цены и наценка % от закупа (в одну строку),
+        // быстрые базы (закуп/опт/розница) — под названием товара (там колонка шире).
         // Дельта «% от закупа» подсвечивается зелёным/красным; ниже закупа — красная рамка.
-        let priceCell;
+        let priceCell, basesRow = null;
         if (canEdit) {
           const priceInput = el('input', { class:'qty', type:'number', min:'0', value: Math.round(it.priceUsed || 0), title:'Цена за единицу, ₸' });
-          const pctInput = el('input', { class:'qty', type:'number', step:'1', title:'Наценка % от закупа', style:'width:52px' });
+          const pctInput = el('input', { class:'qty', type:'number', step:'1', title:'Наценка % от закупа', style:'width:56px' });
           const colorPct = (m) => { pctInput.style.color = m < 0 ? '#EF4444' : (m > 0 ? '#10B981' : '#6B7280'); pctInput.style.fontWeight = '600'; };
           const markBelow = () => { priceInput.style.borderColor = (cost > 0 && (Number(it.priceUsed) || 0) < cost) ? '#EF4444' : ''; };
           const setPct = () => { if (cost > 0) { const m = Math.round(((Number(it.priceUsed) || 0) - cost) / cost * 100); pctInput.value = m; colorPct(m); } };
@@ -3079,12 +3080,11 @@ async function openDealDetail(id, opts) {
                 onclick: () => { it.priceUsed = Math.round(val); priceInput.value = Math.round(val); setPct(); markBelow(); recalc(); } }, label + ' ' + fmtMoney(val))
             : el('span', { class:'price-chip off' }, label + ' —');
           setPct(); markBelow();
-          priceCell = el('td', { class:'num' }, el('div', {}, [
-            priceInput,
-            el('div', { style:'display:flex;align-items:center;gap:3px;justify-content:flex-end;margin-top:3px;font-size:11px' },
-              cost > 0 ? [pctInput, el('span', { class:'muted' }, '% от закупа')] : [el('span', { class:'muted' }, 'закуп —')]),
-            el('div', { style:'display:flex;flex-wrap:wrap;gap:3px;justify-content:flex-end;margin-top:4px' }, [chip('Закуп', cost), chip('Опт', opt), chip('Розн', rozn)]),
+          priceCell = el('td', { class:'num' }, el('div', { style:'display:flex;align-items:center;gap:5px;justify-content:flex-end' }, [
+            el('div', { style:'flex:1;min-width:0' }, priceInput),
+            cost > 0 ? el('div', { style:'display:flex;align-items:center;gap:2px;flex:none' }, [pctInput, el('span', { class:'muted', style:'font-size:11px' }, '%')]) : null,
           ]));
+          basesRow = el('div', { style:'display:flex;flex-wrap:wrap;gap:4px;margin-top:5px' }, [chip('Закуп', cost), chip('Опт', opt), chip('Розн', rozn)]);
         } else {
           const m = cost > 0 ? Math.round(((Number(it.priceUsed) || 0) - cost) / cost * 100) : null;
           priceCell = el('td', { class:'num' }, [
@@ -3094,7 +3094,11 @@ async function openDealDetail(id, opts) {
         }
 
         tb.append(el('tr', {}, [
-          el('td', {}, [el('div', { style:'font-weight:500' }, p.name), el('div', { class:'muted', style:'font-size:11px' }, p.sku + (p.brand ? ' · ' + p.brand : ''))]),
+          el('td', {}, [
+            el('div', { style:'font-weight:500' }, p.name),
+            el('div', { class:'muted', style:'font-size:11px' }, p.sku + (p.brand ? ' · ' + p.brand : '')),
+            basesRow,
+          ]),
           el('td', { class:'num' }, canEdit
             ? el('input', { class:'qty', type:'number', min:'1', value: it.qty, oninput: (e) => { it.qty = Math.max(1, +e.target.value || 1); recalc(); } })
             : String(it.qty)),
