@@ -3014,8 +3014,9 @@ async function openDealDetail(id, opts) {
   if (dpid && pipelineById(dpid) && dpid !== DEALS_PIPELINE) setDealsPipeline(dpid, true);
   setEntityHash('deals', d.id); // уникальный URL карточки
   if (!d.lineItems) d.lineItems = [];
-  // Товары позиций, которых нет в памяти, догрузим В ФОНЕ (после открытия карточки) — см. ниже.
-  const missingPids = [...new Set(d.lineItems.map(it => it.product).filter(pid => pid && !byId(state.products, pid)))];
+  // Цены позиций синхронизируем с каталогом: тянем АКТУАЛЬНЫЕ карточки товаров по всем
+  // позициям сделки (не только отсутствующим) — чтобы базы закуп/опт/розница были свежими.
+  const itemPids = [...new Set(d.lineItems.map(it => it.product).filter(Boolean))];
   const cl = clientById(d.client);
   const m = userById(d.manager);
   const s = stageById(d.stage);
@@ -3520,11 +3521,13 @@ async function openDealDetail(id, opts) {
     ],
   });
 
-  // Фоновая догрузка товаров позиций, которых нет в памяти — карточка уже открыта,
-  // после загрузки перерисовываем строки и пересчитываем сумму (без задержки открытия).
-  if (missingPids.length) {
-    Promise.all(missingPids.map(pid => window.__API__.apiFetch('products/' + encodeURIComponent(pid))
-      .then(row => { const p = window.__API__.map.product(row); if (p && p.id && !byId(state.products, p.id)) state.products.push(p); })
+  // Фоновая синхронизация цен позиций с каталогом — карточка уже открыта; по всем товарам
+  // сделки тянем актуальные карточки и обновляем их в памяти (цены/остатки), затем
+  // перерисовываем строки и пересчитываем сумму (без задержки открытия). priceUsed (ручную
+  // цену по позиции) не трогаем — обновляются только базы товара (закуп/опт/розница/остаток).
+  if (itemPids.length) {
+    Promise.all(itemPids.map(pid => window.__API__.apiFetch('products/' + encodeURIComponent(pid))
+      .then(row => { const p = window.__API__.map.product(row); if (p && p.id) { const ex = byId(state.products, p.id); if (ex) Object.assign(ex, p); else state.products.push(p); } })
       .catch(() => {}))).then(() => { try { renderItems(); recomputeAmount(); } catch (e) {} });
   }
 }
