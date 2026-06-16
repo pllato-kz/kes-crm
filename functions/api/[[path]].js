@@ -3072,17 +3072,9 @@ async function syncPrices(env, mode) {
 // Берём последнюю цену по каждому виду цен и раскладываем по закуп/опт/рознице (по названию
 // вида цены). Закупочная цена берётся ТОЛЬКО отсюда; опт/розница — только в пробелы,
 // которые не заполнили приходы (syncPrices).
-// Имена измерений/ресурсов регистра в разных конфигурациях отличаются (Номенклатура/Товар,
-// ВидЦены/ТипЦен, Цена/Стоимость), поэтому не задаём $select жёстко, а читаем одну запись
-// и определяем реальные имена полей. Затем читаем регистр целиком (максимально совместимо).
-async function fetchPriceRegister(env) {
-  const REG = 'InformationRegister_ЦеныНоменклатуры';
-  // 1) одна запись без $select — узнаём реальные имена полей
-  let sample = null;
-  const d0 = await odataGet(env, `${REG}?$format=json&$top=1`);
-  sample = (d0.value || [])[0] || null;
-  if (!sample) return { rows: [], fields: null, keys: [] };
-
+// Определяем реальные имена измерений/ресурсов регистра по образцу записи (в разных
+// конфигурациях они отличаются: Номенклатура/Товар, ВидЦены/ТипЦен, Цена/Стоимость).
+function detectPriceFields(sample) {
   const keys = Object.keys(sample);
   const find = (re) => keys.find((k) => re.test(k));
   const nomKey = find(/^номенклатура.*_key$/i) || find(/(номенклатур|товар|product).*_key$/i) || find(/_key$/i);
@@ -3091,15 +3083,42 @@ async function fetchPriceRegister(env) {
   const priceField = find(/^цена$/i) || find(/цена|стоим|price|amount/i)
                || keys.find((k) => typeof sample[k] === 'number');
   const periodField = find(/^период$/i) || find(/period/i);
+  return { nomKey, typeKey, priceField, periodField };
+}
 
-  // 2) читаем регистр целиком (без $select)
+// Читаем регистр «Цены номенклатуры». $select не задаём жёстко — определяем поля по образцу.
+// Если регистр ПОДЧИНЁН РЕГИСТРАТОРУ (поля Recorder/RecordSet вместо измерений), реальные
+// строки лежат в навигационном свойстве RecordSet — разворачиваем через $expand и склеиваем.
+async function fetchPriceRegister(env) {
+  const REG = 'InformationRegister_ЦеныНоменклатуры';
+  const d0 = await odataGet(env, `${REG}?$format=json&$top=1`);
+  let sample = (d0.value || [])[0] || null;
+  if (!sample) return { rows: [], fields: null, keys: [] };
+  const keys = Object.keys(sample);
+
+  // регистр подчинён регистратору: записи вложены в RecordSet
+  const recorderBound = keys.includes('RecordSet') && !keys.some((k) => /_key$/i.test(k));
+  if (recorderBound) {
+    let out = [], skip = 0;
+    while (true) {
+      const d = await odataGet(env, `${REG}?$format=json&$expand=RecordSet&$top=1000&$skip=${skip}`);
+      const recs = d.value || [];
+      for (const e of recs) { const rs = e.RecordSet || []; if (Array.isArray(rs)) for (const r of rs) out.push(r); }
+      if (recs.length < 1000) break; skip += 1000;
+    }
+    const s = out[0] || null;
+    if (!s) return { rows: [], fields: null, keys: ['RecordSet(пусто/не развёрнут)'], nested: true };
+    return { rows: out, fields: detectPriceFields(s), keys: Object.keys(s), nested: true };
+  }
+
+  // плоский (независимый) регистр
   let out = [], skip = 0;
   while (true) {
     const d = await odataGet(env, `${REG}?$format=json&$top=5000&$skip=${skip}`);
     const rows = d.value || []; out = out.concat(rows);
     if (rows.length < 5000) break; skip += 5000;
   }
-  return { rows: out, fields: { nomKey, typeKey, priceField, periodField }, keys, sliceLast: false };
+  return { rows: out, fields: detectPriceFields(sample), keys, nested: false };
 }
 
 async function syncSalePrices(env) {
@@ -3175,7 +3194,7 @@ async function syncSalePrices(env) {
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
   const foundTypes = [...new Set(Object.values(typeName))].filter(Boolean).slice(0, 10).join(', ');
-  await logState(`строк ${(reg.rows || []).length} [ном=${f.nomKey}, вид=${f.typeKey || '—'}, цена=${f.priceField}]; закуп ${updC}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
+  await logState(`строк ${(reg.rows || []).length}${reg.nested ? ' (из RecordSet)' : ''} [ном=${f.nomKey}, вид=${f.typeKey || '—'}, цена=${f.priceField}]; закуп ${updC}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
   return json({ rows: (reg.rows || []).length, fields: f, cost: updC, wholesale: updW, retail: updR, missing: miss, types: foundTypes });
 }
 
