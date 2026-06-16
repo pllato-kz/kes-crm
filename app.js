@@ -1850,6 +1850,20 @@ function taskReminders() {
 // Красная точка у колокольчика — только если есть НЕпрочитанные уведомления
 // (напоминания по задачам или уведомления). После «Прочитать все» точка скрывается.
 let NOTIFS_READ = false;
+// Всплывающее системное уведомление (Web Notifications) — видно, даже если вкладка свёрнута.
+// Просим разрешение по жесту пользователя (клик по колокольчику) и при старте (best-effort).
+function ensureNotifPermission() {
+  try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch (e) {}
+}
+function notifyDesktop(title, body) {
+  try {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return false;
+    const n = new Notification(title, { body: body || '', icon: '/favicon.ico', tag: 'kes-' + Date.now() });
+    n.onclick = () => { try { window.focus(); navigate('deals'); } catch (e) {} n.close(); };
+    setTimeout(() => { try { n.close(); } catch (e) {} }, 12000);
+    return true;
+  } catch (e) { return false; }
+}
 function updateNotifDot() {
   const dot = document.querySelector('#notif-btn .dot');
   if (!dot) return;
@@ -6871,7 +6885,7 @@ function renderShell() {
 
   // Обработчики
   $('#search').addEventListener('keyup', (e) => { if (e.key === 'Enter') runSearch(e.target.value); });
-  $('#notif-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleNotifications(); });
+  $('#notif-btn').addEventListener('click', (e) => { e.stopPropagation(); ensureNotifPermission(); toggleNotifications(); });
   $$('.icon-btn').forEach(b => {
     if (b.id === 'notif-btn') return;
     if (b.title === 'Помощь' || b.textContent.trim() === '?') b.addEventListener('click', openAbout);
@@ -6896,7 +6910,8 @@ function renderShell() {
     setTimeout(tick, 5000);                       // первый запуск вскоре после входа
     window.__syncTimer = setInterval(tick, 5 * 60 * 1000); // и далее каждые 5 минут
 
-    // Живые уведомления: опрашиваем колокольчик, новые подсвечиваем тостом (напр. новая заявка)
+    // Живые уведомления: опрашиваем колокольчик, новые показываем системным попапом + тостом
+    ensureNotifPermission();
     window.__notifSeen = window.__notifSeen || new Set();
     (state.notifications || []).forEach(n => { if (n.id != null) window.__notifSeen.add(n.id); });
     if (window.__notifTimer) clearInterval(window.__notifTimer);
@@ -6909,7 +6924,7 @@ function renderShell() {
         if (fresh.length) {
           fresh.forEach(n => window.__notifSeen.add(n.id));
           NOTIFS_READ = false;
-          fresh.slice(0, 5).forEach(n => toast('🔔 ' + n.text, 'info'));
+          fresh.slice(0, 5).forEach(n => { notifyDesktop('KES CRM', n.text); toast('🔔 ' + n.text, 'info'); });
         }
         updateNotifDot();
       } catch (e) {}
