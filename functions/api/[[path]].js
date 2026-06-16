@@ -2467,7 +2467,7 @@ async function clearDemoData(env) {
 const SYNC_INTERVALS = {
   clients_1c: 4,      // контрагенты — на каждом прогоне (~5 мин)
   suppliers_1c: 10,   // поставщики — ~10 мин
-  products_1c: 10,    // номенклатура (тяжёлый полный пул) — ~10 мин
+  products_1c: 30,    // номенклатура: полный проход всей базы ~10k+ (резюмируемо), обновление ~30 мин
   categories_1c: 60,  // категории — редко меняются
   company_1c: 360,    // реквизиты организации — редко (раз в ~6 ч)
   stock_1c: 4,        // остатки — на каждом прогоне (~5 мин)
@@ -2492,7 +2492,10 @@ async function runDueSyncs(env) {
   if (due('suppliers_1c')) await run('suppliers', () => syncSuppliers(env));
   if (due('categories_1c')) await run('categories', () => syncCategories(env));
   if (due('company_1c')) await run('company', () => syncCompany1C(env));
-  if (due('products_1c')) await run('products', () => syncProducts(env, 1000, 0));
+  // номенклатура: если полный проход ещё идёт (products_offset>0) — продолжаем каждый
+  // запуск; иначе запускаем новый проход по интервалу.
+  const prodOff = parseInt((await getSetting(env, 'products_offset')) || '0', 10) || 0;
+  if (prodOff > 0 || due('products_1c')) await run('products', () => syncProductsAll(env));
   if (due('stock_1c')) await run('stock', () => syncStock(env));
   let receiptsRan = false;
   if (due('receipts_1c')) { await run('receipts', () => syncReceipts(env)); receiptsRan = true; }
@@ -2658,7 +2661,8 @@ async function syncSuppliers(env) {
 // Номенклатура 1С (только товары, Услуга=false) -> товары CRM.
 // Одна страница за вызов (limit ≤ 1000, со смещением skip) — фронт листает до done.
 // Upsert по sku (=Code), без предзагрузки карт — масштабируется на тысячи позиций.
-async function syncProducts(env, limit, skip) {
+// Одна страница номенклатуры из 1С (до 1000). Плоский результат, без записи в sync_state.
+async function syncProductsPage(env, skip, limit) {
   const top = Math.min(Math.max(limit || 1000, 1), 1000);
   const off = Math.max(skip || 0, 0);
   const base = 'Catalog_Номенклатура?$format=json'
@@ -2689,15 +2693,49 @@ async function syncProducts(env, limit, skip) {
 
   const after = (await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first()).n;
   const created = after - before;
-  const updated = processed - created;
-  const done = rows.length < top;
+  return { fetched: rows.length, created, updated: processed - created, next: off + rows.length, done: rows.length < top };
+}
 
+// Ручной вызов одной страницы (эндпоинт /api/sync/1c/products?limit&skip).
+async function syncProducts(env, limit, skip) {
+  const r = await syncProductsPage(env, skip, limit);
   await env.DB.prepare(
     `INSERT INTO sync_state (entity, last_at, info) VALUES ('products_1c', datetime('now'), ?)
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
-  ).bind(`обработано до ${off + rows.length}` + (done ? ' (готово)' : ' (идёт…)')).run();
+  ).bind(`обработано до ${r.next}` + (r.done ? ' (готово)' : ' (идёт…)')).run();
+  return json(r);
+}
 
-  return json({ fetched: rows.length, created, updated, next: off + rows.length, done });
+// Полная синхронизация ВСЕЙ номенклатуры (резюмируемо). 1С отдаёт по 1000/запрос,
+// каталог большой (~10k+), поэтому идём пачками; смещение храним в products_offset и
+// продолжаем со следующего фонового запуска, пока не дойдём до конца. После полного
+// прохода пересчитываем закупочные цены из приходов — чтобы новые товары получили цену.
+const PRODUCTS_PAGES_PER_RUN = 4;
+async function syncProductsAll(env) {
+  await ensureAppSettings(env);
+  let off = parseInt((await getSetting(env, 'products_offset')) || '0', 10) || 0;
+  let done = false;
+  for (let p = 0; p < PRODUCTS_PAGES_PER_RUN; p++) {
+    const r = await syncProductsPage(env, off);
+    off = r.next;
+    if (r.done || r.fetched === 0) { done = true; break; }
+  }
+  if (done) {
+    await setSetting(env, 'products_offset', '0');
+    const total = (await env.DB.prepare('SELECT COUNT(*) AS n FROM products').first()).n;
+    await env.DB.prepare(
+      `INSERT INTO sync_state (entity, last_at, info) VALUES ('products_1c', datetime('now'), ?)
+       ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+    ).bind(`готово: ${total} позиций`).run();
+    try { await syncPrices(env, 'last'); } catch (e) {} // закуп из приходов для новых товаров
+  } else {
+    await setSetting(env, 'products_offset', String(off));
+    await env.DB.prepare(
+      `INSERT INTO sync_state (entity, last_at, info) VALUES ('products_1c', datetime('now'), ?)
+       ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+    ).bind(`идёт… обработано до ${off}`).run();
+  }
+  return { off, done };
 }
 
 // Папки номенклатуры 1С -> категории товаров (id = Ref_Key папки)
