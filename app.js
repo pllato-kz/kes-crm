@@ -6895,6 +6895,26 @@ function renderShell() {
     const tick = () => { window.__API__.apiFetch('sync/run', { method: 'POST' }).catch(() => {}); };
     setTimeout(tick, 5000);                       // первый запуск вскоре после входа
     window.__syncTimer = setInterval(tick, 5 * 60 * 1000); // и далее каждые 5 минут
+
+    // Живые уведомления: опрашиваем колокольчик, новые подсвечиваем тостом (напр. новая заявка)
+    window.__notifSeen = window.__notifSeen || new Set();
+    (state.notifications || []).forEach(n => { if (n.id != null) window.__notifSeen.add(n.id); });
+    if (window.__notifTimer) clearInterval(window.__notifTimer);
+    const pollNotif = async () => {
+      try {
+        const rows = await window.__API__.apiFetch('notifications');
+        const list = (rows || []).map(window.__API__.map.notification);
+        const fresh = list.filter(n => n.id != null && !window.__notifSeen.has(n.id));
+        state.notifications = list;
+        if (fresh.length) {
+          fresh.forEach(n => window.__notifSeen.add(n.id));
+          NOTIFS_READ = false;
+          fresh.slice(0, 5).forEach(n => toast('🔔 ' + n.text, 'info'));
+        }
+        updateNotifDot();
+      } catch (e) {}
+    };
+    window.__notifTimer = setInterval(pollNotif, 45 * 1000); // каждые 45 сек
   }
 }
 
