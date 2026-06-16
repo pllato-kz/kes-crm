@@ -6558,13 +6558,21 @@ VIEWS.settings = () => {
     .map(([rk, r]) => [rk, r.label]);
   // черновик доступов (Set модулей по роли) — редактируется только директором
   const draft = {}; roleCols.forEach(([rk]) => { draft[rk] = new Set(ROLES[rk].modules); });
+  // черновик прав РЕДАКТИРОВАНИЯ (canEdit по роли) — копия, чтобы не терять нюансы (own/limited/stock)
+  const draftEdit = {}; roleCols.forEach(([rk]) => { draftEdit[rk] = { ...(ROLES[rk].canEdit || {}) }; });
+  const EDIT_RIGHTS = [['deals','Сделки'], ['clients','Клиенты'], ['prices','Цены'], ['invoices','Счета']];
+  const editChecked = (key, v) => key === 'deals' ? (v === 'all' || v === 'own')
+    : key === 'clients' ? (v === 'all' || v === 'own' || v === 'limited') : (v === true);
+  const editToggle = (key, prev, on) => !on ? false
+    : key === 'deals' ? (prev === 'own' ? 'own' : 'all')
+    : key === 'clients' ? ((prev === 'own' || prev === 'limited') ? prev : 'all') : true;
 
   const saveRolesBtn = canEditUsers ? el('button', { class:'btn btn-sm btn-primary', onclick: async (e) => {
     const b = e.currentTarget; b.disabled = true; const o = b.textContent; b.textContent = 'Сохранение…';
     try {
       for (const [rk] of roleCols) {
         const mods = ALL_MODULES.map(([k]) => k).filter(k => draft[rk].has(k));
-        await window.__API__.apiFetch('roles/' + encodeURIComponent(rk), { method: 'PUT', body: { modules: JSON.stringify(mods) } });
+        await window.__API__.apiFetch('roles/' + encodeURIComponent(rk), { method: 'PUT', body: { modules: JSON.stringify(mods), can_edit: JSON.stringify(draftEdit[rk]) } });
       }
       toast('Доступы по ролям сохранены', 'success');
       await loadData(); navigate('settings');
@@ -6614,6 +6622,25 @@ VIEWS.settings = () => {
     }),
   ]))));
   permsCard.append(el('div', { style:'overflow-x:auto' }, pt));
+
+  // Матрица ПРАВ РЕДАКТИРОВАНИЯ (отдельно от видимости разделов): кто может менять/двигать
+  permsCard.append(el('div', { class:'strong', style:'margin:16px 4px 6px;font-size:13px' }, 'Права редактирования'));
+  if (canEditUsers) permsCard.append(el('div', { class:'muted', style:'font-size:12px;margin:0 4px 10px' }, 'Видимость раздела (выше) и право его редактировать — разное. Чтобы роль могла двигать сделки по этапам, отметьте «Сделки» здесь.'));
+  const ptE = el('table', { class:'data role-matrix' });
+  ptE.append(el('thead', {}, el('tr', {}, [el('th', {}, 'Право'), ...roleCols.map(([, label]) => el('th', { class:'num' }, label))])));
+  ptE.append(el('tbody', {}, EDIT_RIGHTS.map(([k, label]) => el('tr', {}, [
+    el('td', { class:'strong' }, label),
+    ...roleCols.map(([rk]) => {
+      const checked = editChecked(k, draftEdit[rk][k]);
+      if (!canEditUsers) return el('td', { class:'num' }, checked ? el('span', { style:'color:#10B981;font-size:16px' }, '✓') : el('span', { style:'color:#9CA3AF' }, '—'));
+      const lock = (rk === 'director'); // у директора права редактирования зафиксированы
+      const cb = el('input', { type:'checkbox', checked: (checked || lock) ? 'checked' : null, disabled: lock ? 'disabled' : null,
+        title: lock ? 'У директора зафиксировано' : '',
+        onchange: (ev) => { draftEdit[rk][k] = editToggle(k, draftEdit[rk][k], ev.target.checked); } });
+      return el('td', { class:'num' }, cb);
+    }),
+  ]))));
+  permsCard.append(el('div', { style:'overflow-x:auto' }, ptE));
   wrap.append(permsCard);
 
   // О компании — редактируемые реквизиты (директор сохраняет в БД)
