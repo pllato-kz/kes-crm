@@ -1268,6 +1268,18 @@ async function createIncomingDeal(env, clientId, text) {
      VALUES (?,?,?,?,?,?,0,0,?,datetime('now'))`
   ).bind(id, no, title, clientId, mgr, stage.id, today).run();
   try { await env.DB.prepare('INSERT INTO deal_stage_history (deal_id, from_stage, to_stage, user_id) VALUES (?,?,?,?)').bind(id, null, stage.id, null).run(); } catch (e) {}
+  // уведомление о новой заявке — ответственному менеджеру и директорам (идемпотентно по ref)
+  try {
+    await ensureNotifSchema(env);
+    const recips = new Set();
+    if (mgr) recips.add(mgr);
+    const dirs = await env.DB.prepare("SELECT id FROM users WHERE role_key='director' AND active=1").all();
+    for (const u of (dirs.results || [])) recips.add(u.id);
+    const txt = 'Новая заявка: ' + title;
+    const stmts = [];
+    for (const uid of recips) stmts.push(env.DB.prepare("INSERT OR IGNORE INTO notifications (text, type, read, created_at, user_id, ref) VALUES (?, 'info', 0, datetime('now'), ?, ?)").bind(txt, uid, `newdeal:${id}:${uid}`));
+    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+  } catch (e) {}
   return id;
 }
 
