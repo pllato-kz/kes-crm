@@ -3072,28 +3072,34 @@ async function syncPrices(env, mode) {
 // Берём последнюю цену по каждому виду цен и раскладываем по закуп/опт/рознице (по названию
 // вида цены). Закупочная цена берётся ТОЛЬКО отсюда; опт/розница — только в пробелы,
 // которые не заполнили приходы (syncPrices).
+// Имена измерений/ресурсов регистра в разных конфигурациях отличаются (Номенклатура/Товар,
+// ВидЦены/ТипЦен, Цена/Стоимость), поэтому не задаём $select жёстко, а читаем одну запись
+// и определяем реальные имена полей. Затем читаем регистр целиком (максимально совместимо).
 async function fetchPriceRegister(env) {
-  const sel = '$format=json&$select=Номенклатура_Key,ВидЦены_Key,Цена';
-  // 1) срез последних (компактно) — если доступна функция SliceLast
-  try {
-    let out = [], skip = 0;
-    while (true) {
-      const d = await odataGet(env, `InformationRegister_ЦеныНоменклатуры/SliceLast()?${sel}&$top=5000&$skip=${skip}`);
-      const rows = d.value || []; out = out.concat(rows);
-      if (rows.length < 5000) break; skip += 5000;
-    }
-    return { rows: out, sliceLast: true };
-  } catch (e) { /* SliceLast недоступен (непериодический регистр или иное имя) — читаем напрямую */ }
-  // 2) fallback: записи регистра как есть (для НЕпериодического регистра — одна запись
-  //    на номенклатуру×вид цены; без поля «Период», его в таком регистре нет).
+  const REG = 'InformationRegister_ЦеныНоменклатуры';
+  // 1) одна запись без $select — узнаём реальные имена полей
+  let sample = null;
+  const d0 = await odataGet(env, `${REG}?$format=json&$top=1`);
+  sample = (d0.value || [])[0] || null;
+  if (!sample) return { rows: [], fields: null, keys: [] };
+
+  const keys = Object.keys(sample);
+  const find = (re) => keys.find((k) => re.test(k));
+  const nomKey = find(/^номенклатура.*_key$/i) || find(/(номенклатур|товар|product).*_key$/i) || find(/_key$/i);
+  const typeKey = find(/(видцен|типцен|видцены|типцены|вид_цен|тип_цен|price).*_key$/i)
+               || keys.find((k) => /_key$/i.test(k) && k !== nomKey);
+  const priceField = find(/^цена$/i) || find(/цена|стоим|price|amount/i)
+               || keys.find((k) => typeof sample[k] === 'number');
+  const periodField = find(/^период$/i) || find(/period/i);
+
+  // 2) читаем регистр целиком (без $select)
   let out = [], skip = 0;
-  const base = `InformationRegister_ЦеныНоменклатуры?${sel}&$orderby=Номенклатура_Key`;
   while (true) {
-    const d = await odataGet(env, `${base}&$top=5000&$skip=${skip}`);
+    const d = await odataGet(env, `${REG}?$format=json&$top=5000&$skip=${skip}`);
     const rows = d.value || []; out = out.concat(rows);
     if (rows.length < 5000) break; skip += 5000;
   }
-  return { rows: out, sliceLast: false };
+  return { rows: out, fields: { nomKey, typeKey, priceField, periodField }, keys, sliceLast: false };
 }
 
 async function syncSalePrices(env) {
@@ -3133,11 +3139,25 @@ async function syncSalePrices(env) {
   try { reg = await fetchPriceRegister(env); }
   catch (e) { await logState('ошибка чтения регистра цен: ' + ((e && e.message) || e)); return json({ ok: false }); }
 
+  const f = reg.fields;
+  if (!f || !f.nomKey || !f.priceField) {
+    await logState(`не удалось определить поля регистра цен; поля записи: ${(reg.keys || []).join(', ') || '—'}`);
+    return json({ ok: false, keys: reg.keys || [] });
+  }
+
+  // агрегируем по номенклатуре×виду цены; для периодического регистра берём запись с
+  // максимальным «Периодом», для непериодического — единственную (последнюю встреченную)
   const latest = {}; // nk -> { cost, wholesale, retail }
+  const bestPeriod = {}; // `${nk}|${kind}` -> период
   for (const r of (reg.rows || [])) {
-    const nk = r['Номенклатура_Key']; if (!nk) continue;
-    const kind = kindOf(r['ВидЦены_Key']); if (!kind) continue;
-    const price = Number(r['Цена']); if (!Number.isFinite(price) || price <= 0) continue;
+    const nk = r[f.nomKey]; if (!nk) continue;
+    const kind = kindOf(f.typeKey ? r[f.typeKey] : null); if (!kind) continue;
+    const price = Number(r[f.priceField]); if (!Number.isFinite(price) || price <= 0) continue;
+    if (f.periodField) {
+      const key = nk + '|' + kind, per = String(r[f.periodField] || '');
+      if (bestPeriod[key] && per < bestPeriod[key]) continue;
+      bestPeriod[key] = per;
+    }
     (latest[nk] || (latest[nk] = {}))[kind] = price;
   }
   const rnd = (x) => Math.round(x * 100) / 100;
@@ -3155,8 +3175,8 @@ async function syncSalePrices(env) {
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
   const foundTypes = [...new Set(Object.values(typeName))].filter(Boolean).slice(0, 10).join(', ');
-  await logState(`${reg.sliceLast ? 'срез' : 'полный'}: строк ${(reg.rows || []).length}, закуп ${updC}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
-  return json({ rows: (reg.rows || []).length, cost: updC, wholesale: updW, retail: updR, missing: miss, types: foundTypes });
+  await logState(`строк ${(reg.rows || []).length} [ном=${f.nomKey}, вид=${f.typeKey || '—'}, цена=${f.priceField}]; закуп ${updC}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
+  return json({ rows: (reg.rows || []).length, fields: f, cost: updC, wholesale: updW, retail: updR, missing: miss, types: foundTypes });
 }
 
 // --------------------------------------------------------------------------
