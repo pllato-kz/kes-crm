@@ -3078,8 +3078,8 @@ function detectPriceFields(sample) {
   const keys = Object.keys(sample);
   const find = (re) => keys.find((k) => re.test(k));
   const nomKey = find(/^номенклатура.*_key$/i) || find(/(номенклатур|товар|product).*_key$/i) || find(/_key$/i);
-  const typeKey = find(/(видцен|типцен|видцены|типцены|вид_цен|тип_цен|price).*_key$/i)
-               || keys.find((k) => /_key$/i.test(k) && k !== nomKey);
+  // только по шаблону вида цены — без «любой _Key», иначе ошибочно берётся Ref_Key документа
+  const typeKey = find(/(видцен|типцен|видцены|типцены|вид_цен|тип_цен|price).*_key$/i) || null;
   const priceField = find(/^цена$/i) || find(/цена|стоим|price|amount/i)
                || keys.find((k) => typeof sample[k] === 'number');
   const periodField = find(/^период$/i) || find(/period/i);
@@ -3143,12 +3143,24 @@ async function fetchPriceRegisterFromDoc(env) {
     if (!tabName) continue;
     usedDoc = doc; usedTab = tabName; fields = f;
 
-    // даты документов (для выбора последней цены)
-    const dateByDoc = {};
+    // вид цены в этом документе может быть в ШАПКЕ (а не в строке) — определяем поле шапки
+    let headTypeField = null;
+    if (!f.typeKey) {
+      try {
+        const hp = await odataGet(env, `${doc}?$format=json&$top=1`);
+        const hs = (hp.value || [])[0] || {};
+        headTypeField = Object.keys(hs).find((k) => /_key$/i.test(k) && /(видцен|типцен|вид_цен|тип_цен|видцены|типцены)/i.test(k)) || null;
+      } catch (e) {}
+    }
+
+    // шапки: дата (для последней цены) и вид цены (если он в шапке)
+    const dateByDoc = {}, typeByDoc = {};
+    const hsel = headTypeField ? `&$select=Ref_Key,Date,${headTypeField}` : '&$select=Ref_Key,Date';
     let sk = 0;
     while (true) {
-      const d = await odataGet(env, `${doc}?$format=json&$orderby=Ref_Key&$select=Ref_Key,Date&$top=5000&$skip=${sk}`);
-      const rows = d.value || []; for (const r of rows) dateByDoc[r.Ref_Key] = String(r.Date || '');
+      const d = await odataGet(env, `${doc}?$format=json&$orderby=Ref_Key${hsel}&$top=5000&$skip=${sk}`);
+      const rows = d.value || [];
+      for (const r of rows) { dateByDoc[r.Ref_Key] = String(r.Date || ''); if (headTypeField) typeByDoc[r.Ref_Key] = r[headTypeField]; }
       if (rows.length < 5000) break; sk += 5000;
     }
     // строки табличной части
@@ -3156,9 +3168,10 @@ async function fetchPriceRegisterFromDoc(env) {
     while (true) {
       const d = await odataGet(env, `${doc}_${tabName}?$format=json&$orderby=Ref_Key,LineNumber&$top=5000&$skip=${sk}`);
       const rows = d.value || [];
-      for (const r of rows) { r.__date = dateByDoc[r.Ref_Key] || ''; out.push(r); }
+      for (const r of rows) { r.__date = dateByDoc[r.Ref_Key] || ''; if (headTypeField) r.__type = typeByDoc[r.Ref_Key]; out.push(r); }
       if (rows.length < 5000) break; sk += 5000;
     }
+    if (headTypeField) { fields.typeKey = '__type'; fields.typeSrc = headTypeField; }
     break; // обычно один тип документа установки цен
   }
   if (!fields) return { rows: [], fields: null, keys: ['регистратор: ' + ([...recTypes].join(' | ') || '—')], nested: true, fromDoc: true };
@@ -3193,7 +3206,7 @@ async function syncSalePrices(env) {
   }
   const kindOf = (refKey) => {
     const n = (typeName[refKey] || '').toLowerCase();
-    if (/закуп|приобрет|поступл|входящ/.test(n)) return 'cost';
+    if (/закуп|приобрет|поступл|приходн|входящ/.test(n)) return 'cost';
     if (/оптов|опт\b/.test(n)) return 'wholesale';
     if (/рознич|розниц/.test(n)) return 'retail';
     return null;
@@ -3240,7 +3253,7 @@ async function syncSalePrices(env) {
 
   const foundTypes = [...new Set(Object.values(typeName))].filter(Boolean).slice(0, 10).join(', ');
   const src = reg.fromDoc ? ` (док ${reg.doc}_${reg.tab})` : (reg.nested ? ' (из RecordSet)' : '');
-  await logState(`строк ${(reg.rows || []).length}${src} [ном=${f.nomKey}, вид=${f.typeKey || '—'}, цена=${f.priceField}]; закуп ${updC}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
+  await logState(`строк ${(reg.rows || []).length}${src} [ном=${f.nomKey}, вид=${f.typeSrc || f.typeKey || '—'}, цена=${f.priceField}]; закуп ${updC}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
   return json({ rows: (reg.rows || []).length, fields: f, cost: updC, wholesale: updW, retail: updR, missing: miss, types: foundTypes });
 }
 
