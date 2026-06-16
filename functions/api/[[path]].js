@@ -461,6 +461,7 @@ async function dataRoute(ctx, seg, url, auth) {
   if (resource === 'suppliers' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeSupplier(env, request, method, id, ctx);
   if (resource === 'leads' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeLead(env, request, method, id);
   if (resource === 'notifications' && id === 'scan-overdue' && method === 'POST') return scanOverdueTasks(env);
+  if (resource === 'notifications' && id === 'read' && method === 'POST') return markNotificationsRead(env, auth);
   if (resource === 'notifications' && method === 'GET' && !id) return listNotifications(env, auth);
 
   // --- обобщённый CRUD ---
@@ -861,10 +862,18 @@ async function ensureNotifSchema(env) {
 async function listNotifications(env, auth) {
   await ensureNotifSchema(env);
   const uid = auth ? auth.sub : null;
+  // только НЕпрочитанные — после «Прочитать все» (read=1) они не возвращаются и не всплывают снова
   const r = await env.DB.prepare(
-    'SELECT * FROM notifications WHERE user_id IS NULL OR user_id = ? ORDER BY created_at DESC LIMIT 100'
+    'SELECT * FROM notifications WHERE (user_id IS NULL OR user_id = ?) AND (read IS NULL OR read = 0) ORDER BY created_at DESC LIMIT 100'
   ).bind(uid).all();
   return json(r.results);
+}
+// Пометить уведомления пользователя прочитанными (сохраняется в БД).
+async function markNotificationsRead(env, auth) {
+  await ensureNotifSchema(env);
+  const uid = auth ? auth.sub : null;
+  if (uid) await env.DB.prepare('UPDATE notifications SET read=1 WHERE user_id=?').bind(uid).run();
+  return json({ ok: true });
 }
 
 // Сканирует просроченные задачи и шлёт уведомление ответственному + всем директорам.
