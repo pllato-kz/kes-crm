@@ -4,7 +4,6 @@
 let { STAGES, ROLES, CLIENT_TYPES } = window.__KES__; // переопределяются из БД в loadData()
 let PIPELINES = [];                 // воронки продаж — из БД в loadData()
 let DEALS_PIPELINE = '';            // id активной воронки (URL #deals/{pipelineId} + localStorage)
-const { saveState, resetState } = window.__KES__;
 let state = { meta: {}, users: [], categories: [], products: [], clients: [], deals: [], leads: [], suppliers: [], tasks: [], invoices: [], shipments: [], receipts: [], notifications: [] };
 let currentUser = null; // заполняется после логина
 let CURRENT_VIEW = '';  // текущий активный раздел (для точечного обновления списков)
@@ -591,24 +590,6 @@ function toast(text, type = 'info', icon = null) {
   stack.append(t);
   setTimeout(() => { t.style.transition = 'opacity .25s'; t.style.opacity = '0'; }, 2400);
   setTimeout(() => t.remove(), 2700);
-}
-
-// ---------- Stub (informative modal for actions that will be in production) ----------
-function stub(title, description, bullets = []) {
-  const body = el('div', { class: 'stub-body' }, [
-    el('span', { class: 'stub-icon' }, '🚧'),
-    el('p', {}, description),
-    bullets.length
-      ? el('ul', { class: 'stub-list' }, bullets.map(b => el('li', {}, b)))
-      : null,
-    el('p', { style: 'margin-top:14px;font-size:12px;color:#9CA3AF' },
-      'Это мокап — действие появится после подключения бэка (Cloudflare Worker + D1).'),
-  ]);
-  openModal({
-    title,
-    body,
-    foot: [el('button', { class: 'btn btn-primary', onclick: closeModal }, 'Понятно')],
-  });
 }
 
 // ---------- Modal ----------
@@ -1857,16 +1838,23 @@ function toggleNotifications() {
 
 // ---------- About modal ----------
 function openAbout() {
-  stub(
-    'KES CRM — мокап',
-    'Это интерактивный фронт-прототип CRM для ТОО KazEnergoSnab. Все данные хранятся локально в браузере (localStorage).',
-    [
-      '12 разделов: дашборд, сделки, клиенты, каталог, склад, документы и т.д.',
-      'Реалистичные демо-данные: 15 клиентов с БИНами, 25 SKU, ~1100 SKU в каталоге EKF',
-      'Изменения сохраняются между перезагрузками (кнопка «Сброс» в сайдбаре возвращает к исходному)',
-      'Следующий шаг — поднять Cloudflare Worker + D1 под уже понятную схему',
-    ]
-  );
+  const m = state.meta || {};
+  const bullets = [
+    'Сделки и воронки, клиенты, каталог и склад, документы (счета, отгрузки, приходы/расходы), задачи, отчёты.',
+    'Серверная база (Cloudflare D1) и хранилище файлов (R2); все операции идут через защищённый API с авторизацией по ролям.',
+    'Двусторонняя интеграция с 1С (контрагенты, номенклатура, остатки, приходы; счета и реализации в 1С) с очередью и повторами.',
+    'Интеграция WhatsApp через Green API: входящие заявки автоматически заводят клиента и сделку с распределением по менеджерам.',
+  ];
+  openModal({
+    title: 'О системе · KES CRM',
+    body: el('div', {}, [
+      el('div', { class:'muted', style:'font-size:13px;margin-bottom:10px' },
+        `Корпоративная CRM для ${m.legalName || m.tenant || 'ТОО «KazEnergoSnab»'}. Версия 1.0.`),
+      el('ul', { style:'margin:0;padding-left:18px;font-size:13px;line-height:1.6' },
+        bullets.map(b => el('li', {}, b))),
+    ]),
+    foot: [el('button', { class:'btn btn-primary', onclick: closeModal }, 'Закрыть')],
+  });
 }
 
 // ---------- Print invoice (PDF via window.print) ----------
@@ -2238,7 +2226,7 @@ function openEditUser(id) {
   const roleSel = fSelect('Роль',
     Object.entries(ROLES).map(([key, r]) => ({ value: key, label: r.label })),
     u?.roleKey || 'manager');
-  const password = fInput('Пароль', isNew ? 'demo' : '', { placeholder: isNew ? '' : 'пусто — пароль без изменений' });
+  const password = fInput('Пароль', '', { type: 'password', placeholder: isNew ? 'задайте пароль' : 'пусто — пароль без изменений' });
   const colorSel = fSelect('Цвет аватара',
     [['#00A6E2','Голубой'],['#7B61FF','Фиолетовый'],['#FF9F43','Оранжевый'],['#28C76F','Зелёный'],['#EF4444','Красный'],['#111','Чёрный']]
       .map(([v,l]) => ({ value: v, label: l })),
@@ -2249,12 +2237,13 @@ function openEditUser(id) {
     body: el('div', {}, [
       name.row, email.row, phone.row, roleSel.row, password.row, colorSel.row,
       el('div', { style:'margin-top:8px;padding:10px 12px;background:#F4F5F7;border-radius:6px;font-size:11.5px;color:#6B7280' },
-        'Пользователь сможет войти по email + пароль. В проде на email уйдёт письмо-приглашение с одноразовой ссылкой.'),
+        'Сотрудник входит по email и паролю. Пароль можно изменить в любой момент в карточке пользователя.'),
     ]),
     foot: [
       el('button', { class:'btn', onclick: closeModal }, 'Отмена'),
       el('button', { class:'btn btn-primary', onclick: async () => {
         if (!name.get().trim() || !email.get().trim()) { toast('Заполните имя и email', 'warn'); return; }
+        if (isNew && password.get().trim().length < 4) { toast('Задайте пароль (минимум 4 символа)', 'warn'); return; }
         const rk = roleSel.get();
         const initials = name.get().trim().split(' ').map(s => s[0]).slice(0,2).join('').toUpperCase();
         const body = { name: name.get().trim(), email: email.get().trim(), phone: phone.get(), role_key: rk, avatar: initials, color: colorSel.get() };
@@ -2262,7 +2251,7 @@ function openEditUser(id) {
           if (isNew) {
             body.active = 1;
             const saved = await window.__API__.apiFetch('users', { method: 'POST', body });
-            await window.__API__.apiFetch('users/' + saved.id + '/password', { method: 'POST', body: { password: password.get().trim() || 'demo' } });
+            await window.__API__.apiFetch('users/' + saved.id + '/password', { method: 'POST', body: { password: password.get().trim() } });
             state.users.push({ id: saved.id, name: saved.name, email: saved.email, phone: saved.phone, roleKey: saved.role_key, role: (ROLES[rk]||{}).label || rk, avatar: saved.avatar, color: saved.color, active: saved.active !== 0 });
             toast('Пользователь добавлен', 'success');
           } else {
@@ -2289,7 +2278,11 @@ function runSearch(q) {
   };
   const total = hits.clients.length + hits.deals.length + hits.products.length;
   if (!total) {
-    stub('Ничего не найдено', 'По запросу «' + q + '» совпадений нет.');
+    openModal({
+      title: 'Поиск',
+      body: el('div', { class:'muted', style:'padding:8px 2px;font-size:13px' }, 'По запросу «' + q + '» ничего не найдено.'),
+      foot: [el('button', { class:'btn btn-primary', onclick: closeModal }, 'Закрыть')],
+    });
     return;
   }
   const body = el('div', {});
@@ -6479,69 +6472,31 @@ function renderLogin(errMsg = null) {
             <span>ТОО KazEnergoSnab · Караганда</span>
           </div>
         </div>
-        <h2>Войдите как один из сотрудников</h2>
-        <p class="login-sub">Это демо — нажмите на любую плитку, чтобы войти. Каждая роль видит свой набор разделов.</p>
+        <h2>Вход в систему</h2>
+        <p class="login-sub">Введите рабочий email и пароль. Доступ к разделам зависит от вашей роли.</p>
 
-        <div class="demo-accounts big" id="demoAccs"></div>
+        <form class="login-form" id="loginForm" style="margin-top:6px">
+          <div>
+            <label>Email</label>
+            <input type="email" id="loginEmail" placeholder="name@company.kz" autocomplete="email" required autofocus>
+          </div>
+          <div>
+            <label>Пароль</label>
+            <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password" required>
+          </div>
+          <div class="login-err show" id="loginErr">${errMsg || ''}</div>
+          <button type="submit" class="btn btn-primary" style="width:100%">Войти</button>
+        </form>
 
-        <details class="manual-login">
-          <summary>Войти вручную (email + пароль)</summary>
-          <form class="login-form" id="loginForm" style="margin-top:14px">
-            <div>
-              <label>Email</label>
-              <input type="email" id="loginEmail" placeholder="pavel@snabenergo.kz" autocomplete="email" required>
-            </div>
-            <div>
-              <label>Пароль <span style="color:#00A6E2;font-weight:600">(для всех демо-аккаунтов: <code>demo</code>)</span></label>
-              <input type="password" id="loginPass" placeholder="demo" value="demo" autocomplete="current-password" required>
-            </div>
-            <div class="login-err" id="loginErr">${errMsg || ''}</div>
-            <button type="submit" class="btn btn-primary">Войти</button>
-          </form>
-        </details>
-
-        <div class="login-foot">© 2026 KES CRM · Все данные демо · Сброс в сайдбаре после входа</div>
+        <div class="login-foot">© 2026 KES CRM · ТОО «KazEnergoSnab»</div>
       </div>
     </div>
   `;
 
-  // 4 демо-кнопки (по одной на роль) — большие, заметные.
-  // Если в state.users нет roleKey (старый сохранённый state) — берём из SEED.
-  const accBox = document.getElementById('demoAccs');
-  const sourceUsers = state.users.some(u => u.roleKey) ? state.users : window.__KES__.SEED.users;
-  const demoRoles = [
-    { rk: 'director',  hint: 'видит всё, может всё' },
-    { rk: 'manager',   hint: 'только свои сделки и клиенты' },
-    { rk: 'warehouse', hint: 'склад, отгрузки, каталог' },
-    { rk: 'accountant', hint: 'документы, счета, контрагенты' },
-  ];
-  demoRoles.forEach(({ rk, hint }) => {
-    const u = sourceUsers.find(x => x.roleKey === rk);
-    if (!u) return;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'demo-acc big';
-    btn.innerHTML = `
-      <span class="avatar" style="background:${u.color}">${u.avatar}</span>
-      <div class="demo-body">
-        <div class="demo-name">${u.name}</div>
-        <div class="demo-role">${u.role}</div>
-        <div class="demo-hint">${hint}</div>
-      </div>
-      <span class="demo-arrow">→</span>
-    `;
-    btn.onclick = () => doLogin(u.email, 'demo');
-    accBox.appendChild(btn);
-  });
-
-  // Показать ошибку, если есть — открыть форму
-  if (errMsg) {
-    document.querySelector('.manual-login').open = true;
-    document.getElementById('loginErr').classList.add('show');
-  }
-
   document.getElementById('loginForm').onsubmit = (e) => {
     e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Вход…'; }
     doLogin(document.getElementById('loginEmail').value.trim(), document.getElementById('loginPass').value);
   };
 }
@@ -6658,8 +6613,7 @@ function renderShell() {
         </div>
         <nav class="sidebar-nav" id="nav"></nav>
         <div class="sidebar-foot">
-          <span>© 2026 KES</span>
-          <button id="reset-state" title="Сбросить демо-данные">Сброс</button>
+          <span>© 2026 KES CRM</span>
         </div>
       </aside>
       <header class="header">
@@ -6733,9 +6687,6 @@ function renderShell() {
   if (can('see-module', 'archive')) nav.appendChild(el('button', { 'data-view': 'archive' }, [el('span', { class: 'icon' }, '🗄'), ' Архив']));
 
   // Обработчики
-  $('#reset-state').addEventListener('click', async () => {
-    if (await confirmModal({ title:'Сброс демо-данных', message:'Сбросить демо-данные? Это вернёт всех пользователей, сделки, клиентов к исходному состоянию.', confirmText:'Сбросить', danger:true })) resetState();
-  });
   $('#search').addEventListener('keyup', (e) => { if (e.key === 'Enter') runSearch(e.target.value); });
   $('#notif-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleNotifications(); });
   $$('.icon-btn').forEach(b => {
