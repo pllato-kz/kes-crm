@@ -2515,7 +2515,6 @@ async function runDueSyncs(env) {
   // запуск; иначе запускаем новый проход по интервалу.
   const prodOff = parseInt((await getSetting(env, 'products_offset')) || '0', 10) || 0;
   if (prodOff > 0 || due('products_1c')) await run('products', () => syncProductsAll(env));
-  if (due('units_1c')) await run('units', () => syncUnits(env));
   if (due('stock_1c')) await run('stock', () => syncStock(env));
   let receiptsRan = false;
   if (due('receipts_1c')) { await run('receipts', () => syncReceipts(env)); receiptsRan = true; }
@@ -2523,6 +2522,9 @@ async function runDueSyncs(env) {
   if (receiptsRan || due('prices_1c')) await run('prices', () => syncPrices(env, 'last'));
   // закуп из регистра цен 1С + опт/розница в незаполненные приходами позиции
   if (due('saleprices_1c')) await run('saleprices', () => syncSalePrices(env));
+  // единицы измерения — в самом конце (резюмируемо), чтобы тяжёлый проход не вытеснял цены
+  const unitOff = parseInt((await getSetting(env, 'units_offset')) || '0', 10) || 0;
+  if (unitOff > 0 || due('units_1c')) await run('units', () => syncUnits(env));
   // этап 4: до-сылаем отложенные/упавшие отправки в 1С (контрагенты/счета/отгрузки)
   try { const q = await processOnecQueue(env); if (q.processed) ran.push(`queue ${q.ok}/${q.processed}`); }
   catch (e) { errors.push('queue: ' + ((e && e.message) || e)); }
@@ -2728,8 +2730,8 @@ async function syncProducts(env, limit, skip) {
 // Полная синхронизация ВСЕЙ номенклатуры (резюмируемо). 1С отдаёт по 1000/запрос,
 // каталог большой (~10k+), поэтому идём пачками; смещение храним в products_offset и
 // продолжаем со следующего фонового запуска, пока не дойдём до конца. После полного
-// прохода подтягиваем единицы измерения и пересчитываем цены (опт/розница из приходов,
-// закуп из регистра) — чтобы новые товары получили единицу и цены.
+// прохода пересчитываем цены (опт/розница из приходов, закуп из регистра); единицы
+// измерения подтягивает отдельный резюмируемый проход (syncUnits в runDueSyncs).
 const PRODUCTS_PAGES_PER_RUN = 4;
 async function syncProductsAll(env) {
   await ensureAppSettings(env);
@@ -2747,9 +2749,9 @@ async function syncProductsAll(env) {
       `INSERT INTO sync_state (entity, last_at, info) VALUES ('products_1c', datetime('now'), ?)
        ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
     ).bind(`готово: ${total} позиций`).run();
-    try { await syncUnits(env); } catch (e) {}               // единицы измерения (нужны для опт/розницы из приходов)
     try { await syncPrices(env, 'last'); } catch (e) {}      // опт/розница из приходов по единице измерения
     try { await syncSalePrices(env); } catch (e) {}          // закуп из регистра; опт/розница из регистра — в пробелы
+    // единицы измерения подтягивает отдельный резюмируемый проход (runDueSyncs)
   } else {
     await setSetting(env, 'products_offset', String(off));
     await env.DB.prepare(
@@ -2899,7 +2901,9 @@ async function syncReceipts(env) {
 // на единицу у номенклатуры в разных конфигурациях называют по-разному, поэтому пробуем
 // несколько вариантов: словарь единиц объединяем из всех известных справочников, а поле
 // у номенклатуры берём первое валидное (проверяем пробным запросом).
+const UNITS_PAGES_PER_RUN = 4;
 async function syncUnits(env) {
+  await ensureAppSettings(env);
   const logState = async (msg) => {
     try {
       await env.DB.prepare(
@@ -2924,23 +2928,28 @@ async function syncUnits(env) {
   }
   if (!Object.keys(unitName).length) { await logState('справочник единиц измерения не найден в 1С'); return json({ ok: false }); }
 
-  // 2) поле-ссылка на единицу у номенклатуры: первое валидное (проверяем пробным запросом)
-  let unitField = null;
-  for (const fld of ['ЕдиницаХраненияОстатков_Key', 'БазоваяЕдиницаИзмерения_Key', 'ЕдиницаИзмерения_Key']) {
-    try {
-      await odataGet(env, `Catalog_Номенклатура?$format=json&$select=Ref_Key,${fld}&$top=1`);
-      unitField = fld; break;
-    } catch (e) {}
+  // 2) поле-ссылка на единицу у номенклатуры: первое валидное (кэшируем в настройках)
+  let unitField = await getSetting(env, 'unit_field');
+  if (!unitField) {
+    for (const fld of ['ЕдиницаХраненияОстатков_Key', 'БазоваяЕдиницаИзмерения_Key', 'ЕдиницаИзмерения_Key']) {
+      try {
+        await odataGet(env, `Catalog_Номенклатура?$format=json&$select=Ref_Key,${fld}&$top=1`);
+        unitField = fld; break;
+      } catch (e) {}
+    }
+    if (!unitField) { await logState('поле единицы измерения не найдено в Catalog_Номенклатура'); return json({ ok: false }); }
+    await setSetting(env, 'unit_field', unitField);
   }
-  if (!unitField) { await logState('поле единицы измерения не найдено в Catalog_Номенклатура'); return json({ ok: false }); }
 
-  // 3) проходим номенклатуру, проставляем unit по сопоставлению ext_ref
-  let skip = 0, scanned = 0, updated = 0, noName = 0;
+  // 3) резюмируемый проход номенклатуры (по UNITS_PAGES_PER_RUN×1000 за вызов),
+  //    смещение храним в units_offset — чтобы не упереться в лимит времени запроса
+  let off = parseInt((await getSetting(env, 'units_offset')) || '0', 10) || 0;
   const base = `Catalog_Номенклатура?$format=json&$filter=IsFolder eq false&$orderby=Ref_Key&$select=Ref_Key,${unitField}`;
-  while (true) {
-    const d = await odataGet(env, `${base}&$top=1000&$skip=${skip}`);
+  let scanned = 0, updated = 0, noName = 0, done = false;
+  for (let p = 0; p < UNITS_PAGES_PER_RUN; p++) {
+    const d = await odataGet(env, `${base}&$top=1000&$skip=${off}`);
     const rows = d.value || [];
-    if (!rows.length) break;
+    if (!rows.length) { done = true; break; }
     const stmts = [];
     for (const r of rows) {
       scanned++;
@@ -2950,10 +2959,17 @@ async function syncUnits(env) {
       updated++;
     }
     for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
-    if (rows.length < 1000) break; skip += 1000;
+    off += rows.length;
+    if (rows.length < 1000) { done = true; break; }
   }
-  await logState(`поле ${unitField}: просмотрено ${scanned}, обновлено ${updated}, без названия ед. ${noName}`);
-  return json({ field: unitField, scanned, updated, noName });
+  if (done) {
+    await setSetting(env, 'units_offset', '0');
+    await logState(`готово (поле ${unitField}): в этом проходе обновлено ${updated}, без названия ед. ${noName}`);
+  } else {
+    await setSetting(env, 'units_offset', String(off));
+    await logState(`идёт… (поле ${unitField}) обработано до ${off}, обновлено в проходе ${updated}`);
+  }
+  return json({ field: unitField, scanned, updated, noName, off, done });
 }
 
 // Куда отнести цену из прихода по единице измерения товара: штучный -> розница,
