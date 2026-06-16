@@ -3841,16 +3841,10 @@ function openNewDeal() {
 // ============================================================
 VIEWS.clients = () => {
   const wrap = el('div');
-  const pushStatus = el('div', { class:'muted', style:'font-size:12px;margin-top:2px' }, '');
-  window.__API__.apiFetch('sync/status').then(rows => {
-    const p = (rows || []).find(x => x.entity === 'clients_push');
-    if (p) pushStatus.textContent = `Контрагент → 1С: ${String(p.last_at).slice(0, 16)} · ${p.info}`;
-  }).catch(() => {});
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Клиенты'),
       el('div', { class: 'sub' }, `${state.clients.length} клиентов · LTV ${fmtMoneyK(state.clients.reduce((s,c)=>s+c.ltv,0))}`),
-      pushStatus,
     ]),
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn btn-primary', onclick: openNewClient }, '+ Клиент'),
@@ -4202,26 +4196,12 @@ async function openClientDetail(id) {
 VIEWS.catalog = () => {
   const wrap = el('div');
   const sub = el('div', { class: 'sub' }, 'Загрузка…');
-  const priceCov = el('div', { class:'muted', style:'font-size:12px;margin-top:2px' }, 'Покрытие ценами: …');
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Каталог номенклатуры'), sub,
       el('div', { class:'muted', style:'font-size:12px;margin-top:2px' }, 'Зеркало 1С — только просмотр, синхронизация автоматическая.'),
-      priceCov,
     ]),
   ]));
-  // Покрытие ценами: у скольких товаров есть закуп/опт/розница
-  window.__API__.apiFetch('catalog/price-coverage').then(c => {
-    if (!c) return;
-    priceCov.innerHTML = '';
-    priceCov.append(
-      el('span', {}, `Цены из 1С: `),
-      el('b', {}, `закуп ${c.cost || 0}`), el('span', {}, ' · '),
-      el('b', {}, `опт ${c.wholesale || 0}`), el('span', {}, ' · '),
-      el('b', {}, `розница ${c.retail || 0}`),
-      el('span', {}, ` из ${c.total || 0} (с ценой ${c.any || 0})`),
-    );
-  }).catch(() => {});
 
   const q = { q: '', category: '', brand: '', sort: '', stockMin: '', stockMax: '', costMin: '', costMax: '', page: 1, limit: 50, total: 0 };
   const selected = new Set(); // выбранные товары для массового редактирования
@@ -5197,22 +5177,12 @@ VIEWS.invoices = () => {
   const totalPaid = state.invoices.filter(i => i.status === 'paid').reduce((s,i)=>s+i.amount,0);
   const totalDue = state.invoices.filter(i => i.status !== 'paid').reduce((s,i)=>s+i.amount,0);
 
-  const payStatus = el('div', { class:'muted', style:'font-size:12px;margin-top:2px' }, '');
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Документы'),
       el('div', { class: 'sub' }, `Счета на оплату · всего ${state.invoices.length} · создаются из сделки менеджером`),
-      payStatus,
     ]),
   ]));
-  // статус отправки счетов в 1С и подтягивания оплаты (для диагностики)
-  window.__API__.apiFetch('sync/status').then(rows => {
-    const push = (rows || []).find(x => x.entity === 'invoices_push');
-    const p = (rows || []).find(x => x.entity === 'invoice_payments_1c');
-    payStatus.innerHTML = '';
-    if (push) payStatus.append(el('div', {}, `Счёт → 1С: ${String(push.last_at).slice(0, 16)} · ${push.info}`));
-    if (p) payStatus.append(el('div', {}, `Оплата из 1С: ${String(p.last_at).slice(0, 16)} · ${p.info}`));
-  }).catch(() => {});
 
   const overdueInvCount = state.invoices.filter(i => i.status === 'overdue').length;
   wrap.append(el('div', { class:'grid grid-3' }, [
