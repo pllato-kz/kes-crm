@@ -1236,11 +1236,14 @@ async function findOrCreateClientByPhone(env, digits, name) {
   return { clientId: id, created: true };
 }
 
-// Активная (не закрытая/не отказная, не архивная) сделка клиента — чтобы не плодить сделки на каждое сообщение.
+// Активная (незавершённая) сделка клиента — чтобы не плодить сделки на каждое сообщение.
+// Сделку в ЗАХАРДКОЖЕННОМ (protected) терминальном этапе — Оплачено/Отгружено/Отказ —
+// активной не считаем: после неё новое обращение клиента открывает НОВУЮ сделку.
 async function openDealForClient(env, clientId) {
   const r = await env.DB.prepare(
     `SELECT d.id FROM deals d JOIN deal_stages s ON s.id = d.stage_id
      WHERE d.client_id = ? AND (d.archived_at IS NULL OR d.archived_at = '')
+       AND (s.protected IS NULL OR s.protected = 0)
        AND s.label NOT LIKE '%акры%' AND s.label NOT LIKE '%тказ%' AND s.label NOT LIKE '%роигр%'
      ORDER BY d.created_at DESC LIMIT 1`
   ).bind(clientId).first();
