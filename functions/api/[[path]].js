@@ -2166,7 +2166,7 @@ async function writeInvoice(env, request, method, id, ctx) {
   await ensureArchiveColumns(env);
   await ensureInvoiceExtRef(env);
   const invId = id || body.id || genId();
-  if (method === 'POST') body.no = await uniqueDocNo(env, 'invoices', body.no, `СФ-${new Date().getFullYear()}-`);
+  if (method === 'POST') body.no = await uniqueDocNo(env, 'invoices', body.no, `Сч-${new Date().getFullYear()}-`);
   const cols = (await columns(env, 'invoices')).map((c) => c.name);
   const data = { ...body, id: invId };
   const keys = Object.keys(data).filter((k) => cols.includes(k));
