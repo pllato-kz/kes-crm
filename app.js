@@ -6910,12 +6910,14 @@ function renderShell() {
     setTimeout(tick, 5000);                       // первый запуск вскоре после входа
     window.__syncTimer = setInterval(tick, 5 * 60 * 1000); // и далее каждые 5 минут
 
-    // Живые уведомления: опрашиваем колокольчик, новые показываем системным попапом + тостом
+    // Живой опрос (каждые 15с): уведомления (попап/тост) + новые сделки на доске без перезагрузки
     ensureNotifPermission();
     window.__notifSeen = window.__notifSeen || new Set();
     (state.notifications || []).forEach(n => { if (n.id != null) window.__notifSeen.add(n.id); });
-    if (window.__notifTimer) clearInterval(window.__notifTimer);
-    const pollNotif = async () => {
+    if (window.__liveTimer) clearInterval(window.__liveTimer);
+    const modalOpen = () => { const m = document.getElementById('modal'); return !!(m && m.classList.contains('show')); };
+    const pollLive = async () => {
+      // 1) уведомления
       try {
         const rows = await window.__API__.apiFetch('notifications');
         const list = (rows || []).map(window.__API__.map.notification);
@@ -6928,8 +6930,21 @@ function renderShell() {
         }
         updateNotifDot();
       } catch (e) {}
+      // 2) новые сделки → обновляем доску без перезагрузки (не трогаем, пока открыта карточка)
+      if (modalOpen()) return;
+      try {
+        const deals = await window.__API__.apiFetch('deals');
+        const list = (deals || []).map(window.__API__.map.deal);
+        const curIds = new Set(state.deals.map(d => d.id));
+        const changed = list.length !== state.deals.length || list.some(d => !curIds.has(d.id));
+        if (changed) {
+          try { const cls = await window.__API__.apiFetch('clients'); state.clients = (cls || []).map(window.__API__.map.client); } catch (e) {}
+          state.deals = list;
+          if (!modalOpen() && ['deals', 'dashboard', 'clients'].includes(CURRENT_VIEW)) navigate(CURRENT_VIEW);
+        }
+      } catch (e) {}
     };
-    window.__notifTimer = setInterval(pollNotif, 45 * 1000); // каждые 45 сек
+    window.__liveTimer = setInterval(pollLive, 15 * 1000);
   }
 }
 
