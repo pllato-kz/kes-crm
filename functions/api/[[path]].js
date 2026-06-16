@@ -133,6 +133,7 @@ export async function onRequest(context) {
         return syncPrices(env, mode === 'avg' ? 'avg' : 'last');
       }
       if (seg[1] === '1c' && seg[2] === 'saleprices' && request.method === 'POST') return syncSalePrices(env);
+      if (seg[1] === '1c' && seg[2] === 'units' && request.method === 'POST') return syncUnits(env);
       if (seg[1] === '1c' && seg[2] === 'products' && request.method === 'POST') {
         const u = new URL(request.url);
         const lim = parseInt(u.searchParams.get('limit'), 10);
@@ -1674,6 +1675,21 @@ async function ensureShipmentsCleared(env) {
   SHIP_CLEARED_OK = true;
 }
 
+// Одноразовый сброс закупочной цены. Раньше закуп заполнялся из приходов; теперь приходы
+// формируют опт/розницу, а закуп берётся ТОЛЬКО из регистра цен 1С. Старые приходные
+// значения в price_cost обнуляем один раз, дальше их заполняет регистр (syncSalePrices).
+let PRICE_COST_RESET_OK = false;
+async function ensurePriceCostReset(env) {
+  if (PRICE_COST_RESET_OK) return;
+  try {
+    if (!(await getSetting(env, 'price_cost_reset_v1'))) {
+      await env.DB.prepare('UPDATE products SET price_cost=0').run();
+      await setSetting(env, 'price_cost_reset_v1', '1');
+    }
+  } catch (e) {}
+  PRICE_COST_RESET_OK = true;
+}
+
 // История смены этапов сделки
 async function dealHistory(env, dealId) {
   const r = await env.DB.prepare(
@@ -2469,12 +2485,13 @@ const SYNC_INTERVALS = {
   clients_1c: 4,      // контрагенты — на каждом прогоне (~5 мин)
   suppliers_1c: 10,   // поставщики — ~10 мин
   products_1c: 30,    // номенклатура: полный проход всей базы ~10k+ (резюмируемо), обновление ~30 мин
+  units_1c: 60,       // единицы измерения номенклатуры — редко меняются (нужны для опт/розницы из приходов)
   categories_1c: 60,  // категории — редко меняются
   company_1c: 360,    // реквизиты организации — редко (раз в ~6 ч)
   stock_1c: 4,        // остатки — на каждом прогоне (~5 мин)
   receipts_1c: 4,     // приходы — на каждом прогоне (~5 мин)
-  prices_1c: 8,       // закупочная цена из приходов — ~10 мин (и сразу после прихода)
-  saleprices_1c: 10,  // закуп(рег)/опт/розница из регистра цен 1С — ~10 мин (+ сразу после полного прохода номенклатуры)
+  prices_1c: 8,       // опт/розница из приходов по единице измерения — ~10 мин (и сразу после прихода)
+  saleprices_1c: 10,  // закуп из регистра цен 1С + опт/розница в пробелы — ~10 мин (+ сразу после полного прохода номенклатуры)
 };
 // Запускает только «просроченные» синхронизации (по last_at в sync_state).
 async function runDueSyncs(env) {
@@ -2498,15 +2515,13 @@ async function runDueSyncs(env) {
   // запуск; иначе запускаем новый проход по интервалу.
   const prodOff = parseInt((await getSetting(env, 'products_offset')) || '0', 10) || 0;
   if (prodOff > 0 || due('products_1c')) await run('products', () => syncProductsAll(env));
+  if (due('units_1c')) await run('units', () => syncUnits(env));
   if (due('stock_1c')) await run('stock', () => syncStock(env));
   let receiptsRan = false;
   if (due('receipts_1c')) { await run('receipts', () => syncReceipts(env)); receiptsRan = true; }
-  // цены закупа + средняя закупочная: сразу после прихода ИЛИ периодически
-  if (receiptsRan || due('prices_1c')) {
-    await run('prices_last', () => syncPrices(env, 'last'));
-    await run('prices_avg', () => syncPrices(env, 'avg'));
-  }
-  // опт/розница из регистра цен 1С
+  // опт/розница из приходов (по единице измерения): сразу после прихода ИЛИ периодически
+  if (receiptsRan || due('prices_1c')) await run('prices', () => syncPrices(env, 'last'));
+  // закуп из регистра цен 1С + опт/розница в незаполненные приходами позиции
   if (due('saleprices_1c')) await run('saleprices', () => syncSalePrices(env));
   // этап 4: до-сылаем отложенные/упавшие отправки в 1С (контрагенты/счета/отгрузки)
   try { const q = await processOnecQueue(env); if (q.processed) ran.push(`queue ${q.ok}/${q.processed}`); }
@@ -2713,7 +2728,8 @@ async function syncProducts(env, limit, skip) {
 // Полная синхронизация ВСЕЙ номенклатуры (резюмируемо). 1С отдаёт по 1000/запрос,
 // каталог большой (~10k+), поэтому идём пачками; смещение храним в products_offset и
 // продолжаем со следующего фонового запуска, пока не дойдём до конца. После полного
-// прохода пересчитываем закупочные цены из приходов — чтобы новые товары получили цену.
+// прохода подтягиваем единицы измерения и пересчитываем цены (опт/розница из приходов,
+// закуп из регистра) — чтобы новые товары получили единицу и цены.
 const PRODUCTS_PAGES_PER_RUN = 4;
 async function syncProductsAll(env) {
   await ensureAppSettings(env);
@@ -2731,8 +2747,9 @@ async function syncProductsAll(env) {
       `INSERT INTO sync_state (entity, last_at, info) VALUES ('products_1c', datetime('now'), ?)
        ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
     ).bind(`готово: ${total} позиций`).run();
-    try { await syncPrices(env, 'last'); } catch (e) {}      // закуп из приходов для новых товаров
-    try { await syncSalePrices(env); } catch (e) {}          // закуп(рег)/опт/розница из регистра цен
+    try { await syncUnits(env); } catch (e) {}               // единицы измерения (нужны для опт/розницы из приходов)
+    try { await syncPrices(env, 'last'); } catch (e) {}      // опт/розница из приходов по единице измерения
+    try { await syncSalePrices(env); } catch (e) {}          // закуп из регистра; опт/розница из регистра — в пробелы
   } else {
     await setSetting(env, 'products_offset', String(off));
     await env.DB.prepare(
@@ -2878,7 +2895,77 @@ async function syncReceipts(env) {
   return json({ fetched: rows.length, imported: stmts.length });
 }
 
-// Цены из приходов 1С -> закупочная цена товара (products.price_cost).
+// Единицы измерения номенклатуры 1С -> products.unit. Имя справочника единиц и поле-ссылку
+// на единицу у номенклатуры в разных конфигурациях называют по-разному, поэтому пробуем
+// несколько вариантов: словарь единиц объединяем из всех известных справочников, а поле
+// у номенклатуры берём первое валидное (проверяем пробным запросом).
+async function syncUnits(env) {
+  const logState = async (msg) => {
+    try {
+      await env.DB.prepare(
+        `INSERT INTO sync_state (entity, last_at, info) VALUES ('units_1c', datetime('now'), ?)
+         ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
+      ).bind(String(msg).slice(0, 300)).run();
+    } catch (e) {}
+  };
+
+  // 1) словарь единиц: Ref_Key -> название ("шт","м","кг","упак",...) из всех известных справочников
+  const unitName = {};
+  for (const cat of ['Catalog_КлассификаторЕдиницИзмерения', 'Catalog_ЕдиницыИзмерения', 'Catalog_УпаковкиЕдиницыИзмерения']) {
+    try {
+      let skip = 0;
+      while (true) {
+        const d = await odataGet(env, `${cat}?$format=json&$select=Ref_Key,Description&$top=1000&$skip=${skip}`);
+        const rows = d.value || [];
+        for (const r of rows) if (r.Description) unitName[r.Ref_Key] = String(r.Description).trim();
+        if (rows.length < 1000) break; skip += 1000;
+      }
+    } catch (e) {}
+  }
+  if (!Object.keys(unitName).length) { await logState('справочник единиц измерения не найден в 1С'); return json({ ok: false }); }
+
+  // 2) поле-ссылка на единицу у номенклатуры: первое валидное (проверяем пробным запросом)
+  let unitField = null;
+  for (const fld of ['ЕдиницаХраненияОстатков_Key', 'БазоваяЕдиницаИзмерения_Key', 'ЕдиницаИзмерения_Key']) {
+    try {
+      await odataGet(env, `Catalog_Номенклатура?$format=json&$select=Ref_Key,${fld}&$top=1`);
+      unitField = fld; break;
+    } catch (e) {}
+  }
+  if (!unitField) { await logState('поле единицы измерения не найдено в Catalog_Номенклатура'); return json({ ok: false }); }
+
+  // 3) проходим номенклатуру, проставляем unit по сопоставлению ext_ref
+  let skip = 0, scanned = 0, updated = 0, noName = 0;
+  const base = `Catalog_Номенклатура?$format=json&$filter=IsFolder eq false&$orderby=Ref_Key&$select=Ref_Key,${unitField}`;
+  while (true) {
+    const d = await odataGet(env, `${base}&$top=1000&$skip=${skip}`);
+    const rows = d.value || [];
+    if (!rows.length) break;
+    const stmts = [];
+    for (const r of rows) {
+      scanned++;
+      const nm = r[unitField] && unitName[r[unitField]];
+      if (!nm) { noName++; continue; }
+      stmts.push(env.DB.prepare('UPDATE products SET unit=? WHERE ext_ref=?').bind(nm, r.Ref_Key));
+      updated++;
+    }
+    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+    if (rows.length < 1000) break; skip += 1000;
+  }
+  await logState(`поле ${unitField}: просмотрено ${scanned}, обновлено ${updated}, без названия ед. ${noName}`);
+  return json({ field: unitField, scanned, updated, noName });
+}
+
+// Куда отнести цену из прихода по единице измерения товара: штучный -> розница,
+// погонный/весовой/упаковочный -> опт. Неизвестную/пустую единицу считаем штучной.
+function priceKindByUnit(unit) {
+  const u = String(unit || '').toLowerCase();
+  if (!u) return 'retail';
+  return /шт|штук/.test(u) ? 'retail' : 'wholesale';
+}
+
+// Цены из приходов 1С -> опт/розница товара по единице измерения (price_retail для штучных,
+// price_wholesale для прочих). Закупочную цену приходы НЕ трогают — она тянется из регистра цен.
 //   mode='last' (по умолчанию): цена из ПОСЛЕДНЕГО по дате прихода прихода по номенклатуре;
 //   mode='avg': среднее значение цены по всем приходам номенклатуры.
 // Документ Поступление и его табл. часть Товары идут отдельными OData-сущностями,
@@ -2889,10 +2976,10 @@ async function syncPrices(env, mode) {
   const isAvg = mode === 'avg';
   const TOP = 10000;
 
-  // карта товаров: Ref_Key номенклатуры -> id товара
-  const prods = await env.DB.prepare('SELECT id, ext_ref FROM products WHERE ext_ref IS NOT NULL').all();
+  // карта товаров: Ref_Key номенклатуры -> { id, unit } (единица нужна для выбора опт/розница)
+  const prods = await env.DB.prepare('SELECT id, ext_ref, unit FROM products WHERE ext_ref IS NOT NULL').all();
   const byRef = {};
-  for (const p of prods.results) byRef[p.ext_ref] = p.id;
+  for (const p of prods.results) byRef[p.ext_ref] = { id: p.id, unit: p.unit };
 
   // 1) шапки приходов: Ref_Key -> дата (ISO-строка, сравнима лексикографически)
   const dateByDoc = {};
@@ -2941,32 +3028,34 @@ async function syncPrices(env, mode) {
     skip += TOP;
   }
 
-  // 3) запись закупочной цены в товары (по сопоставленным номенклатурам)
+  // 3) запись цены прихода в опт/розницу товара по его единице измерения
   const stmts = [];
-  let updated = 0, missing = 0, priced = 0;
+  let updW = 0, updR = 0, missing = 0, priced = 0;
   for (const nk in agg) {
     const a = agg[nk];
     const price = isAvg ? a.sum / a.count : a.price;
     if (!Number.isFinite(price) || price <= 0) continue;
     priced++;
-    const pid = byRef[nk];
-    if (!pid) { missing++; continue; }
-    stmts.push(env.DB.prepare('UPDATE products SET price_cost=? WHERE id=?').bind(Math.round(price * 100) / 100, pid));
-    updated++;
+    const p = byRef[nk];
+    if (!p) { missing++; continue; }
+    const col = priceKindByUnit(p.unit) === 'retail' ? 'price_retail' : 'price_wholesale';
+    if (col === 'price_retail') updR++; else updW++;
+    stmts.push(env.DB.prepare(`UPDATE products SET ${col}=? WHERE id=?`).bind(Math.round(price * 100) / 100, p.id));
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
-  const info = `${isAvg ? 'средняя' : 'последняя'}: приходов ${docs}, строк ${lines}, с ценой ${priced}, обновлено ${updated}, не сопоставлено ${missing}`;
+  const info = `${isAvg ? 'средняя' : 'последняя'}: приходов ${docs}, строк ${lines}, с ценой ${priced}, опт ${updW}, розница ${updR}, не сопоставлено ${missing}`;
   await env.DB.prepare(
     `INSERT INTO sync_state (entity, last_at, info) VALUES ('prices_1c', datetime('now'), ?)
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
   ).bind(info).run();
-  return json({ mode: isAvg ? 'avg' : 'last', docs, lines, priced, updated, missing });
+  return json({ mode: isAvg ? 'avg' : 'last', docs, lines, priced, wholesale: updW, retail: updR, missing });
 }
 
-// Опт/розница из регистра «Цены номенклатуры» 1С (РегистрСведений ЦеныНоменклатуры).
-// Берём последнюю цену по каждому виду цен и раскладываем по опт/рознице (по названию
-// вида цены). Закупочная сюда не входит — она тянется из приходов (syncPrices).
+// Цены из регистра «Цены номенклатуры» 1С (РегистрСведений ЦеныНоменклатуры).
+// Берём последнюю цену по каждому виду цен и раскладываем по закуп/опт/рознице (по названию
+// вида цены). Закупочная цена берётся ТОЛЬКО отсюда; опт/розница — только в пробелы,
+// которые не заполнили приходы (syncPrices).
 async function fetchPriceRegister(env) {
   const sel = '$format=json&$select=Номенклатура_Key,ВидЦены_Key,Цена';
   // 1) срез последних (компактно) — если доступна функция SliceLast
@@ -3000,6 +3089,9 @@ async function syncSalePrices(env) {
       ).bind(String(msg).slice(0, 300)).run();
     } catch (e) {}
   };
+
+  await ensureAppSettings(env);
+  await ensurePriceCostReset(env); // одноразово очищаем старый закуп из приходов
 
   const prods = await env.DB.prepare('SELECT id, ext_ref FROM products WHERE ext_ref IS NOT NULL').all();
   const byRef = {}; for (const p of prods.results) byRef[p.ext_ref] = p.id;
@@ -3038,10 +3130,11 @@ async function syncSalePrices(env) {
   for (const nk in latest) {
     const pid = byRef[nk]; if (!pid) { miss++; continue; }
     const v = latest[nk];
-    if (v.wholesale != null) { stmts.push(env.DB.prepare('UPDATE products SET price_wholesale=? WHERE id=?').bind(rnd(v.wholesale), pid)); updW++; }
-    if (v.retail != null) { stmts.push(env.DB.prepare('UPDATE products SET price_retail=? WHERE id=?').bind(rnd(v.retail), pid)); updR++; }
-    // закуп из регистра — только где из приходов его ещё нет (приходы остаются основным источником)
-    if (v.cost != null) { stmts.push(env.DB.prepare('UPDATE products SET price_cost=? WHERE id=? AND (price_cost IS NULL OR price_cost=0)').bind(rnd(v.cost), pid)); updC++; }
+    // опт/розница из регистра — только в пробелы (основной источник опт/розницы — приходы)
+    if (v.wholesale != null) { stmts.push(env.DB.prepare('UPDATE products SET price_wholesale=? WHERE id=? AND (price_wholesale IS NULL OR price_wholesale=0)').bind(rnd(v.wholesale), pid)); updW++; }
+    if (v.retail != null) { stmts.push(env.DB.prepare('UPDATE products SET price_retail=? WHERE id=? AND (price_retail IS NULL OR price_retail=0)').bind(rnd(v.retail), pid)); updR++; }
+    // закуп — только из регистра цен (единственный источник закупочной цены)
+    if (v.cost != null) { stmts.push(env.DB.prepare('UPDATE products SET price_cost=? WHERE id=?').bind(rnd(v.cost), pid)); updC++; }
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
