@@ -2977,10 +2977,11 @@ async function fetchPriceRegister(env) {
       if (rows.length < 5000) break; skip += 5000;
     }
     return { rows: out, sliceLast: true };
-  } catch (e) { /* имя/функция отличается — читаем полный регистр ниже */ }
-  // 2) fallback: весь регистр по периоду (последняя запись перезапишет предыдущие)
+  } catch (e) { /* SliceLast недоступен (непериодический регистр или иное имя) — читаем напрямую */ }
+  // 2) fallback: записи регистра как есть (для НЕпериодического регистра — одна запись
+  //    на номенклатуру×вид цены; без поля «Период», его в таком регистре нет).
   let out = [], skip = 0;
-  const base = 'InformationRegister_ЦеныНоменклатуры?$format=json&$select=Период,Номенклатура_Key,ВидЦены_Key,Цена&$orderby=Период';
+  const base = `InformationRegister_ЦеныНоменклатуры?${sel}&$orderby=Номенклатура_Key`;
   while (true) {
     const d = await odataGet(env, `${base}&$top=5000&$skip=${skip}`);
     const rows = d.value || []; out = out.concat(rows);
