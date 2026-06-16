@@ -1489,8 +1489,7 @@ function openProductDetail(idOrProduct) {
       kvHost,
     ]),
     foot: [
-      can('edit-stock') ? el('button', { class:'btn', onclick: () => { closeModal(); openEditStock(p); } }, '✏️ Изменить остаток') : null,
-      el('button', { class:'btn btn-primary', onclick: () => { closeModal(); toast(`+1 шт «${p.sku}» в новую сделку`, 'success'); } }, '+ В сделку'),
+      el('button', { class:'btn btn-primary', onclick: closeModal }, 'Закрыть'),
     ],
   });
 
@@ -4054,10 +4053,9 @@ VIEWS.catalog = () => {
   const wrap = el('div');
   const sub = el('div', { class: 'sub' }, 'Загрузка…');
   wrap.append(el('div', { class: 'page-head' }, [
-    el('div', {}, [el('h1', {}, 'Каталог номенклатуры'), sub]),
-    el('div', { class: 'actions' }, [
-      el('button', { class: 'btn', onclick: () => openImport('products') }, '📥 Импорт прайса EKF'),
-      el('button', { class: 'btn btn-primary', onclick: openNewProduct }, '+ Товар'),
+    el('div', {}, [
+      el('h1', {}, 'Каталог номенклатуры'), sub,
+      el('div', { class:'muted', style:'font-size:12px;margin-top:2px' }, 'Зеркало 1С — только просмотр, синхронизация автоматическая.'),
     ]),
   ]));
 
@@ -4088,7 +4086,6 @@ VIEWS.catalog = () => {
   const bulkCount = el('span', { class:'strong' }, '');
   const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [
     bulkCount,
-    el('button', { class:'btn btn-sm btn-primary', onclick: () => openProductBulkEdit([...selected], () => { selected.clear(); loadProducts(); }) }, 'Массовое редактирование'),
     el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); loadProducts(); } }, 'Снять выбор'),
   ]);
   function refreshBulk() { bulkCount.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
@@ -4455,12 +4452,7 @@ VIEWS.warehouse = () => {
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Склад'),
-    ]),
-    el('div', { class: 'actions' }, [
-      can('edit-stock') ? el('button', { class: 'btn btn-primary', onclick: () => openStockDoc('receipt', null, () => navigate('warehouse')) }, '📥 Приход') : null,
-      can('edit-stock') ? el('button', { class: 'btn', onclick: () => openStockDoc('writeoff', null, () => navigate('warehouse')) }, '📤 Расход') : null,
-      el('button', { class: 'btn', onclick: () => openMovementsReport() }, '📊 Отчёт движения'),
-      can('edit-stock') ? el('button', { class: 'btn', onclick: () => openInventoryCreate() }, '+ Инвентаризация') : null,
+      el('div', { class:'muted', style:'font-size:12px;margin-top:2px' }, 'Зеркало 1С — только просмотр. Приход/расход и движение ведутся в 1С.'),
     ]),
   ]));
 
@@ -4481,14 +4473,6 @@ VIEWS.warehouse = () => {
     ]);
     stats.replaceWith(grid);
   }).catch(() => {});
-
-  // Инвентаризации (документы пересчёта)
-  if (can('edit-stock')) {
-    wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Инвентаризации'));
-    const invHost = el('div', { class:'table-wrap' }, el('div', { class:'muted', style:'padding:12px' }, 'Загрузка…'));
-    wrap.append(invHost);
-    renderInventoryList(invHost);
-  }
 
   // Остатки по складу — серверная пагинация + поиск + фильтр низких остатков
   wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Остатки по складу'));
@@ -4572,56 +4556,6 @@ VIEWS.warehouse = () => {
     );
   }
 
-  // Документы склада (приход/расход) со статусами
-  wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Документы склада (приход / расход)'));
-  const docsHost = el('div', { class:'table-wrap' }, el('div', { class:'muted', style:'padding:12px' }, 'Загрузка…'));
-  wrap.append(docsHost);
-  function loadDocs() {
-    window.__API__.apiFetch('stock-docs?limit=50').then(rows => {
-      docsHost.innerHTML = '';
-      const dt = el('table', { class:'data' });
-      dt.append(el('thead', {}, el('tr', {}, [
-        el('th', {}, '№'), el('th', {}, 'Дата'), el('th', {}, 'Тип'), el('th', {}, 'Контрагент'),
-        el('th', { class:'num' }, 'Позиций'), el('th', {}, 'Статус'),
-      ])));
-      const stMap = { draft: ['pill-muted', 'Черновик'], posted: ['pill-success', 'Проведён'], cancelled: ['pill-danger', 'Отменён'] };
-      dt.append(el('tbody', {}, (rows && rows.length) ? rows.map(d => {
-        const sp = stMap[d.status] || ['pill-muted', d.status];
-        return el('tr', { style:'cursor:pointer', onclick: () => openStockDoc(d.type, d.id, () => navigate('warehouse')) }, [
-          el('td', { class:'strong' }, d.no),
-          el('td', { class:'muted' }, d.date ? fmtDate(d.date) : '—'),
-          el('td', {}, d.type === 'receipt' ? 'Приход' : 'Расход'),
-          el('td', {}, d.counterparty || '—'),
-          el('td', { class:'num' }, Math.round(d.total_qty || 0)),
-          el('td', {}, el('span', { class:'pill ' + sp[0] }, sp[1])),
-        ]);
-      }) : [el('tr', {}, el('td', { colspan:6, class:'muted', style:'text-align:center;padding:16px' }, 'Документов пока нет. Создайте приход или расход.'))]));
-      docsHost.append(dt);
-    }).catch(() => { docsHost.innerHTML = ''; docsHost.append(el('div', { class:'muted', style:'padding:12px' }, 'Не удалось загрузить документы')); });
-  }
-  loadDocs();
-
-  // Движения склада (приход/расход) — журнал
-  wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Журнал движений склада'));
-  const movHost = el('div', { class:'table-wrap' }, el('div', { class:'muted', style:'padding:12px' }, 'Загрузка…'));
-  wrap.append(movHost);
-  window.__API__.apiFetch('stock-movements?limit=50').then(rows => {
-    movHost.innerHTML = '';
-    const mt = el('table', { class:'data' });
-    mt.append(el('thead', {}, el('tr', {}, [
-      el('th', {}, 'Дата'), el('th', {}, 'Товар'), el('th', {}, 'Тип'),
-      el('th', { class:'num' }, 'Кол-во'), el('th', {}, 'Контрагент'), el('th', {}, 'Примечание'),
-    ])));
-    mt.append(el('tbody', {}, (rows && rows.length) ? rows.map(m => el('tr', {}, [
-      el('td', { class:'muted' }, m.date ? fmtDate(m.date) : '—'),
-      el('td', { class:'strong' }, m.product_name || m.product_sku || '—'),
-      el('td', {}, el('span', { class:'pill ' + (m.direction === 'in' ? 'pill-success' : 'pill-warn') }, m.direction === 'in' ? 'Приход' : 'Расход')),
-      el('td', { class:'num strong' }, (m.direction === 'in' ? '+' : '−') + m.qty),
-      el('td', {}, m.counterparty || '—'),
-      el('td', { class:'muted' }, m.note || ''),
-    ])) : [el('tr', {}, el('td', { colspan:6, class:'muted', style:'text-align:center;padding:16px' }, 'Движений пока нет. Оформите приход или расход.'))]));
-    movHost.append(mt);
-  }).catch(() => { movHost.innerHTML = ''; movHost.append(el('div', { class:'muted', style:'padding:12px' }, 'Не удалось загрузить движения')); });
 
   // Последние приходы
   wrap.append(el('div', { 'data-anchor': 'receipts', style:'font-weight:600;margin:24px 0 12px' }, 'Последние приходы от поставщиков'));
