@@ -3857,8 +3857,8 @@ VIEWS.clients = () => {
           await window.__API__.loadRest(state); navigate('clients');
         } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
       } }, '👥 Распределить базу') : null,
-      el('button', { class: 'btn', onclick: () => openImport('clients') }, '📥 Импорт'),
-      el('button', { class: 'btn', onclick: () => exportClientsCSV() }, [svgIconEl('download', 16), ' Экспорт']),
+      isDir ? el('button', { class: 'btn', onclick: () => openImport('clients') }, '📥 Импорт') : null,
+      isDir ? el('button', { class: 'btn', onclick: () => exportClientsCSV() }, [svgIconEl('download', 16), ' Экспорт']) : null,
     ]),
   ]));
   tw.append(bulkBar);
