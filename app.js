@@ -1404,14 +1404,21 @@ function openNewInvoice() {
 // ============================================================
 // DETAIL MODALS — продукт / отгрузка / счёт / поставщик / уведомления
 // ============================================================
+// Наценка sale-цены к закупу: % или null (если нет закупа/цены)
+function priceMarginPct(cost, price) {
+  return (Number(cost) > 0 && Number(price) > 0) ? Math.round((price - cost) / cost * 100) : null;
+}
+// Подпись «+N% от закупа» с цветом (зелёный/красный/серый); null — если нет данных
+function priceDeltaEl(cost, price) {
+  const m = priceMarginPct(cost, price);
+  if (m == null) return null;
+  return el('div', { style:'font-size:11px;font-weight:600;margin-top:2px;color:' + (m < 0 ? '#EF4444' : (m > 0 ? '#10B981' : '#6B7280')) }, (m >= 0 ? '+' : '') + m + '% от закупа');
+}
+
 function openProductDetail(idOrProduct) {
-  const p = (idOrProduct && typeof idOrProduct === 'object') ? idOrProduct : byId(state.products, idOrProduct);
+  let p = (idOrProduct && typeof idOrProduct === 'object') ? idOrProduct : byId(state.products, idOrProduct);
   if (!p) return;
   const cat = categoryById(p.cat);
-  const free = p.stock - p.reserved;
-  const margin = (p.priceCost > 0 && p.priceRetail > 0)
-    ? Math.round((p.priceRetail - p.priceCost) / p.priceCost * 100) + '%'
-    : '—';
 
   // Фото товара (R2) + загрузка
   const imgHost = el('div', { style:'margin-bottom:14px' });
@@ -1441,6 +1448,34 @@ function openProductDetail(idOrProduct) {
   };
   renderImg();
 
+  // Блок цен и характеристик — перерисовываем после подтягивания свежих цен из каталога
+  const priceHost = el('div', { style:'margin-bottom:14px' });
+  const kvHost = el('div');
+  function renderInfo() {
+    const free = p.stock - p.reserved;
+    const cost = Number(p.priceCost) || 0, opt = Number(p.priceWholesale) || 0, rozn = Number(p.priceRetail) || 0;
+    const below = (opt > 0 && opt < cost) || (rozn > 0 && rozn < cost);
+    priceHost.innerHTML = '';
+    priceHost.append(
+      el('div', { class:'grid grid-3', style:'gap:10px' }, [
+        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Закуп'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, cost ? fmtMoney(cost) : '—')]),
+        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Опт'),   el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, opt ? fmtMoney(opt) : '—'), priceDeltaEl(cost, opt)]),
+        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Розница'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, rozn ? fmtMoney(rozn) : '—'), priceDeltaEl(cost, rozn)]),
+      ]),
+      below ? el('div', { class:'pill pill-danger', style:'margin-top:10px' }, '⚠️ Цена продажи ниже закупочной') : null,
+    );
+    const margin = priceMarginPct(cost, rozn);
+    kvHost.innerHTML = '';
+    kvHost.append(el('dl', { class:'kv' }, [
+      el('dt', {}, 'Единица'),       el('dd', {}, p.unit),
+      el('dt', {}, 'Остаток'),       el('dd', {}, `${p.stock} ${p.unit}`),
+      el('dt', {}, 'Зарезервировано'), el('dd', {}, `${p.reserved} ${p.unit}`),
+      el('dt', {}, 'Доступно'),      el('dd', {}, stockIndicator(free, p.stock)),
+      el('dt', {}, 'Маржа розница'), el('dd', {}, margin != null ? (margin >= 0 ? '+' : '') + margin + '%' : '—'),
+    ]));
+  }
+  renderInfo();
+
   openModal({
     title: p.name,
     body: el('div', {}, [
@@ -1450,24 +1485,19 @@ function openProductDetail(idOrProduct) {
         el('span', { class:'tag' }, cat.icon + ' ' + cat.name),
         el('span', { class:'tag' }, p.brand),
       ]),
-      el('div', { class:'grid grid-3', style:'gap:10px;margin-bottom:14px' }, [
-        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Закуп'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, p.priceCost ? fmtMoney(p.priceCost) : '—')]),
-        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Опт'),   el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, p.priceWholesale ? fmtMoney(p.priceWholesale) : '—')]),
-        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Розница'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, p.priceRetail ? fmtMoney(p.priceRetail) : '—')]),
-      ]),
-      el('dl', { class:'kv' }, [
-        el('dt', {}, 'Единица'),       el('dd', {}, p.unit),
-        el('dt', {}, 'Остаток'),       el('dd', {}, `${p.stock} ${p.unit}`),
-        el('dt', {}, 'Зарезервировано'), el('dd', {}, `${p.reserved} ${p.unit}`),
-        el('dt', {}, 'Доступно'),      el('dd', {}, stockIndicator(free, p.stock)),
-        el('dt', {}, 'Маржа розница'), el('dd', {}, margin),
-      ]),
+      priceHost,
+      kvHost,
     ]),
     foot: [
       can('edit-stock') ? el('button', { class:'btn', onclick: () => { closeModal(); openEditStock(p); } }, '✏️ Изменить остаток') : null,
       el('button', { class:'btn btn-primary', onclick: () => { closeModal(); toast(`+1 шт «${p.sku}» в новую сделку`, 'success'); } }, '+ В сделку'),
     ],
   });
+
+  // Подтягиваем актуальную карточку из каталога (цены/остаток) и перерисовываем
+  window.__API__.apiFetch('products/' + encodeURIComponent(p.id))
+    .then(row => { const fp = window.__API__.map.product(row); if (fp && fp.id) { const ex = byId(state.products, fp.id); if (ex) { Object.assign(ex, fp); p = ex; } else { Object.assign(p, fp); } renderInfo(); renderImg(); } })
+    .catch(() => {});
 }
 
 // Правка остатка товара (право edit-stock: директор / кладовщик)
@@ -4107,7 +4137,8 @@ VIEWS.catalog = () => {
       t.append(el('thead', {}, el('tr', {}, [
         el('th', { style:'width:34px;text-align:center' }, selAll),
         el('th', {}, 'Артикул'), el('th', {}, 'Наименование'), el('th', {}, 'Бренд'),
-        el('th', { class:'num' }, 'Закуп'), el('th', { class:'num' }, 'Опт'), el('th', { class:'num' }, 'Розница'), el('th', {}, 'Остаток'),
+        el('th', { class:'num' }, 'Закуп'), el('th', { class:'num' }, 'Опт'), el('th', { class:'num' }, 'Розница'),
+        el('th', { class:'num', title:'Наценка продажной цены к закупу' }, 'Наценка'), el('th', {}, 'Остаток'),
       ])));
       const rows = pageProducts.map((p, i) => {
         const cb = el('input', { type:'checkbox', checked: selected.has(p.id) ? 'checked' : null, onclick: (e) => e.stopPropagation(),
@@ -4123,11 +4154,18 @@ VIEWS.catalog = () => {
           el('td', { class:'num strong' }, p.priceCost ? fmtMoney(p.priceCost) : '—'),
           el('td', { class:'num muted' }, p.priceWholesale ? fmtMoney(p.priceWholesale) : '—'),
           el('td', { class:'num muted' }, p.priceRetail ? fmtMoney(p.priceRetail) : '—'),
+          (() => {
+            const cost = Number(p.priceCost) || 0, sale = (Number(p.priceRetail) || 0) || (Number(p.priceWholesale) || 0);
+            const m = priceMarginPct(cost, sale);
+            const below = cost > 0 && ((Number(p.priceWholesale) > 0 && p.priceWholesale < cost) || (Number(p.priceRetail) > 0 && p.priceRetail < cost));
+            return el('td', { class:'num', style: 'font-weight:600;' + (m == null ? 'color:#9CA3AF' : 'color:' + (m < 0 ? '#EF4444' : '#10B981')), title: below ? 'Есть цена ниже закупа' : '' },
+              m == null ? '—' : ((m >= 0 ? '+' : '') + m + '%' + (below ? ' ⚠️' : '')));
+          })(),
           el('td', {}, stockIndicator(p.stock - p.reserved, p.stock)),
         ]);
       });
       syncSelAll();
-      t.append(el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 8, class:'muted', style:'text-align:center;padding:24px' }, 'Ничего не найдено'))]));
+      t.append(el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 9, class:'muted', style:'text-align:center;padding:24px' }, 'Ничего не найдено'))]));
       tableHost.innerHTML = ''; tableHost.append(t);
       renderPager(); refreshBulk();
     } catch (e) { tableHost.innerHTML = ''; tableHost.append(el('div', { class:'pill pill-danger' }, 'Ошибка загрузки: ' + ((e && e.message) || e))); }
