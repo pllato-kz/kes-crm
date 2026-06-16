@@ -6358,7 +6358,7 @@ VIEWS.settings = () => {
     window.__API__.apiFetch('sync/status').then(rows => {
       rows = rows || [];
       const f = (e) => rows.find(x => x.entity === e);
-      const cl = f('clients_1c'), pr = f('products_1c'), un = f('units_1c'), st = f('stock_1c'), px = f('prices_1c'), spr = f('saleprices_1c'), rc = f('receipts_1c'), ip = f('invoices_push'), ipay = f('invoice_payments_1c'), sp = f('shipments_push');
+      const cl = f('clients_1c'), pr = f('products_1c'), un = f('units_1c'), st = f('stock_1c'), px = f('prices_1c'), spr = f('saleprices_1c'), rc = f('receipts_1c'), ip = f('invoices_push'), sp = f('shipments_push');
       statusHost.innerHTML = '';
       statusHost.append(
         el('div', {}, cl ? `Контрагенты: ${String(cl.last_at).slice(0, 16)} · ${cl.info}` : 'Контрагенты ещё не синхронизировались'),
@@ -6369,7 +6369,6 @@ VIEWS.settings = () => {
         el('div', {}, spr ? `Закуп + опт/розница (регистр 1С): ${String(spr.last_at).slice(0, 16)} · ${spr.info}` : 'Регистр цен ещё не синхронизировался'),
         el('div', {}, rc ? `Приходы: ${String(rc.last_at).slice(0, 16)} · ${rc.info}` : 'Приходы ещё не синхронизировались'),
         el('div', {}, ip ? `Счета → 1С: ${String(ip.last_at).slice(0, 16)} · ${ip.info}` : 'Счета в 1С ещё не отправлялись'),
-        el('div', {}, ipay ? `Оплата счетов (из 1С): ${String(ipay.last_at).slice(0, 16)} · ${ipay.info}` : 'Статус оплаты из 1С ещё не синхронизировался'),
         el('div', {}, sp ? `Отгрузки → 1С (черновик): ${String(sp.last_at).slice(0, 16)} · ${sp.info}` : 'Отгрузки в 1С ещё не отправлялись (этап 3 выключен)'),
       );
     }).catch(() => { statusHost.textContent = ''; });

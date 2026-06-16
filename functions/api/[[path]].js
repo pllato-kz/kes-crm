@@ -2701,7 +2701,6 @@ const SYNC_INTERVALS = {
   receipts_1c: 4,     // приходы — на каждом прогоне (~5 мин)
   prices_1c: 8,       // опт/розница из приходов по единице измерения — ~10 мин (и сразу после прихода)
   saleprices_1c: 10,  // закуп из регистра цен 1С + опт/розница в пробелы — ~10 мин (+ сразу после полного прохода номенклатуры)
-  invoice_payments_1c: 5, // статус оплаты счетов из 1С — ~5 мин
 };
 // Запускает только «просроченные» синхронизации (по last_at в sync_state).
 async function runDueSyncs(env) {
@@ -2732,8 +2731,9 @@ async function runDueSyncs(env) {
   if (receiptsRan || due('prices_1c')) await run('prices', () => syncPrices(env, 'last'));
   // закуп из регистра цен 1С + опт/розница в незаполненные приходами позиции
   if (due('saleprices_1c')) await run('saleprices', () => syncSalePrices(env));
-  // статус оплаты счетов из 1С (только чтение)
-  if (due('invoice_payments_1c')) await run('invoice_payments', () => syncInvoicePayments(env));
+  // статус оплаты счетов — ставится вручную в CRM (в 1С «Счёт на оплату» не хранит факт
+  // оплаты). Авто-синк отключён; функция syncInvoicePayments оставлена для ручного запуска,
+  // если позже подключим источник оплаты (регистр/платёжные документы).
   // единицы измерения — в самом конце (резюмируемо), чтобы тяжёлый проход не вытеснял цены
   const unitOff = parseInt((await getSetting(env, 'units_offset')) || '0', 10) || 0;
   if (unitOff > 0 || due('units_1c')) await run('units', () => syncUnits(env));
