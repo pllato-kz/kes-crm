@@ -1883,7 +1883,14 @@ function toggleNotifications() {
   const panel = el('div', { class: 'dropdown' }, [
     el('div', { class: 'dropdown-head' }, [
       el('h4', {}, 'Уведомления' + (reminders.length ? ` · ${reminders.length}` : '')),
-      el('button', { class: 'btn btn-ghost btn-sm', onclick: () => { NOTIFS_READ = true; state.notifications = []; root.innerHTML = ''; updateNotifDot(); toast('Все уведомления отмечены прочитанными'); } }, 'Прочитать все'),
+      el('button', { class: 'btn btn-ghost btn-sm', onclick: () => {
+        NOTIFS_READ = true;
+        // помечаем уже виденные прочитанными и в БД, чтобы не возвращались на следующем опросе
+        (state.notifications || []).forEach(n => { if (n.id != null) window.__notifSeen && window.__notifSeen.add(n.id); });
+        state.notifications = []; root.innerHTML = ''; updateNotifDot();
+        window.__API__.apiFetch('notifications/read', { method: 'POST' }).catch(() => {});
+        toast('Все уведомления отмечены прочитанными');
+      } }, 'Прочитать все'),
     ]),
     el('div', { class: 'dropdown-body' }, items.length ? items.map(n => {
       const ic = { error: '⚠️', warn: '🟡', info: 'ℹ️' }[n.type] || 'ℹ️';
