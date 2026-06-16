@@ -3547,11 +3547,16 @@ async function openDealDetail(id, opts) {
       el('div', { class:'msg-sys' }, ['✓ Клиент согласовал условия сделки · 09:40']),
     );
   }
-  function renderChat() {
-    chatBody.innerHTML = '';
+  let chatSig = '';
+  function renderChat(force) {
     window.__API__.apiFetch('greenapi/messages?dealId=' + encodeURIComponent(d.id)).then(rows => {
+      rows = rows || [];
+      // подпись = кол-во + самое свежее сообщение; если не изменилось — не перерисовываем (без мигания)
+      const sig = rows.length + '|' + (rows[0] ? (rows[0].id || rows[0].created_at || '') : '');
+      if (!force && sig === chatSig) return;
+      chatSig = sig;
       chatBody.innerHTML = '';
-      if (!rows || !rows.length) { exampleChat(); return; }
+      if (!rows.length) { exampleChat(); return; }
       let lastDate = '';
       rows.slice().reverse().forEach(mm => {
         const day = String(mm.created_at || '').slice(0, 10);
@@ -3559,17 +3564,23 @@ async function openDealDetail(id, opts) {
         chatBody.append(bubble(mm));
       });
       chatBody.scrollTop = chatBody.scrollHeight;
-    }).catch(() => { chatBody.innerHTML = ''; exampleChat(); });
+    }).catch(() => { if (!chatSig) { chatBody.innerHTML = ''; exampleChat(); } });
   }
   async function sendChat() {
     const text = chatInputEl.value.trim();
     if (!text) return;
     chatInputEl.value = '';
-    try { await window.__API__.apiFetch('greenapi/send', { method:'POST', body:{ dealId: d.id, text } }); renderChat(); }
+    try { await window.__API__.apiFetch('greenapi/send', { method:'POST', body:{ dealId: d.id, text } }); renderChat(true); }
     catch (e) { toast('WhatsApp: ' + ((e && e.message) || e), 'error'); chatInputEl.value = text; }
   }
   chatInputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendChat(); } });
-  renderChat();
+  renderChat(true);
+  // живое обновление чата: опрашиваем новые сообщения, пока карточка открыта (таймер
+  // самоочищается, когда модалка закрыта — chatBody исчезает из DOM)
+  const chatTimer = setInterval(() => {
+    if (!document.body.contains(chatBody)) { clearInterval(chatTimer); return; }
+    renderChat();
+  }, 6000);
 
   // Кнопки оплаты в карточке сделки убраны — оплата меняется только в разделе «Документы».
 
