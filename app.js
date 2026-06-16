@@ -5191,10 +5191,13 @@ VIEWS.invoices = () => {
       payStatus,
     ]),
   ]));
-  // статус подтягивания оплаты из 1С (счёт сам станет «Оплачено» по платежам банк/касса)
+  // статус отправки счетов в 1С и подтягивания оплаты (для диагностики)
   window.__API__.apiFetch('sync/status').then(rows => {
+    const push = (rows || []).find(x => x.entity === 'invoices_push');
     const p = (rows || []).find(x => x.entity === 'invoice_payments_1c');
-    if (p) payStatus.textContent = `Оплата из 1С: ${String(p.last_at).slice(0, 16)} · ${p.info}`;
+    payStatus.innerHTML = '';
+    if (push) payStatus.append(el('div', {}, `Счёт → 1С: ${String(push.last_at).slice(0, 16)} · ${push.info}`));
+    if (p) payStatus.append(el('div', {}, `Оплата из 1С: ${String(p.last_at).slice(0, 16)} · ${p.info}`));
   }).catch(() => {});
 
   const overdueInvCount = state.invoices.filter(i => i.status === 'overdue').length;
