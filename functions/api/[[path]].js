@@ -399,7 +399,7 @@ async function dataRoute(ctx, seg, url, auth) {
   if (resource === 'shipments') await ensureShipmentsCleared(env); // одноразовая очистка всех отгрузок
   if (resource === 'shipments' && ['POST', 'PUT', 'PATCH'].includes(method)) await ensureShipmentStatuses(env);
   if (resource === 'suppliers') await ensureSupplierExtRef(env); // колонки ext_ref/bin
-  if (resource === 'roles') await ensureArchiveRight(env); // выдать директору право «Архив»
+  if (resource === 'roles') { await ensureArchiveRight(env); await ensureDriverRole(env); } // право «Архив» директору + роль «Водитель»
   if (resource === 'deals') await ensureDealColumns(env);
   if (resource === 'company') await ensureCompanyColumns(env);
   if (['pipelines', 'deal_stages', 'deals'].includes(resource)) await ensurePipelineSchema(env);
@@ -628,8 +628,22 @@ async function ensureDealColumns(env) {
     'ALTER TABLE deals ADD COLUMN co_manager_id TEXT',
     'ALTER TABLE deals ADD COLUMN comments TEXT',
     'ALTER TABLE deals ADD COLUMN address TEXT',
+    'ALTER TABLE deals ADD COLUMN delivery_date TEXT',
+    'ALTER TABLE deals ADD COLUMN delivery_transport TEXT',
+    'ALTER TABLE deals ADD COLUMN delivery_driver TEXT',
   ]) { try { await env.DB.prepare(ddl).run(); } catch (e) { /* уже есть */ } }
   DEALS_SCHEMA_OK = true;
+}
+
+// Роль «Водитель» (этап 4): заходит по отгрузке, отмечает «Доставлено» с фото.
+let DRIVER_ROLE_OK = false;
+async function ensureDriverRole(env) {
+  if (DRIVER_ROLE_OK) return;
+  try {
+    await env.DB.prepare('INSERT OR IGNORE INTO roles (key,label,color,modules,can_edit,see_all_data) VALUES (?,?,?,?,?,?)')
+      .bind('driver', 'Водитель', '#0EA5E9', JSON.stringify(['dashboard', 'shipments']), JSON.stringify({ delivery: true }), 1).run();
+  } catch (e) {}
+  DRIVER_ROLE_OK = true;
 }
 
 // Удаление роли: пользователей этой роли переносим на запасную роль (чтобы не нарушить FK).
@@ -2148,7 +2162,12 @@ async function isShipmentsPushEnabled(env) {
 let SHIP_EXTREF_OK = false;
 async function ensureShipmentExtRef(env) {
   if (SHIP_EXTREF_OK) return;
-  try { await env.DB.prepare('ALTER TABLE shipments ADD COLUMN ext_ref TEXT').run(); } catch (e) {}
+  for (const ddl of [
+    'ALTER TABLE shipments ADD COLUMN ext_ref TEXT',
+    'ALTER TABLE shipments ADD COLUMN delivery_photo TEXT', // фото-подтверждение доставки (URL в R2)
+    'ALTER TABLE shipments ADD COLUMN delivered_at TEXT',
+    'ALTER TABLE shipments ADD COLUMN delivered_by TEXT',   // user_id водителя
+  ]) { try { await env.DB.prepare(ddl).run(); } catch (e) {} }
   SHIP_EXTREF_OK = true;
 }
 
@@ -2243,6 +2262,7 @@ async function writeShipment(env, request, method, id, ctx) {
   const body = await request.json().catch(() => ({}));
   await ensureShipmentExtRef(env);
   const shId = id || body.id || genId();
+  if (String(body.status_id) === 'delivered' && !body.delivered_at) body.delivered_at = new Date().toISOString();
   if (method === 'POST') body.no = await uniqueDocNo(env, 'shipments', body.no, 'ТТН-');
   const cols = (await columns(env, 'shipments')).map((c) => c.name);
   const data = { ...body, id: shId };
@@ -2257,6 +2277,22 @@ async function writeShipment(env, request, method, id, ctx) {
       await env.DB.prepare(`UPDATE shipments SET ${up.map((k) => `${k}=?`).join(',')} WHERE id=?`)
         .bind(...up.map((k) => data[k]), shId).run();
     }
+  }
+
+  // Уведомление бухгалтеру (и директору) при отметке «Доставлено». ref делает его
+  // идемпотентным — повторное сохранение не плодит дубликаты.
+  if (String(body.status_id) === 'delivered') {
+    try {
+      await ensureNotifSchema(env);
+      const sh = await env.DB.prepare('SELECT s.no AS no, c.name AS client_name FROM shipments s LEFT JOIN clients c ON c.id=s.client_id WHERE s.id=?').bind(shId).first();
+      const accs = await env.DB.prepare("SELECT id FROM users WHERE role_key IN ('accountant','director') AND active=1").all();
+      const txt = `Отгрузка ${sh && sh.no ? sh.no : ''} доставлена${sh && sh.client_name ? ' — ' + sh.client_name : ''}`;
+      const stmts = [];
+      for (const u of (accs.results || [])) {
+        stmts.push(env.DB.prepare("INSERT OR IGNORE INTO notifications (text, type, read, created_at, user_id, ref) VALUES (?, 'info', 0, datetime('now'), ?, ?)").bind(txt, u.id, `delivered:${shId}:${u.id}`));
+      }
+      for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+    } catch (e) {}
   }
 
   if (await isShipmentsPushEnabled(env)) {

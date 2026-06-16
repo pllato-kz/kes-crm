@@ -1634,9 +1634,18 @@ async function openShipmentDoc(r) {
     ]),
   ]);
 
+  // Фото-подтверждение доставки (если уже загружено)
+  if (ship && ship.deliveryPhoto) {
+    body.append(el('div', { style:'margin-top:12px' }, [
+      el('div', { style:'font-weight:600;font-size:12px;margin-bottom:6px;color:#6B7280;text-transform:uppercase;letter-spacing:.5px' }, 'Фото доставки'),
+      el('a', { href: ship.deliveryPhoto, target:'_blank' }, el('img', { src: ship.deliveryPhoto, alt:'Фото доставки', style:'max-width:100%;max-height:240px;object-fit:contain;border-radius:8px;border:1px solid #E5E7EB' })),
+      ship.deliveredAt ? el('div', { class:'muted', style:'font-size:12px;margin-top:4px' }, 'Доставлено: ' + fmtDate(ship.deliveredAt)) : null,
+    ]));
+  }
+
   const foot = [];
-  // Изменить статус (только для реальной отгрузки) — сразу синхронизирует и сделку
-  if (ship) {
+  // Смена статуса вручную — директор/кладовщик (водитель отмечает «Доставлено» только с фото)
+  if (ship && currentUser && currentUser.roleKey !== 'driver') {
     const sel = el('select', { class:'status-select', title:'Изменить статус' }, [
       el('option', { value:'planned' }, 'Запланировано'),
       el('option', { value:'shipped' }, 'Отгружено'),
@@ -1656,6 +1665,23 @@ async function openShipmentDoc(r) {
       } else { sel.value = (ship.status === 'delivered' || ship.status === 'planned') ? ship.status : 'shipped'; }
     };
     foot.push(sel);
+  }
+  // «Доставлено» с фото-подтверждением (водитель/директор/кладовщик)
+  if (ship && ship.status !== 'delivered' && can('mark-delivered')) {
+    const photoInput = el('input', { type:'file', accept:'image/*', capture:'environment', style:'display:none' });
+    photoInput.onchange = async () => {
+      const f = photoInput.files && photoInput.files[0]; if (!f) return;
+      toast('Загрузка фото…', 'info');
+      try {
+        const up = await window.__API__.uploadFile(f);
+        const saved = await window.__API__.apiFetch('shipments/' + ship.id, { method:'PUT', body:{ status_id:'delivered', delivery_photo: up.url, delivered_by: currentUser.id } });
+        if (saved) Object.assign(ship, window.__API__.map.shipment(saved));
+        await setShipmentStatus(ship, 'delivered'); // синхронизируем этап сделки
+        toast('Доставлено · фото сохранено, бухгалтер уведомлён', 'success');
+        closeModal(); if (CURRENT_VIEW) navigate(CURRENT_VIEW);
+      } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
+    };
+    foot.push(photoInput, el('button', { class:'btn btn-primary', onclick: () => photoInput.click() }, '✅ Доставлено + фото'));
   }
   if (deal) foot.push(el('button', { class:'btn', onclick: () => { closeModal(); openDealDetail(deal.id); } }, 'Открыть сделку'));
   foot.push(el('button', { class:'btn btn-primary', onclick: () => printShipment(ship || {
@@ -3239,7 +3265,15 @@ async function openDealDetail(id, opts) {
   amountI.oninput = () => { const v = Number(amountI.value) || 0; baseAmount = Math.max(0, v - lineItemsSum()); d.amount = v; totalHost.textContent = fmtMoney(d.amount); dealItemsTotal.textContent = fmtMoney(d.amount); };
   const mgrSel = el('select');
   state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.manager) o.selected = true; mgrSel.append(o); });
-  if (!canEdit) [titleI, addressI, amountI, mgrSel].forEach(i => i.disabled = true);
+
+  // ----- Доставка -----
+  const TRANSPORTS = [['', '—'], ['pickup', 'Самовывоз'], ['tk', 'Транспортная компания'], ['courier', 'Курьер'], ['own', 'Свой водитель']];
+  const delDateI = el('input', { type:'date', value: String(d.deliveryDate || '').slice(0, 10) });
+  const delTransportSel = el('select', {}, TRANSPORTS.map(([v, l]) => el('option', { value:v, selected: (d.deliveryTransport || '') === v ? 'selected' : null }, l)));
+  const drivers = state.users.filter(u => u.roleKey === 'driver' && u.active !== false);
+  const delDriverSel = el('select', {}, [el('option', { value:'' }, '— выберите водителя —')].concat(
+    drivers.map(u => el('option', { value:u.id, selected: d.deliveryDriver === u.id ? 'selected' : null }, u.name))));
+  if (!canEdit) [titleI, addressI, amountI, mgrSel, delDateI, delTransportSel, delDriverSel].forEach(i => i.disabled = true);
 
   // ----- Клиент: редактируемый, с заменой (поиск/выбор) -----
   let currentClient = clx;
@@ -3298,6 +3332,18 @@ async function openDealDetail(id, opts) {
       fieldRow('Сумма, ₸', amountI),
       fieldRow('Отв. менеджер', mgrSel),
     ]),
+    (() => {
+      const delDriverRow = fieldRow('Водитель', delDriverSel);
+      const updVis = () => { delDriverRow.style.display = delTransportSel.value === 'own' ? '' : 'none'; };
+      delTransportSel.onchange = updVis; updVis();
+      return el('div', { class:'deal-section' }, [
+        el('div', { class:'section-title' }, 'Доставка'),
+        fieldRow('Дата доставки', delDateI),
+        fieldRow('Транспорт', delTransportSel),
+        delDriverRow,
+        el('div', { class:'muted', style:'font-size:11px;margin-top:2px' }, 'Адрес доставки берётся из поля «Адрес» выше.'),
+      ]);
+    })(),
     el('div', { class:'deal-actions' }, [printBtn, delBtn]),
   ]);
 
@@ -3571,6 +3617,9 @@ async function openDealDetail(id, opts) {
         d.title = titleI.value.trim() || d.title;
         d.address = addressI.value;
         d.manager = mgrSel.value;
+        d.deliveryDate = delDateI.value || null;
+        d.deliveryTransport = delTransportSel.value || null;
+        d.deliveryDriver = (delTransportSel.value === 'own' ? (delDriverSel.value || null) : null);
         d.comments = commentsTA.value;
         d.amount = baseAmount + lineItemsSum(); // итог = ручная база + сумма позиций
         try {
@@ -6577,6 +6626,7 @@ function can(action, target) {
   if (action === 'edit-users')   return r.canEdit.users === true;
   if (action === 'edit-prices')  return r.canEdit.prices === true;
   if (action === 'edit-invoice') return r.canEdit.invoices === true;
+  if (action === 'mark-delivered') return r.canEdit.delivery === true || r.canEdit.deals === 'all' || r.canEdit.products === 'stock';
   return false;
 }
 // Фильтр данных по принадлежности (для менеджера — только своё)

@@ -65,6 +65,7 @@
     deal: (d) => ({
       id: d.id, no: d.no, title: d.title, client: d.client_id, manager: d.manager_id,
       coManager: d.co_manager_id, comments: d.comments, address: d.address,
+      deliveryDate: d.delivery_date, deliveryTransport: d.delivery_transport, deliveryDriver: d.delivery_driver,
       stage: d.stage_id, amount: d.amount, items: d.items, created: d.created, target: d.target,
       lineItems: (d.lineItems || []).map((it) => ({ product: it.product_id, qty: it.qty, priceUsed: it.price_used })),
     }),
@@ -90,6 +91,7 @@
     shipment: (s) => ({
       id: s.id, no: s.no, deal: s.deal_id, client: s.client_id, date: s.date, items: s.items,
       weight: s.weight, transport: s.transport, driver: s.driver, status: s.status_id, destination: s.destination,
+      deliveryPhoto: s.delivery_photo, deliveredAt: s.delivered_at, deliveredBy: s.delivered_by,
     }),
     receipt: (r) => ({
       id: r.id, no: r.no, supplier: r.supplier_id, supplierName: r.supplier_name, date: r.date, items: r.items,
@@ -113,6 +115,7 @@
     deal: (d) => clean({
       id: d.id, no: d.no, title: d.title, client_id: d.client, manager_id: d.manager,
       co_manager_id: d.coManager, comments: d.comments, address: d.address,
+      delivery_date: d.deliveryDate, delivery_transport: d.deliveryTransport, delivery_driver: d.deliveryDriver,
       stage_id: d.stage, amount: d.amount, created: d.created, target: d.target,
     }),
     // позиции сделки шлём отдельно (только когда редактируем состав)
