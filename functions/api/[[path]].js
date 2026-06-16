@@ -3013,6 +3013,7 @@ async function syncSalePrices(env) {
   }
   const kindOf = (refKey) => {
     const n = (typeName[refKey] || '').toLowerCase();
+    if (/закуп|приобрет|поступл|входящ/.test(n)) return 'cost';
     if (/оптов|опт\b/.test(n)) return 'wholesale';
     if (/рознич|розниц/.test(n)) return 'retail';
     return null;
@@ -3022,27 +3023,29 @@ async function syncSalePrices(env) {
   try { reg = await fetchPriceRegister(env); }
   catch (e) { await logState('ошибка чтения регистра цен: ' + ((e && e.message) || e)); return json({ ok: false }); }
 
-  const latest = {}; // nk -> { wholesale, retail }
+  const latest = {}; // nk -> { cost, wholesale, retail }
   for (const r of (reg.rows || [])) {
     const nk = r['Номенклатура_Key']; if (!nk) continue;
     const kind = kindOf(r['ВидЦены_Key']); if (!kind) continue;
     const price = Number(r['Цена']); if (!Number.isFinite(price) || price <= 0) continue;
     (latest[nk] || (latest[nk] = {}))[kind] = price;
   }
+  const rnd = (x) => Math.round(x * 100) / 100;
 
-  const stmts = []; let updW = 0, updR = 0, miss = 0;
+  const stmts = []; let updW = 0, updR = 0, updC = 0, miss = 0;
   for (const nk in latest) {
     const pid = byRef[nk]; if (!pid) { miss++; continue; }
     const v = latest[nk];
-    if (v.wholesale != null && v.retail != null) { stmts.push(env.DB.prepare('UPDATE products SET price_wholesale=?, price_retail=? WHERE id=?').bind(Math.round(v.wholesale * 100) / 100, Math.round(v.retail * 100) / 100, pid)); updW++; updR++; }
-    else if (v.wholesale != null) { stmts.push(env.DB.prepare('UPDATE products SET price_wholesale=? WHERE id=?').bind(Math.round(v.wholesale * 100) / 100, pid)); updW++; }
-    else if (v.retail != null) { stmts.push(env.DB.prepare('UPDATE products SET price_retail=? WHERE id=?').bind(Math.round(v.retail * 100) / 100, pid)); updR++; }
+    if (v.wholesale != null) { stmts.push(env.DB.prepare('UPDATE products SET price_wholesale=? WHERE id=?').bind(rnd(v.wholesale), pid)); updW++; }
+    if (v.retail != null) { stmts.push(env.DB.prepare('UPDATE products SET price_retail=? WHERE id=?').bind(rnd(v.retail), pid)); updR++; }
+    // закуп из регистра — только где из приходов его ещё нет (приходы остаются основным источником)
+    if (v.cost != null) { stmts.push(env.DB.prepare('UPDATE products SET price_cost=? WHERE id=? AND (price_cost IS NULL OR price_cost=0)').bind(rnd(v.cost), pid)); updC++; }
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
   const foundTypes = [...new Set(Object.values(typeName))].filter(Boolean).slice(0, 10).join(', ');
-  await logState(`${reg.sliceLast ? 'срез' : 'полный'}: строк ${(reg.rows || []).length}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
-  return json({ rows: (reg.rows || []).length, wholesale: updW, retail: updR, missing: miss, types: foundTypes });
+  await logState(`${reg.sliceLast ? 'срез' : 'полный'}: строк ${(reg.rows || []).length}, закуп ${updC}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
+  return json({ rows: (reg.rows || []).length, cost: updC, wholesale: updW, retail: updR, missing: miss, types: foundTypes });
 }
 
 // --------------------------------------------------------------------------
