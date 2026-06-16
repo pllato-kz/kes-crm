@@ -176,6 +176,17 @@ export async function onRequest(context) {
 
     // категории каталога с подсчётом товаров (для плиток)
     if (seg[0] === 'catalog' && seg[1] === 'categories' && request.method === 'GET') return catalogCategories(env);
+    if (seg[0] === 'catalog' && seg[1] === 'price-coverage' && request.method === 'GET') {
+      const r = await env.DB.prepare(
+        `SELECT COUNT(*) AS total,
+                SUM(CASE WHEN COALESCE(price_cost,0)>0 THEN 1 ELSE 0 END) AS cost,
+                SUM(CASE WHEN COALESCE(price_wholesale,0)>0 THEN 1 ELSE 0 END) AS wholesale,
+                SUM(CASE WHEN COALESCE(price_retail,0)>0 THEN 1 ELSE 0 END) AS retail,
+                SUM(CASE WHEN COALESCE(price_cost,0)>0 OR COALESCE(price_wholesale,0)>0 OR COALESCE(price_retail,0)>0 THEN 1 ELSE 0 END) AS any
+           FROM products`
+      ).first();
+      return json(r || { total: 0, cost: 0, wholesale: 0, retail: 0, any: 0 });
+    }
 
     // сводка по складу (для карточек: SKU, единиц, резерв, стоимость)
     if (seg[0] === 'warehouse' && seg[1] === 'summary' && request.method === 'GET') return warehouseSummary(env);

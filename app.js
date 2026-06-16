@@ -4188,12 +4188,26 @@ async function openClientDetail(id) {
 VIEWS.catalog = () => {
   const wrap = el('div');
   const sub = el('div', { class: 'sub' }, 'Загрузка…');
+  const priceCov = el('div', { class:'muted', style:'font-size:12px;margin-top:2px' }, 'Покрытие ценами: …');
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Каталог номенклатуры'), sub,
       el('div', { class:'muted', style:'font-size:12px;margin-top:2px' }, 'Зеркало 1С — только просмотр, синхронизация автоматическая.'),
+      priceCov,
     ]),
   ]));
+  // Покрытие ценами: у скольких товаров есть закуп/опт/розница
+  window.__API__.apiFetch('catalog/price-coverage').then(c => {
+    if (!c) return;
+    priceCov.innerHTML = '';
+    priceCov.append(
+      el('span', {}, `Цены из 1С: `),
+      el('b', {}, `закуп ${c.cost || 0}`), el('span', {}, ' · '),
+      el('b', {}, `опт ${c.wholesale || 0}`), el('span', {}, ' · '),
+      el('b', {}, `розница ${c.retail || 0}`),
+      el('span', {}, ` из ${c.total || 0} (с ценой ${c.any || 0})`),
+    );
+  }).catch(() => {});
 
   const q = { q: '', category: '', brand: '', sort: '', stockMin: '', stockMax: '', costMin: '', costMax: '', page: 1, limit: 50, total: 0 };
   const selected = new Set(); // выбранные товары для массового редактирования
