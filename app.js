@@ -1840,9 +1840,14 @@ function taskDue(t) {
 }
 // Задачи текущего пользователя на сегодня (живая подсказка).
 // Просроченные приходят отдельными адресными уведомлениями (см. scan-overdue).
+// Напоминания по задачам, которые пользователь отметил «прочитано», помним между сессиями
+// (ключ = id+срок, чтобы при смене срока напоминание снова показалось).
+let DISMISSED_REM = new Set();
+try { DISMISSED_REM = new Set(JSON.parse(localStorage.getItem('kes_dismissed_rem') || '[]')); } catch (_) {}
+const remKey = (t) => t.id + ':' + (t.due || '');
 function taskReminders() {
   return visibleTasks()
-    .filter(t => !t.done && taskDue(t).kind === 'today')
+    .filter(t => !t.done && taskDue(t).kind === 'today' && !DISMISSED_REM.has(remKey(t)))
     .sort((a, b) => String(a.due).localeCompare(String(b.due)));
 }
 
@@ -1887,6 +1892,9 @@ function toggleNotifications() {
         NOTIFS_READ = true;
         // помечаем уже виденные прочитанными и в БД, чтобы не возвращались на следующем опросе
         (state.notifications || []).forEach(n => { if (n.id != null) window.__notifSeen && window.__notifSeen.add(n.id); });
+        // и гасим текущие напоминания по задачам (чтобы не всплывали те же снова)
+        taskReminders().forEach(t => DISMISSED_REM.add(remKey(t)));
+        try { localStorage.setItem('kes_dismissed_rem', JSON.stringify([...DISMISSED_REM])); } catch (_) {}
         state.notifications = []; root.innerHTML = ''; updateNotifDot();
         window.__API__.apiFetch('notifications/read', { method: 'POST' }).catch(() => {});
         toast('Все уведомления отмечены прочитанными');
