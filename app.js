@@ -3767,26 +3767,31 @@ function openNewDeal() {
   const mgrSel = el('select');
   state.users.filter(u => u.role.includes('Менеджер')).forEach(u => mgrSel.append(el('option', { value: u.id }, u.name)));
 
-  // ----- Поле «Клиент»: поиск + список (как «Сделка» в форме отгрузки) -----
+  // ----- Поле «Клиент» (необязательно): поиск + пагинация по всей базе -----
   let selectedClientId = null;
-  const clientSearch = el('input', { placeholder:'Поиск клиента по названию/БИН…', style:'width:100%;padding:8px 10px;border:1px solid #E5E7EB;border-radius:6px;font-size:13px;outline:none' });
+  let clientLimit = 50; // пагинация: «Показать ещё» увеличивает
+  const clientSearch = el('input', { placeholder:'Поиск клиента по названию/БИН/телефону…', style:'width:100%;padding:8px 10px;border:1px solid #E5E7EB;border-radius:6px;font-size:13px;outline:none' });
   const clientListEl = el('div', { class:'product-picker' });
-  const clientSelectedLabel = el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, 'Клиент не выбран');
-  const clientRow = el('div', { class:'form-row' }, [el('label', {}, 'Клиент'), el('div', {}, [clientSearch, clientListEl, clientSelectedLabel])]);
+  const clientSelectedLabel = el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, 'Клиент не выбран (необязательно)');
+  const clientRow = el('div', { class:'form-row' }, [el('label', {}, 'Клиент (необязательно)'), el('div', {}, [clientSearch, clientListEl, clientSelectedLabel])]);
 
   function selectClient(c) {
-    selectedClientId = c.id;
-    clientSelectedLabel.textContent = '✓ Выбран: ' + (c.name || '—');
-    clientSelectedLabel.style.cssText = 'font-size:12px;margin-top:6px;color:#10B981;font-weight:600';
+    selectedClientId = c ? c.id : null;
+    if (c) { clientSelectedLabel.textContent = '✓ Выбран: ' + (c.name || '—'); clientSelectedLabel.style.cssText = 'font-size:12px;margin-top:6px;color:#10B981;font-weight:600'; }
+    else { clientSelectedLabel.textContent = 'Без клиента'; clientSelectedLabel.style.cssText = 'font-size:12px;margin-top:6px;color:#6B7280'; }
     fillClients(clientSearch.value);
   }
   function fillClients(q = '') {
     const ql = String(q || '').trim().toLowerCase();
     clientListEl.innerHTML = '';
-    const rows = state.clients.filter(c => !ql
-      || String(c.name || '').toLowerCase().includes(ql)
-      || String(c.bin || '').toLowerCase().includes(ql)).slice(0, 50);
-    if (!rows.length) { clientListEl.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Клиенты не найдены')); return; }
+    // вариант «без клиента» — сверху
+    clientListEl.append(el('div', { class:'pp-item', style: selectedClientId === null ? 'background:var(--brand-soft)' : '', onclick: () => selectClient(null) }, [
+      el('div', {}, el('div', { class:'muted' }, '— Без клиента —')),
+      selectedClientId === null ? el('span', { class:'pp-price', style:'color:#10B981' }, '✓') : null,
+    ]));
+    const all = state.clients.filter(c => !ql
+      || (String(c.name || '') + ' ' + String(c.bin || '') + ' ' + String(c.phone || '')).toLowerCase().includes(ql));
+    const rows = all.slice(0, clientLimit);
     rows.forEach(c => {
       const active = c.id === selectedClientId;
       clientListEl.append(el('div', { class:'pp-item', style: active ? 'background:var(--brand-soft)' : '', onclick: () => selectClient(c) }, [
@@ -3794,8 +3799,12 @@ function openNewDeal() {
         active ? el('span', { class:'pp-price', style:'color:#10B981' }, '✓') : null,
       ]));
     });
+    if (all.length > rows.length) {
+      clientListEl.append(el('div', { class:'pp-item', style:'justify-content:center;color:var(--brand);font-weight:600',
+        onclick: () => { clientLimit += 50; fillClients(clientSearch.value); } }, `↓ Показать ещё (${all.length - rows.length})`));
+    }
   }
-  let ct; clientSearch.oninput = (e) => { const v = e.target.value; clearTimeout(ct); ct = setTimeout(() => fillClients(v), 200); };
+  let ct; clientSearch.oninput = (e) => { const v = e.target.value; clearTimeout(ct); ct = setTimeout(() => { clientLimit = 50; fillClients(v); }, 200); };
   fillClients();
 
   form.append(
@@ -3812,12 +3821,11 @@ function openNewDeal() {
       el('button', { class: 'btn', onclick: closeModal }, 'Отмена'),
       el('button', { class: 'btn btn-primary', onclick: async () => {
         if (!titleI.value.trim()) { titleI.focus(); return; }
-        if (!selectedClientId) { toast('Выберите клиента из списка', 'warn'); clientSearch.focus(); return; }
         const today = new Date().toISOString().slice(0,10);
         const num = state.deals.length + 160;
         ensureActivePipeline();
         const firstStage = pipelineStages(DEALS_PIPELINE)[0];
-        const nd = { no: '2026-0' + num, client: selectedClientId, manager: mgrSel.value, stage: firstStage ? firstStage.id : 'new', amount: Number(amountI.value) || 0, items: 0, created: today, target: today, title: titleI.value.trim() };
+        const nd = { no: '2026-0' + num, client: selectedClientId || null, manager: mgrSel.value, stage: firstStage ? firstStage.id : 'new', amount: Number(amountI.value) || 0, items: 0, created: today, target: today, title: titleI.value.trim() };
         try {
           const saved = await window.__API__.apiFetch('deals', { method: 'POST', body: window.__API__.toApi.deal(nd) });
           state.deals.unshift(window.__API__.map.deal(saved));
