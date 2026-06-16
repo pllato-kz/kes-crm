@@ -2474,7 +2474,7 @@ const SYNC_INTERVALS = {
   stock_1c: 4,        // остатки — на каждом прогоне (~5 мин)
   receipts_1c: 4,     // приходы — на каждом прогоне (~5 мин)
   prices_1c: 8,       // закупочная цена из приходов — ~10 мин (и сразу после прихода)
-  saleprices_1c: 30,  // опт/розница из регистра цен 1С — ~30 мин
+  saleprices_1c: 10,  // закуп(рег)/опт/розница из регистра цен 1С — ~10 мин (+ сразу после полного прохода номенклатуры)
 };
 // Запускает только «просроченные» синхронизации (по last_at в sync_state).
 async function runDueSyncs(env) {
@@ -2731,7 +2731,8 @@ async function syncProductsAll(env) {
       `INSERT INTO sync_state (entity, last_at, info) VALUES ('products_1c', datetime('now'), ?)
        ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
     ).bind(`готово: ${total} позиций`).run();
-    try { await syncPrices(env, 'last'); } catch (e) {} // закуп из приходов для новых товаров
+    try { await syncPrices(env, 'last'); } catch (e) {}      // закуп из приходов для новых товаров
+    try { await syncSalePrices(env); } catch (e) {}          // закуп(рег)/опт/розница из регистра цен
   } else {
     await setSetting(env, 'products_offset', String(off));
     await env.DB.prepare(
