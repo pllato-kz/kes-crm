@@ -3841,10 +3841,16 @@ function openNewDeal() {
 // ============================================================
 VIEWS.clients = () => {
   const wrap = el('div');
+  const pushStatus = el('div', { class:'muted', style:'font-size:12px;margin-top:2px' }, '');
+  window.__API__.apiFetch('sync/status').then(rows => {
+    const p = (rows || []).find(x => x.entity === 'clients_push');
+    if (p) pushStatus.textContent = `Контрагент → 1С: ${String(p.last_at).slice(0, 16)} · ${p.info}`;
+  }).catch(() => {});
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Клиенты'),
       el('div', { class: 'sub' }, `${state.clients.length} клиентов · LTV ${fmtMoneyK(state.clients.reduce((s,c)=>s+c.ltv,0))}`),
+      pushStatus,
     ]),
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn btn-primary', onclick: openNewClient }, '+ Клиент'),
