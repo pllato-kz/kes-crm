@@ -445,6 +445,7 @@ async function dataRoute(ctx, seg, url, auth) {
   if (resource === 'invoices' && method === 'DELETE' && id) return deleteInvoice(env, id, auth);
   if (resource === 'invoices' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeInvoice(env, request, method, id, ctx);
   if (resource === 'shipments' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeShipment(env, request, method, id, ctx);
+  if (resource === 'suppliers' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeSupplier(env, request, method, id, ctx);
   if (resource === 'leads' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeLead(env, request, method, id);
   if (resource === 'notifications' && id === 'scan-overdue' && method === 'POST') return scanOverdueTasks(env);
   if (resource === 'notifications' && method === 'GET' && !id) return listNotifications(env, auth);
@@ -1900,6 +1901,42 @@ async function pushClientToOnec(env, clientId) {
   }
 }
 
+// CRM → 1С: создание/обновление поставщика (тоже контрагент в Catalog_Контрагенты).
+async function pushSupplierToOnec(env, supplierId) {
+  if (!env.ODATA_URL) return; // интеграция не настроена — пропускаем
+  const s = await env.DB.prepare('SELECT id, name, bin, ext_ref FROM suppliers WHERE id=?').bind(supplierId).first();
+  if (!s || !s.name) return;
+  const payload = { Description: String(s.name).slice(0, 150) };
+  if (s.bin) payload['ИдентификационныйКодЛичности'] = String(s.bin);
+  if (s.ext_ref) {
+    await odataWrite(env, 'PATCH', `Catalog_Контрагенты(guid'${s.ext_ref}')`, payload);
+  } else {
+    const created = await odataWrite(env, 'POST', 'Catalog_Контрагенты', payload);
+    const ref = created && created.Ref_Key;
+    if (ref) await env.DB.prepare('UPDATE suppliers SET ext_ref=? WHERE id=?').bind(ref, supplierId).run();
+  }
+}
+
+// Сохранение поставщика в CRM + двусторонняя отправка в 1С (с очередью/ретраями).
+async function writeSupplier(env, request, method, id, ctx) {
+  await ensureSupplierExtRef(env);
+  const body = await request.json().catch(() => ({}));
+  const supId = id || body.id || genId();
+  const cols = (await columns(env, 'suppliers')).map((c) => c.name);
+  const data = { ...body, id: supId };
+  const keys = Object.keys(data).filter((k) => cols.includes(k));
+  if (method === 'POST') {
+    await env.DB.prepare(`INSERT INTO suppliers (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`).bind(...keys.map((k) => data[k])).run();
+  } else {
+    const up = keys.filter((k) => k !== 'id');
+    if (up.length) await env.DB.prepare(`UPDATE suppliers SET ${up.map((k) => `${k}=?`).join(',')} WHERE id=?`).bind(...up.map((k) => data[k]), supId).run();
+  }
+  const job = tryOnecNow(env, 'supplier', supId, ctx);
+  if (job && !(ctx && typeof ctx.waitUntil === 'function')) await job;
+  const row = await env.DB.prepare('SELECT * FROM suppliers WHERE id=?').bind(supId).first();
+  return json(row, method === 'POST' ? 201 : 200);
+}
+
 async function setClientTags(env, clientId, names) {
   const stmts = [env.DB.prepare(`DELETE FROM client_tags WHERE client_id=?`).bind(clientId)];
   for (const raw of names) {
@@ -2382,7 +2419,7 @@ async function writeShipment(env, request, method, id, ctx) {
 // --------------------------------------------------------------------------
 const ONEC_MAX_ATTEMPTS = 12;                        // после стольких неудач — статус 'error' (стоп)
 const ONEC_BACKOFF_MIN = [1, 2, 5, 10, 20, 30, 60];  // паузы между попытками, мин (далее 60)
-const ONEC_KIND_RU = { client: 'контрагент', invoice: 'счёт', shipment: 'отгрузка' };
+const ONEC_KIND_RU = { client: 'контрагент', supplier: 'поставщик', invoice: 'счёт', shipment: 'отгрузка' };
 
 let ONEC_QUEUE_OK = false;
 async function ensureOnecQueue(env) {
@@ -2430,6 +2467,7 @@ async function enqueueOnec(env, kind, refId) {
 // Выполнить саму отправку по типу. Бросает исключение при ошибке.
 async function runOnecPush(env, kind, refId) {
   if (kind === 'client') { await pushClientToOnec(env, refId); return 'контрагент отправлен'; }
+  if (kind === 'supplier') { await pushSupplierToOnec(env, refId); return 'поставщик отправлен'; }
   if (kind === 'invoice') { const ref = await pushInvoiceToOnec(env, refId); return `→ 1С${ref ? ` (${ref})` : ''}`; }
   if (kind === 'shipment') {
     if (!(await isShipmentsPushEnabled(env))) return 'этап 3 выключен — пропуск';
