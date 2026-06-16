@@ -46,6 +46,13 @@ const ROLES = {
     canEdit: { deals: false, clients: 'limited', products: false, users: false, prices: false, invoices: true },
     seeAllData: true,
   },
+  driver: {
+    label: 'Водитель',
+    color: '#0EA5E9',
+    modules: ['dashboard','shipments'],
+    canEdit: { deals: false, clients: false, products: false, users: false, prices: false, invoices: false, delivery: true },
+    seeAllData: true,
+  },
 };
 
 const CLIENT_TYPES = {

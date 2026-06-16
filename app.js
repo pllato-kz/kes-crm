@@ -1565,7 +1565,7 @@ async function setShipmentStatus(s, status) {
       const stages = pipelineStages(stagePipeline(d.stage)) || [];
       let target = null;
       if (status === 'delivered') target = stages.find(st => /достав|закры|выполн|заверш/i.test(st.label || ''));
-      else if (status === 'shipped') target = stages.find(st => /отгруж/i.test(st.label || ''));
+      else if (status === 'shipped' || status === 'transit') target = stages.find(st => /отгруж/i.test(st.label || ''));
       if (target && target.id !== d.stage) {
         d.stage = target.id;
         await window.__API__.apiFetch('deals/' + d.id, { method: 'PUT', body: { stage_id: target.id } });
@@ -1612,8 +1612,8 @@ async function openShipmentDoc(r) {
   const created = (deal && deal.created) || (ship && ship.date) || '';
   const amount = deal ? deal.amount : null;
 
-  const STMAP = { delivered:['Доставлено','pill-success'], planned:['Запланировано','pill-info'], shipped:['В пути','pill-warn'] };
-  const stKey = ship ? ((ship.status === 'delivered' || ship.status === 'planned') ? ship.status : 'shipped') : null;
+  const STMAP = { delivered:['Доставлено','pill-success'], planned:['Запланировано','pill-info'], transit:['В пути','pill-warn'], shipped:['Отгружено','pill-warn'] };
+  const stKey = ship ? (STMAP[ship.status] ? ship.status : 'shipped') : null;
   const statusPill = ship
     ? el('span', { class:'pill ' + STMAP[stKey][1] }, STMAP[stKey][0])
     : el('span', { class:'pill pill-warn' }, 'Отгружена (по сделке)');
@@ -1634,12 +1634,22 @@ async function openShipmentDoc(r) {
     ]),
   ]);
 
+  // Фото-подтверждение доставки (если уже загружено)
+  if (ship && ship.deliveryPhoto) {
+    body.append(el('div', { style:'margin-top:12px' }, [
+      el('div', { style:'font-weight:600;font-size:12px;margin-bottom:6px;color:#6B7280;text-transform:uppercase;letter-spacing:.5px' }, 'Фото доставки'),
+      el('a', { href: ship.deliveryPhoto, target:'_blank' }, el('img', { src: ship.deliveryPhoto, alt:'Фото доставки', style:'max-width:100%;max-height:240px;object-fit:contain;border-radius:8px;border:1px solid #E5E7EB' })),
+      ship.deliveredAt ? el('div', { class:'muted', style:'font-size:12px;margin-top:4px' }, 'Доставлено: ' + fmtDate(ship.deliveredAt)) : null,
+    ]));
+  }
+
   const foot = [];
-  // Изменить статус (только для реальной отгрузки) — сразу синхронизирует и сделку
-  if (ship) {
+  // Смена статуса вручную — директор/кладовщик (водитель отмечает «Доставлено» только с фото)
+  if (ship && currentUser && currentUser.roleKey !== 'driver') {
     const sel = el('select', { class:'status-select', title:'Изменить статус' }, [
       el('option', { value:'planned' }, 'Запланировано'),
-      el('option', { value:'shipped' }, 'Отгружено / в пути'),
+      el('option', { value:'shipped' }, 'Отгружено'),
+      el('option', { value:'transit' }, 'В пути'),
       el('option', { value:'delivered' }, 'Доставлено'),
     ]);
     sel.value = stKey;
@@ -1648,13 +1658,30 @@ async function openShipmentDoc(r) {
       const ok = await setShipmentStatus(ship, sel.value);
       sel.disabled = false;
       if (ok) {
-        const k = (ship.status === 'delivered' || ship.status === 'planned') ? ship.status : 'shipped';
+        const k = STMAP[ship.status] ? ship.status : 'shipped';
         statusPill.textContent = STMAP[k][0]; statusPill.className = 'pill ' + STMAP[k][1];
         toast('Статус обновлён · сделка синхронизирована', 'success');
         if (CURRENT_VIEW) navigate(CURRENT_VIEW); // обновляем список под модалкой, без перезагрузки
       } else { sel.value = (ship.status === 'delivered' || ship.status === 'planned') ? ship.status : 'shipped'; }
     };
     foot.push(sel);
+  }
+  // «Доставлено» с фото-подтверждением (водитель/директор/кладовщик)
+  if (ship && ship.status !== 'delivered' && can('mark-delivered')) {
+    const photoInput = el('input', { type:'file', accept:'image/*', capture:'environment', style:'display:none' });
+    photoInput.onchange = async () => {
+      const f = photoInput.files && photoInput.files[0]; if (!f) return;
+      toast('Загрузка фото…', 'info');
+      try {
+        const up = await window.__API__.uploadFile(f);
+        const saved = await window.__API__.apiFetch('shipments/' + ship.id, { method:'PUT', body:{ status_id:'delivered', delivery_photo: up.url, delivered_by: currentUser.id } });
+        if (saved) Object.assign(ship, window.__API__.map.shipment(saved));
+        await setShipmentStatus(ship, 'delivered'); // синхронизируем этап сделки
+        toast('Доставлено · фото сохранено, бухгалтер уведомлён', 'success');
+        closeModal(); if (CURRENT_VIEW) navigate(CURRENT_VIEW);
+      } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
+    };
+    foot.push(photoInput, el('button', { class:'btn btn-primary', onclick: () => photoInput.click() }, '✅ Доставлено + фото'));
   }
   if (deal) foot.push(el('button', { class:'btn', onclick: () => { closeModal(); openDealDetail(deal.id); } }, 'Открыть сделку'));
   foot.push(el('button', { class:'btn btn-primary', onclick: () => printShipment(ship || {
@@ -3238,7 +3265,15 @@ async function openDealDetail(id, opts) {
   amountI.oninput = () => { const v = Number(amountI.value) || 0; baseAmount = Math.max(0, v - lineItemsSum()); d.amount = v; totalHost.textContent = fmtMoney(d.amount); dealItemsTotal.textContent = fmtMoney(d.amount); };
   const mgrSel = el('select');
   state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.manager) o.selected = true; mgrSel.append(o); });
-  if (!canEdit) [titleI, addressI, amountI, mgrSel].forEach(i => i.disabled = true);
+
+  // ----- Доставка -----
+  const TRANSPORTS = [['', '—'], ['pickup', 'Самовывоз'], ['tk', 'Транспортная компания'], ['courier', 'Курьер'], ['own', 'Свой водитель']];
+  const delDateI = el('input', { type:'date', value: String(d.deliveryDate || '').slice(0, 10) });
+  const delTransportSel = el('select', {}, TRANSPORTS.map(([v, l]) => el('option', { value:v, selected: (d.deliveryTransport || '') === v ? 'selected' : null }, l)));
+  const drivers = state.users.filter(u => u.roleKey === 'driver' && u.active !== false);
+  const delDriverSel = el('select', {}, [el('option', { value:'' }, '— выберите водителя —')].concat(
+    drivers.map(u => el('option', { value:u.id, selected: d.deliveryDriver === u.id ? 'selected' : null }, u.name))));
+  if (!canEdit) [titleI, addressI, amountI, mgrSel, delDateI, delTransportSel, delDriverSel].forEach(i => i.disabled = true);
 
   // ----- Клиент: редактируемый, с заменой (поиск/выбор) -----
   let currentClient = clx;
@@ -3297,6 +3332,18 @@ async function openDealDetail(id, opts) {
       fieldRow('Сумма, ₸', amountI),
       fieldRow('Отв. менеджер', mgrSel),
     ]),
+    (() => {
+      const delDriverRow = fieldRow('Водитель', delDriverSel);
+      const updVis = () => { delDriverRow.style.display = delTransportSel.value === 'own' ? '' : 'none'; };
+      delTransportSel.onchange = updVis; updVis();
+      return el('div', { class:'deal-section' }, [
+        el('div', { class:'section-title' }, 'Доставка'),
+        fieldRow('Дата доставки', delDateI),
+        fieldRow('Транспорт', delTransportSel),
+        delDriverRow,
+        el('div', { class:'muted', style:'font-size:11px;margin-top:2px' }, 'Адрес доставки берётся из поля «Адрес» выше.'),
+      ]);
+    })(),
     el('div', { class:'deal-actions' }, [printBtn, delBtn]),
   ]);
 
@@ -3570,6 +3617,9 @@ async function openDealDetail(id, opts) {
         d.title = titleI.value.trim() || d.title;
         d.address = addressI.value;
         d.manager = mgrSel.value;
+        d.deliveryDate = delDateI.value || null;
+        d.deliveryTransport = delTransportSel.value || null;
+        d.deliveryDriver = (delTransportSel.value === 'own' ? (delDriverSel.value || null) : null);
         d.comments = commentsTA.value;
         d.amount = baseAmount + lineItemsSum(); // итог = ручная база + сумма позиций
         try {
@@ -4959,118 +5009,94 @@ function printInventoryAct(doc, items, kind) {
 // ============================================================
 // VIEW: SHIPMENTS
 // ============================================================
+// Канбан-колонки отгрузок (по статусу) — отгрузка появляется при полной оплате сделки
+const SHIP_COLS = [
+  { key:'planned',   label:'Запланировано', color:'#F59E0B' },
+  { key:'shipped',   label:'Отгружено',     color:'#06B6D4' },
+  { key:'transit',   label:'В пути',        color:'#3B82F6' },
+  { key:'delivered', label:'Доставлено',    color:'#22C55E' },
+];
+const normShipStatus = (s) => ['delivered','planned','transit','shipped'].includes(s) ? s : 'shipped';
+
 VIEWS.shipments = () => {
   const wrap = el('div');
-
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Отгрузки'),
-      el('div', { class: 'sub' }, `${state.shipments.length} отгрузок`),
+      el('div', { class: 'sub' }, `${state.shipments.length} отгрузок · перетаскивайте карточки между статусами`),
     ]),
-    el('div', { class: 'actions' }, [el('button', { class:'btn btn-primary', onclick: openNewShipment }, '+ Отгрузка')]),
   ]));
 
-  // Только реальные отгрузки (ТТН). Строки «по сделке» больше не показываем.
-  const normStatus = (s) => (s === 'delivered' || s === 'planned') ? s : 'shipped';
-  const rowsData = state.shipments.map(s => ({
-    kind:'ship', id:s.id, deal:s.deal, no:s.no, date:s.date, client:s.client,
-    dest:s.destination || '', transport:s.transport || '', driver:s.driver || '',
-    positions:Number(s.items) || 0, weight:s.weight, status:normStatus(s.status),
-  }));
+  // двигать статусы могут директор/кладовщик; водитель отмечает «Доставлено» в карточке (с фото)
+  const canMove = currentUser && (currentUser.roleKey === 'director' || currentUser.roleKey === 'warehouse');
+  let fq = '';
+  const searchI = el('input', { placeholder:'Поиск по № ТТН, клиенту, «куда», транспорту…',
+    style:'flex:1;min-width:240px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none',
+    oninput: e => { fq = e.target.value.toLowerCase().trim(); render(); } });
+  wrap.append(el('div', { class:'table-toolbar', style:'margin:6px 0 14px' }, [searchI]));
+  const boardHost = el('div');
+  wrap.append(boardHost);
 
-  // --- Поиск и фильтры ---
-  const fs = { q:'', status:'', dateFrom:'', dateTo:'', posFrom:'', posTo:'' };
-  const inputCss = 'min-width:0;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;height:34px;box-sizing:border-box';
-  const searchI = el('input', { placeholder:'Поиск по № ТТН/сделке, клиенту, «куда», транспорту…', style: inputCss + ';flex:1;min-width:240px', oninput: e => { fs.q = e.target.value.toLowerCase().trim(); refresh(); } });
-  const statusS = el('select', { onchange: e => { fs.status = e.target.value; refresh(); } }, [
-    el('option', { value:'' }, 'Все статусы'),
-    el('option', { value:'planned' }, 'Запланировано'),
-    el('option', { value:'shipped' }, 'В пути'),
-    el('option', { value:'delivered' }, 'Доставлено'),
-  ]);
-  const dateFromI = el('input', { type:'date', onchange: e => { fs.dateFrom = e.target.value; refresh(); } });
-  const dateToI = el('input', { type:'date', onchange: e => { fs.dateTo = e.target.value; refresh(); } });
-  const posFromI = el('input', { type:'number', min:'0', placeholder:'от', style: inputCss, oninput: e => { fs.posFrom = e.target.value; refresh(); } });
-  const posToI = el('input', { type:'number', min:'0', placeholder:'до', style: inputCss, oninput: e => { fs.posTo = e.target.value; refresh(); } });
-  const drawer = buildFilterDrawer({
-    groups: [
-      filterGroup('Статус', statusS),
-      filterGroup('Период (дата)', el('div', { class:'row2' }, [dateFromI, dateToI])),
-      filterGroup('Количество позиций', el('div', { class:'row2' }, [posFromI, posToI])),
-    ],
-    onReset: () => { Object.assign(fs, { status:'', dateFrom:'', dateTo:'', posFrom:'', posTo:'' }); statusS.value=''; dateFromI.value=''; dateToI.value=''; posFromI.value=''; posToI.value=''; refresh(); },
-    countActive: () => ['status','dateFrom','dateTo','posFrom','posTo'].filter(k => fs[k]).length,
-  });
-
-  function matches(r) {
-    if (fs.q) {
+  function rows() {
+    return state.shipments.map(s => ({
+      kind:'ship', id:s.id, deal:s.deal, no:s.no, date:s.date, client:s.client,
+      dest:s.destination || '', transport:s.transport || '', driver:s.driver || '',
+      positions:Number(s.items) || 0, weight:s.weight, status:normShipStatus(s.status),
+    })).filter(r => {
+      if (!fq) return true;
       const cl = clientById(r.client);
-      const hay = (String(r.no) + ' ' + (cl ? cl.name : '') + ' ' + r.dest + ' ' + r.transport + ' ' + r.driver).toLowerCase();
-      if (!hay.includes(fs.q)) return false;
-    }
-    if (fs.status && r.status !== fs.status) return false;
-    if (fs.dateFrom || fs.dateTo) {
-      const d = String(r.date || '').slice(0, 10);
-      if (!d) return false;
-      if (fs.dateFrom && d < fs.dateFrom) return false;
-      if (fs.dateTo && d > fs.dateTo) return false;
-    }
-    if (fs.posFrom !== '' && r.positions < Number(fs.posFrom)) return false;
-    if (fs.posTo !== '' && r.positions > Number(fs.posTo)) return false;
-    return true;
-  }
-
-  const statusPill = (st) => st === 'delivered'
-    ? el('span', { class:'pill pill-success' }, '✓ Доставлено')
-    : st === 'planned'
-      ? el('span', { class:'pill pill-info' }, '⏱ Запланировано')
-      : st === 'deal'
-        ? el('span', { class:'pill pill-warn' }, '🚚 Отгружена')
-        : el('span', { class:'pill pill-warn' }, '🚚 В пути');
-
-  function buildTbody() {
-    const list = rowsData.filter(matches);
-    const rows = list.map(r => {
-      const cl = clientById(r.client);
-      const onclick = () => openShipmentDoc(r);
-      return el('tr', { style:'cursor:pointer', onclick }, [
-        el('td', { class:'strong' }, r.no),
-        el('td', {}, r.date ? fmtDate(r.date) : '—'),
-        el('td', {}, cl.name),
-        el('td', { class:'muted' }, r.dest || '—'),
-        el('td', {}, r.kind === 'deal'
-          ? el('span', { class:'muted', style:'font-size:11.5px' }, 'по сделке')
-          : [r.transport, el('div', { class:'muted', style:'font-size:11.5px' }, r.driver)]),
-        el('td', { class:'num' }, r.positions),
-        el('td', {}, statusPill(r.status)),
-      ]);
+      return (String(r.no) + ' ' + (cl ? cl.name : '') + ' ' + r.dest + ' ' + r.transport + ' ' + r.driver).toLowerCase().includes(fq);
     });
-    return el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 7, class:'muted', style:'text-align:center;padding:20px' }, 'Отгрузок нет'))]);
   }
 
-  const t = el('div', { class:'mt-16 table-wrap' });
-  // Поиск всегда виден, остальные фильтры — за кнопкой «Фильтры»
-  t.append(el('div', { class:'table-toolbar' }, [ searchI, el('div', { style:'margin-left:auto' }, drawer.btn) ]));
-  const tab = el('table', { class:'data' });
-  tab.append(el('thead', {}, el('tr', {}, [
-    el('th', {}, '№ ТТН / Сделка'),
-    el('th', {}, 'Дата'),
-    el('th', {}, 'Клиент'),
-    el('th', {}, 'Куда'),
-    el('th', {}, 'Транспорт / водитель'),
-    el('th', { class:'num' }, 'Позиций'),
-    el('th', {}, 'Статус'),
-  ])));
-  tab.append(buildTbody());
-  t.append(tab);
-  wrap.append(t);
-  wrap.append(drawer.backdrop, drawer.drawer);
-
-  function refresh() {
-    const tb = tab.querySelector('tbody');
-    if (tb) tb.replaceWith(buildTbody());
-    drawer.refreshBadge();
+  let dragged = null;
+  function render() {
+    const list = rows();
+    const board = el('div', { class:'kanban' });
+    SHIP_COLS.forEach(col => {
+      const cards = list.filter(r => r.status === col.key);
+      const body = el('div', { class:'k-col-body' });
+      cards.forEach(r => {
+        const cl = clientById(r.client);
+        const card = el('div', { class:'k-card', draggable: canMove ? 'true' : null, onclick: () => openShipmentDoc(r) }, [
+          el('div', { class:'strong' }, r.no),
+          el('div', { class:'muted', style:'font-size:12px' }, cl.name),
+          r.dest ? el('div', { class:'muted', style:'font-size:11.5px;margin-top:2px' }, '📍 ' + r.dest) : null,
+          (r.transport || r.driver) ? el('div', { class:'muted', style:'font-size:11.5px' }, (r.transport || '') + (r.driver ? ' · ' + r.driver : '')) : null,
+          el('div', { class:'muted', style:'font-size:11.5px;margin-top:2px' }, r.positions + ' поз.' + (r.date ? ' · ' + fmtDate(r.date) : '')),
+        ]);
+        if (canMove) {
+          card.addEventListener('dragstart', e => { dragged = r; card.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+          card.addEventListener('dragend', () => { card.classList.remove('dragging'); dragged = null; });
+        }
+        body.append(card);
+      });
+      const colEl = el('div', { class:'k-col', 'data-status':col.key }, [
+        el('div', { class:'k-col-head' }, el('div', { class:'k-head-top' }, [
+          el('span', { class:'stage-dot', style:`background:${col.color}` }),
+          el('span', { class:'stage-label' }, col.label),
+          el('span', { class:'stage-count' }, cards.length),
+        ])),
+        body,
+      ]);
+      if (canMove) {
+        colEl.addEventListener('dragover', e => { if (!dragged) return; e.preventDefault(); colEl.classList.add('drag-over'); });
+        colEl.addEventListener('dragleave', () => colEl.classList.remove('drag-over'));
+        colEl.addEventListener('drop', async e => {
+          colEl.classList.remove('drag-over'); if (!dragged) return; e.preventDefault();
+          const ship = byId(state.shipments, dragged.id);
+          if (ship && dragged.status !== col.key) {
+            const ok = await setShipmentStatus(ship, col.key);
+            if (ok) { toast('Статус обновлён', 'success'); render(); } else toast('Не удалось обновить статус', 'error');
+          }
+        });
+      }
+      board.append(colEl);
+    });
+    boardHost.innerHTML = '';
+    boardHost.append(list.length ? board : el('div', { class:'muted', style:'padding:24px;text-align:center' }, 'Отгрузок нет'));
   }
+  render();
   return wrap;
 };
 
@@ -6600,6 +6626,7 @@ function can(action, target) {
   if (action === 'edit-users')   return r.canEdit.users === true;
   if (action === 'edit-prices')  return r.canEdit.prices === true;
   if (action === 'edit-invoice') return r.canEdit.invoices === true;
+  if (action === 'mark-delivered') return r.canEdit.delivery === true || r.canEdit.deals === 'all' || r.canEdit.products === 'stock';
   return false;
 }
 // Фильтр данных по принадлежности (для менеджера — только своё)
