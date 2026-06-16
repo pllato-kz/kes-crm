@@ -771,6 +771,14 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .line-items-table input[type="number"]::-webkit-outer-spin-button,
 .line-items-table input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .line-items-table .x-btn { border: 0; background: transparent; color: #EF4444; font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.price-chip {
+  display: inline-block; font-size: 10.5px; line-height: 1; padding: 3px 5px; border-radius: 5px;
+  background: #EEF4F8; color: #2A5566; border: 1px solid #DCE7EE; cursor: pointer; white-space: nowrap;
+  font-variant-numeric: tabular-nums; transition: background .12s, border-color .12s;
+}
+.price-chip:hover { background: var(--brand); color: #fff; border-color: var(--brand); }
+.price-chip.off { background: #F3F4F6; color: #9CA3AF; border-color: #ECEEF1; cursor: default; }
+.price-chip.off:hover { background: #F3F4F6; color: #9CA3AF; border-color: #ECEEF1; }
 
 .deal-right { display: flex; flex-direction: column; min-height: 0; }
 .section-title { font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: #9CA3AF; margin: 0 0 12px; }

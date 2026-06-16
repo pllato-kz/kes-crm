@@ -3046,8 +3046,8 @@ async function openDealDetail(id, opts) {
     const t = el('table', { class:'data line-items-table' });
     t.append(el('thead', {}, el('tr', {}, [
       el('th', {}, 'Товар'),
-      el('th', { class:'num', style:'width:60px' }, 'Кол-во'),
-      el('th', { class:'num', style:'width:92px' }, 'Цена'),
+      el('th', { class:'num', style:'width:58px' }, 'Кол-во'),
+      el('th', { class:'num', style:'width:160px' }, 'Цена / наценка'),
       el('th', { class:'num', style:'width:96px' }, 'Сумма'),
       el('th', { style:'width:26px' }, ''),
     ])));
@@ -3058,17 +3058,47 @@ async function openDealDetail(id, opts) {
       d.lineItems.forEach((it, idx) => {
         const p = byId(state.products, it.product);
         if (!p) return;
-        if (it.priceUsed == null) it.priceUsed = p.priceWholesale || 0;
+        const cost = Number(p.priceCost) || 0, opt = Number(p.priceWholesale) || 0, rozn = Number(p.priceRetail) || 0;
+        if (it.priceUsed == null) it.priceUsed = opt || rozn || 0;
         const sumCell = el('td', { class:'num strong' }, fmtMoney(it.qty * it.priceUsed));
         const recalc = () => { sumCell.textContent = fmtMoney(it.qty * it.priceUsed); recomputeAmount(); };
+
+        // Блок цены: ручная цена + наценка % от закупа + быстрые базы (закуп/опт/розница).
+        // Дельта «% от закупа» подсвечивается зелёным/красным; ниже закупа — красная рамка.
+        let priceCell;
+        if (canEdit) {
+          const priceInput = el('input', { class:'qty', type:'number', min:'0', value: Math.round(it.priceUsed || 0), title:'Цена за единицу, ₸' });
+          const pctInput = el('input', { class:'qty', type:'number', step:'1', title:'Наценка % от закупа', style:'width:52px' });
+          const colorPct = (m) => { pctInput.style.color = m < 0 ? '#EF4444' : (m > 0 ? '#10B981' : '#6B7280'); pctInput.style.fontWeight = '600'; };
+          const markBelow = () => { priceInput.style.borderColor = (cost > 0 && (Number(it.priceUsed) || 0) < cost) ? '#EF4444' : ''; };
+          const setPct = () => { if (cost > 0) { const m = Math.round(((Number(it.priceUsed) || 0) - cost) / cost * 100); pctInput.value = m; colorPct(m); } };
+          priceInput.oninput = (e) => { it.priceUsed = Math.max(0, +e.target.value || 0); setPct(); markBelow(); recalc(); };
+          pctInput.oninput = (e) => { const m = +e.target.value || 0; it.priceUsed = Math.max(0, Math.round(cost * (1 + m / 100))); priceInput.value = Math.round(it.priceUsed); colorPct(m); markBelow(); recalc(); };
+          const chip = (label, val) => (val > 0)
+            ? el('span', { class:'price-chip', title:'Применить ' + label + ': ' + fmtMoney(val),
+                onclick: () => { it.priceUsed = Math.round(val); priceInput.value = Math.round(val); setPct(); markBelow(); recalc(); } }, label + ' ' + fmtMoney(val))
+            : el('span', { class:'price-chip off' }, label + ' —');
+          setPct(); markBelow();
+          priceCell = el('td', { class:'num' }, el('div', {}, [
+            priceInput,
+            el('div', { style:'display:flex;align-items:center;gap:3px;justify-content:flex-end;margin-top:3px;font-size:11px' },
+              cost > 0 ? [pctInput, el('span', { class:'muted' }, '% от закупа')] : [el('span', { class:'muted' }, 'закуп —')]),
+            el('div', { style:'display:flex;flex-wrap:wrap;gap:3px;justify-content:flex-end;margin-top:4px' }, [chip('Закуп', cost), chip('Опт', opt), chip('Розн', rozn)]),
+          ]));
+        } else {
+          const m = cost > 0 ? Math.round(((Number(it.priceUsed) || 0) - cost) / cost * 100) : null;
+          priceCell = el('td', { class:'num' }, [
+            el('div', {}, fmtMoney(it.priceUsed)),
+            m != null ? el('div', { style:'font-size:11px;font-weight:600;color:' + (m < 0 ? '#EF4444' : '#10B981') }, (m >= 0 ? '+' : '') + m + '% от закупа') : null,
+          ]);
+        }
+
         tb.append(el('tr', {}, [
           el('td', {}, [el('div', { style:'font-weight:500' }, p.name), el('div', { class:'muted', style:'font-size:11px' }, p.sku + (p.brand ? ' · ' + p.brand : ''))]),
           el('td', { class:'num' }, canEdit
             ? el('input', { class:'qty', type:'number', min:'1', value: it.qty, oninput: (e) => { it.qty = Math.max(1, +e.target.value || 1); recalc(); } })
             : String(it.qty)),
-          el('td', { class:'num' }, canEdit
-            ? el('input', { class:'qty', type:'number', min:'0', value: Math.round(it.priceUsed || 0), title:'Цена за единицу', oninput: (e) => { it.priceUsed = Math.max(0, +e.target.value || 0); recalc(); } })
-            : el('span', { class:'muted' }, fmtMoney(it.priceUsed))),
+          priceCell,
           sumCell,
           el('td', {}, canEdit ? el('button', { class:'x-btn', title:'Удалить', onclick: () => { d.lineItems.splice(idx, 1); recomputeAmount(); renderItems(); } }, '×') : null),
         ]));
@@ -3109,7 +3139,7 @@ async function openDealDetail(id, opts) {
           if (out) toast('«' + p.name + '» нет на складе (остаток 0) — добавлено под заказ', 'warn');
           const existing = d.lineItems.find(it => it.product === p.id);
           if (existing) { existing.qty += 1; toast('Количество увеличено', 'info'); }
-          else { d.lineItems.push({ product: p.id, qty: 1, priceUsed: p.priceWholesale }); if (!out) toast('Товар добавлен', 'success'); }
+          else { d.lineItems.push({ product: p.id, qty: 1, priceUsed: (Number(p.priceWholesale) || 0) || (Number(p.priceRetail) || 0) }); if (!out) toast('Товар добавлен', 'success'); }
           recomputeAmount(); renderItems();
         } }, [
           el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku + (p.brand ? ' · ' + p.brand : ''))]),
@@ -3461,6 +3491,14 @@ async function openDealDetail(id, opts) {
     foot: [
       el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
       canEdit ? el('button', { class:'btn btn-primary', onclick: async () => {
+        // предупреждаем, если есть позиции с ценой ниже закупочной
+        const below = d.lineItems.filter(it => { const p = byId(state.products, it.product); const c = p ? Number(p.priceCost) || 0 : 0; return c > 0 && (Number(it.priceUsed) || 0) < c; });
+        if (below.length) {
+          const names = below.slice(0, 5).map(it => { const p = byId(state.products, it.product); return '• ' + (p ? p.name : it.product); }).join('\n');
+          const ok = await confirmModal({ title:'Цена ниже закупа', danger:true, confirmText:'Всё равно сохранить',
+            message: below.length + ' поз. с ценой ниже закупочной:\n' + names + (below.length > 5 ? '\n…' : '') + '\n\nСохранить сделку?' });
+          if (!ok) return;
+        }
         d.stage = chosenStage;
         d.title = titleI.value.trim() || d.title;
         d.address = addressI.value;
