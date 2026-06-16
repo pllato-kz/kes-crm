@@ -228,6 +228,7 @@ export async function onRequest(context) {
     if (seg[0] === 'greenapi') {
       if (seg[1] === 'status' && request.method === 'GET') return greenapiStatus(env);
       if (seg[1] === 'send' && request.method === 'POST') return greenapiSend(env, request, auth);
+      if (seg[1] === 'sendfile' && request.method === 'POST') return greenapiSendFile(env, request, auth);
       if (seg[1] === 'messages' && request.method === 'GET') return greenapiMessages(env, url);
       // настройки/проверка подключения — только директор
       if (seg[1] === 'settings' && request.method === 'GET') return auth.role === 'director' ? greenapiSettingsGet(env, url) : err(403, 'Только директор');
@@ -918,6 +919,7 @@ async function ensureMessagesSchema(env) {
     user_id TEXT,
     created_at TEXT
   )`).run();
+  try { await env.DB.prepare('ALTER TABLE messages ADD COLUMN file_url TEXT').run(); } catch (e) {} // вложения (фото/файлы)
 }
 
 // Номер телефона -> chatId Green API (формат <digits>@c.us). Нормализуем KZ-номера.
@@ -1001,6 +1003,52 @@ async function greenapiSend(env, request, auth) {
 
   if (status === 'error') return err(502, errMsg || 'Не удалось отправить сообщение');
   return json({ ok: true, id, idMessage: extId, chatId });
+}
+
+// Отправка файла/фото в WhatsApp через Green API (sendFileByUrl). Файл предварительно
+// загружается в R2 (его URL публично доступен по GET), этот URL и шлём в Green API.
+async function greenapiSendFile(env, request, auth) {
+  await ensureMessagesSchema(env);
+  const b = await request.json().catch(() => ({}));
+  let url = String(b.url || '').trim();
+  if (!url) return err(400, 'Не передан файл');
+  // Green API скачивает файл по URL со своих серверов — нужен АБСОЛЮТНЫЙ адрес
+  if (url.startsWith('/')) { try { url = new URL(url, request.url).href; } catch (e) {} }
+  const fileName = String(b.fileName || 'file').slice(0, 120);
+  const caption = String(b.caption || '').trim();
+
+  let phone = b.phone || null, clientId = b.clientId || null;
+  const dealId = b.dealId || null;
+  if ((!phone || !clientId) && dealId) {
+    const d = await env.DB.prepare('SELECT c.id AS cid, c.phone AS phone FROM deals dd LEFT JOIN clients c ON c.id = dd.client_id WHERE dd.id=?').bind(dealId).first();
+    if (d) { phone = phone || d.phone; clientId = clientId || d.cid; }
+  }
+  if (!phone && clientId) { const c = await env.DB.prepare('SELECT phone FROM clients WHERE id=?').bind(clientId).first(); phone = c && c.phone; }
+  const chatId = toChatId(phone);
+  if (!chatId) return err(400, 'У клиента не указан корректный номер телефона');
+
+  const { inst, tok, base } = await greenCreds(env);
+  if (!inst || !tok) return err(503, 'Green API не настроен: задайте Instance ID и API Token');
+
+  let status = 'sent', extId = null, errMsg = null;
+  try {
+    const res = await fetch(`${base}/waInstance${inst}/sendFileByUrl/${tok}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chatId, urlFile: url, fileName, caption }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) { status = 'error'; errMsg = 'Green API ' + res.status + (data && data.message ? ': ' + data.message : ''); }
+    else extId = (data && data.idMessage) || null;
+  } catch (e) { status = 'error'; errMsg = String((e && e.message) || e); }
+
+  const id = genId();
+  await env.DB.prepare(
+    `INSERT INTO messages (id, deal_id, client_id, phone, direction, channel, text, status, ext_id, user_id, file_url, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`
+  ).bind(id, dealId, clientId, String(phone), 'out', 'whatsapp', caption || fileName, status, extId, auth && auth.sub, url).run();
+
+  if (status === 'error') return err(502, errMsg || 'Не удалось отправить файл');
+  return json({ ok: true, id, idMessage: extId });
 }
 
 // Креды Green API: приоритет — настройки из CRM (app_settings), затем секреты окружения.
@@ -1237,9 +1285,10 @@ async function greenapiWebhook(env, request, url) {
   if (!digits) return json({ ok: true, skipped: 'no-phone' });
   const senderName = (body.senderData && body.senderData.senderName) || '';
   const md = body.messageData || {};
-  let text = '';
+  let text = '', fileUrl = null;
   if (md.textMessageData) text = md.textMessageData.textMessage || '';
   else if (md.extendedTextMessageData) text = md.extendedTextMessageData.text || '';
+  else if (md.fileMessageData) { fileUrl = md.fileMessageData.downloadUrl || null; text = md.fileMessageData.caption || md.fileMessageData.fileName || '[файл]'; }
   else text = '[' + (md.typeMessage || 'сообщение') + ']';
 
   const { clientId, created } = await findOrCreateClientByPhone(env, digits, senderName);
@@ -1248,9 +1297,9 @@ async function greenapiWebhook(env, request, url) {
   if (!dealId) { dealId = await createIncomingDeal(env, clientId, text); newDeal = true; }
 
   await env.DB.prepare(
-    `INSERT INTO messages (id, deal_id, client_id, phone, direction, channel, text, status, ext_id, user_id, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))`
-  ).bind(genId(), dealId, clientId, '+' + digits, 'in', 'whatsapp', text, 'received', body.idMessage || null, null).run();
+    `INSERT INTO messages (id, deal_id, client_id, phone, direction, channel, text, status, ext_id, user_id, file_url, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`
+  ).bind(genId(), dealId, clientId, '+' + digits, 'in', 'whatsapp', text, 'received', body.idMessage || null, null, fileUrl).run();
 
   return json({ ok: true, clientId, dealId, newClient: created, newDeal });
 }
