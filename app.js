@@ -3300,7 +3300,7 @@ async function openDealDetail(id, opts) {
           el('div', { class:'who' }, [el('div', { class:'nm' }, c.name || '—'), el('div', { class:'ph' }, c.phone || 'телефон не указан')]),
         ]),
         el('div', { class:'cact' }, [
-          el('button', { title:'Позвонить', onclick: () => { if (c.phone) location.href = 'tel:' + String(c.phone).replace(/[^\d+]/g, ''); else toast('Телефон не указан', 'warn'); } }, '📞'),
+          el('button', { title:'Позвонить', onclick: () => callPhone(c.phone, { dealId: d.id, clientId: c.id }) }, '📞'),
           el('button', { title:'Написать в WhatsApp', onclick: () => switchTab('whatsapp') }, '💬'),
           canEdit ? el('button', { title:'Заменить клиента', onclick: () => { const open = clientPicker.style.display === 'none'; clientPicker.style.display = open ? 'block' : 'none'; if (open) { clientSearch.value = ''; fillClientList(''); setTimeout(() => clientSearch.focus(), 0); } } }, '✏') : null,
         ]),
@@ -6251,6 +6251,53 @@ function openGreenApiModal() {
   }).catch(() => { statusPill.textContent = '● Недоступно'; statusPill.className = 'pill pill-muted'; });
 }
 
+// Click-to-call: пробуем поднять звонок через Binotel (звонит телефон менеджера, затем клиент);
+// если Binotel не настроен/ошибка — откатываемся на tel: (системный набор).
+async function callPhone(phone, ctx) {
+  const tel = String(phone || '').replace(/[^\d+]/g, '');
+  if (!tel) { toast('Телефон не указан', 'warn'); return; }
+  try {
+    const r = await window.__API__.apiFetch('binotel/call', { method:'POST', body:{ phone: tel, dealId: ctx && ctx.dealId, clientId: ctx && ctx.clientId } });
+    if (r && r.ok) { toast('Звонок инициирован — поднимите трубку', 'success'); return; }
+    location.href = 'tel:' + tel; // Binotel не настроен — системный набор
+  } catch (e) { location.href = 'tel:' + tel; }
+}
+
+// Модалка «Binotel»: ключ/секрет API, внутренний номер менеджера, webhook входящих звонков.
+function openBinotelModal() {
+  const gInput = 'width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box';
+  const keyI = el('input', { placeholder:'API key', style: gInput });
+  const secretI = el('input', { placeholder:'API secret', style: gInput });
+  const extI = el('input', { placeholder:'Внутренний номер менеджера (например 001)', style: gInput });
+  const webhookI = el('input', { readonly:true, style: gInput + ';background:#F7F8FA;font-family:ui-monospace,monospace;font-size:11.5px', onclick: (e) => e.target.select() });
+  const saveBtn = el('button', { class:'btn btn-primary', onclick: async () => {
+    saveBtn.disabled = true;
+    try {
+      const s = await window.__API__.apiFetch('binotel/settings', { method:'POST', body:{ key: keyI.value.trim(), secret: secretI.value.trim(), ext: extI.value.trim() } });
+      if (s && s.webhookUrl) webhookI.value = s.webhookUrl;
+      toast('Настройки Binotel сохранены', 'success'); closeModal();
+    } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); saveBtn.disabled = false; }
+  } }, 'Сохранить');
+
+  openModal({
+    title: 'Binotel · IP-телефония',
+    body: el('div', {}, [
+      el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Подключение IP-телефонии Binotel: кнопка звонка в карточке сделки/клиента поднимет звонок (сначала ваш телефон, затем клиент). Входящие звонки автоматически заводят клиента и сделку.'),
+      el('div', { class:'form-row' }, [el('label', {}, 'API key'), keyI]),
+      el('div', { class:'form-row' }, [el('label', {}, 'API secret'), secretI]),
+      el('div', { class:'form-row' }, [el('label', {}, 'Внутренний номер'), extI]),
+      el('div', { class:'form-row' }, [el('label', {}, 'URL для webhook'), el('div', {}, [webhookI,
+        el('div', { class:'muted', style:'font-size:11.5px;margin-top:4px' }, 'Укажите этот адрес в Binotel как URL для уведомлений о входящих звонках.')])]),
+    ]),
+    foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), saveBtn],
+  });
+
+  window.__API__.apiFetch('binotel/settings').then(s => {
+    if (!s) return;
+    keyI.value = s.key || ''; secretI.value = s.secret || ''; extI.value = s.ext || ''; webhookI.value = s.webhookUrl || '';
+  }).catch(() => {});
+}
+
 // Модалка «Автораспределение заявок»: вкл/выкл, метод (Round Robin), список/исключение менеджеров.
 function openAutoDistributeModal() {
   const autoChk = el('input', { type:'checkbox', style:'width:16px;height:16px' });
@@ -6343,6 +6390,7 @@ VIEWS.settings = () => {
     intCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Интеграции и распределение')));
     intCard.append(el('div', { style:'display:flex;gap:10px;flex-wrap:wrap' }, [
       el('button', { class:'btn', onclick: openGreenApiModal }, 'Green API'),
+      el('button', { class:'btn', onclick: openBinotelModal }, 'Binotel (телефония)'),
       el('button', { class:'btn', onclick: openAutoDistributeModal }, 'Автораспределение заявок'),
     ]));
     wrap.append(intCard);

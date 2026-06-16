@@ -148,6 +148,10 @@ export async function onRequest(context) {
     if (seg[0] === 'greenapi' && seg[1] === 'webhook' && request.method === 'POST') {
       return greenapiWebhook(env, request, url);
     }
+    // Binotel webhook входящих звонков — ПУБЛИЧНЫЙ (защита токеном в URL)
+    if (seg[0] === 'binotel' && seg[1] === 'webhook' && request.method === 'POST') {
+      return binotelWebhook(env, request, url);
+    }
 
     // установка/смена пароля: первичная установка (хэш ещё null) разрешена без токена
     if (seg[0] === 'users' && seg[2] === 'password' && request.method === 'POST') {
@@ -230,6 +234,14 @@ export async function onRequest(context) {
       if (seg[1] === 'settings' && request.method === 'POST') return auth.role === 'director' ? greenapiSettingsSave(env, request, url) : err(403, 'Только директор');
       if (seg[1] === 'check' && request.method === 'POST') return auth.role === 'director' ? greenapiCheck(env) : err(403, 'Только директор');
       return err(404, 'Неизвестный метод Green API');
+    }
+
+    // Binotel (IP-телефония): click-to-call + настройки
+    if (seg[0] === 'binotel') {
+      if (seg[1] === 'call' && request.method === 'POST') return binotelCall(env, request, auth);
+      if (seg[1] === 'settings' && request.method === 'GET') return auth.role === 'director' ? binotelSettingsGet(env, url) : err(403, 'Только директор');
+      if (seg[1] === 'settings' && request.method === 'POST') return auth.role === 'director' ? binotelSettingsSave(env, request, url) : err(403, 'Только директор');
+      return err(404, 'Неизвестный метод Binotel');
     }
 
     // инвентаризация склада (лист пересчёта → проведение → корректировка остатков)
@@ -1036,6 +1048,88 @@ async function greenapiCheck(env) {
     const st = data && data.stateInstance;
     return json({ ok: st === 'authorized', state: st || 'unknown' });
   } catch (e) { return json({ ok: false, state: 'error', message: String((e && e.message) || e) }); }
+}
+
+// ---- Binotel (этап 7): IP-телефония — click-to-call + webhook входящих звонков ----
+const BINOTEL_API = 'https://api.binotel.com/api/4.0';
+async function binotelCreds(env) {
+  return {
+    key: (await getSetting(env, 'binotel_key')) || '',
+    secret: (await getSetting(env, 'binotel_secret')) || '',
+    ext: (await getSetting(env, 'binotel_ext')) || '',
+  };
+}
+async function binotelSettingsGet(env, url) {
+  await ensureAppSettings(env);
+  let wt = await getSetting(env, 'binotel_webhook_token');
+  if (!wt) { wt = genId(); await setSetting(env, 'binotel_webhook_token', wt); }
+  const { key, secret, ext } = await binotelCreds(env);
+  const origin = url ? url.origin : '';
+  return json({ key, secret, ext, configured: !!(key && secret), webhookUrl: origin + '/api/binotel/webhook?token=' + wt });
+}
+async function binotelSettingsSave(env, request, url) {
+  await ensureAppSettings(env);
+  const b = await request.json().catch(() => ({}));
+  if (b.key != null) await setSetting(env, 'binotel_key', String(b.key).trim());
+  if (b.secret != null) await setSetting(env, 'binotel_secret', String(b.secret).trim());
+  if (b.ext != null) await setSetting(env, 'binotel_ext', String(b.ext).trim());
+  return binotelSettingsGet(env, url);
+}
+// click-to-call: сначала звонит телефон менеджера (internalNumber), затем набирается клиент.
+// Если Binotel не настроен — отвечаем fallback:true, и фронт открывает tel:.
+async function binotelCall(env, request, auth) {
+  const b = await request.json().catch(() => ({}));
+  const phone = String(b.phone || '').replace(/[^\d]/g, '');
+  if (!phone) return err(400, 'Не указан телефон');
+  const { key, secret, ext } = await binotelCreds(env);
+  const internal = String(b.from || ext || '').trim();
+  if (!key || !secret) return json({ ok: false, fallback: true, reason: 'no-creds' });
+  if (!internal) return json({ ok: false, fallback: true, reason: 'no-ext' });
+  let ok = false, info = '';
+  try {
+    const res = await fetch(`${BINOTEL_API}/calls/call-to-customer.json`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key, secret, internalNumber: internal, telephone: phone }),
+    });
+    const data = await res.json().catch(() => null);
+    ok = !!(data && data.status === 'success');
+    info = (data && (data.message || data.callId)) || ('HTTP ' + res.status);
+    try {
+      await ensureMessagesSchema(env);
+      await env.DB.prepare(
+        `INSERT INTO messages (id, deal_id, client_id, phone, direction, channel, text, status, ext_id, user_id, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))`
+      ).bind(genId(), b.dealId || null, b.clientId || null, '+' + phone, 'out', 'call', 'Исходящий звонок', ok ? 'initiated' : 'error', (data && data.callId) || null, auth && auth.sub).run();
+    } catch (e) {}
+  } catch (e) { return json({ ok: false, fallback: true, reason: String((e && e.message) || e) }); }
+  return ok ? json({ ok: true }) : json({ ok: false, fallback: true, reason: info });
+}
+// webhook входящего звонка Binotel → клиент по номеру + лог (+ сделка, как у WhatsApp).
+async function binotelWebhook(env, request, url) {
+  await ensureMessagesSchema(env); await ensureAppSettings(env); await ensureArchiveColumns(env);
+  const wt = await getSetting(env, 'binotel_webhook_token');
+  if (wt && url.searchParams.get('token') !== wt) return err(403, 'Неверный токен webhook');
+  let body = {};
+  try {
+    const ct = request.headers.get('content-type') || '';
+    if (ct.includes('application/json')) body = await request.json();
+    else { const p = new URLSearchParams(await request.text()); body = Object.fromEntries(p.entries()); }
+  } catch (e) {}
+  const raw = body.callerIDExternal || body.externalNumber || body.from || body.CallerIDNumber || body.callerID || '';
+  const digits = String(raw).replace(/\D/g, '');
+  if (!digits) return json({ ok: true, skipped: 'no-phone' });
+  const dir = String(body.callType || body.direction || '').toLowerCase();
+  if (dir && !/in|вход|^0$/.test(dir)) return json({ ok: true, skipped: 'not-incoming' });
+
+  const { clientId, created } = await findOrCreateClientByPhone(env, digits, '');
+  let dealId = await openDealForClient(env, clientId);
+  let newDeal = false;
+  if (!dealId) { dealId = await createIncomingDeal(env, clientId, 'Входящий звонок'); newDeal = true; }
+  await env.DB.prepare(
+    `INSERT INTO messages (id, deal_id, client_id, phone, direction, channel, text, status, ext_id, user_id, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))`
+  ).bind(genId(), dealId, clientId, '+' + digits, 'in', 'call', 'Входящий звонок', 'received', body.generalCallID || body.callId || null, null).run();
+  return json({ ok: true, clientId, dealId, newClient: created, newDeal });
 }
 
 // Round Robin: следующий активный менеджер (role_key='manager', active=1), не из списка исключённых.
