@@ -1481,9 +1481,9 @@ function openProductDetail(idOrProduct) {
     body: el('div', {}, [
       imgHost,
       el('div', { class:'row', style:'gap:10px;margin-bottom:14px' }, [
-        el('span', { class:'tag' }, p.sku),
-        el('span', { class:'tag' }, cat.icon + ' ' + cat.name),
-        el('span', { class:'tag' }, p.brand),
+        p.sku ? el('span', { class:'tag' }, p.sku) : null,
+        cat ? el('span', { class:'tag' }, cat.icon + ' ' + cat.name) : null,
+        p.brand ? el('span', { class:'tag' }, p.brand) : null,
       ]),
       priceHost,
       kvHost,
