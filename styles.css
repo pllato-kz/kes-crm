@@ -779,6 +779,8 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .price-chip:hover { background: var(--brand); color: #fff; border-color: var(--brand); }
 .price-chip.off { background: #F3F4F6; color: #9CA3AF; border-color: #ECEEF1; cursor: default; }
 .price-chip.off:hover { background: #F3F4F6; color: #9CA3AF; border-color: #ECEEF1; }
+.price-chip.active { background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 700; box-shadow: 0 0 0 2px rgba(0,166,226,.22); }
+.price-chip.active:hover { background: var(--brand-dark); border-color: var(--brand-dark); }
 
 .deal-right { display: flex; flex-direction: column; min-height: 0; }
 .section-title { font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: #9CA3AF; margin: 0 0 12px; }
