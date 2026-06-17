@@ -3034,6 +3034,26 @@ function openBulkEdit(ids) {
     navigate('deals');
   } }, 'Применить');
 
+  // Удаление выбранных сделок прямо из массового редактирования (директор) — в архив на 30 дней
+  const isDir = currentUser && currentUser.roleKey === 'director';
+  const delBtn = isDir ? el('button', { class:'btn btn-danger', onclick: async () => {
+    if (!(await confirmModal({ title:'Удаление сделок', message:`Удалить ${total} ${plural(total, 'сделку', 'сделки', 'сделок')}? Они переместятся в архив на 30 дней, затем удалятся навсегда.`, confirmText:'Удалить', cancelText:'Отмена', danger:true }))) return;
+    delBtn.disabled = true; applyBtn.disabled = true; delBtn.textContent = 'Удаление…';
+    let ok = 0, fail = 0;
+    for (let i = 0; i < ids.length; i += 8) {
+      await Promise.all(ids.slice(i, i + 8).map(async (id) => {
+        try {
+          await window.__API__.apiFetch('deals/' + id, { method:'DELETE' });
+          const idx = state.deals.findIndex(x => x.id === id); if (idx >= 0) state.deals.splice(idx, 1);
+          ok++;
+        } catch (e) { fail++; }
+      }));
+    }
+    closeModal();
+    toast(`Перемещено в архив: ${ok}${fail ? ', ошибок ' + fail : ''}`, fail ? 'warn' : 'success');
+    navigate('deals');
+  } }, '🗑 Удалить выбранные') : null;
+
   openModal({
     title: 'Массовое редактирование',
     body: el('div', {}, [
@@ -3043,7 +3063,7 @@ function openBulkEdit(ids) {
       fieldRow('Этап', stageSel),
       fieldRow('Название', titleI),
     ]),
-    foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), applyBtn],
+    foot: [el('button', { class:'btn', onclick: closeModal }, 'Отмена'), delBtn, applyBtn],
   });
 }
 
