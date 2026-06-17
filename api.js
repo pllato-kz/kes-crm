@@ -63,7 +63,7 @@
       balance: c.balance, ltv: c.ltv, lastDeal: c.last_deal, tags: c.tags || [],
     }),
     deal: (d) => ({
-      id: d.id, no: d.no, title: d.title, client: d.client_id, manager: d.manager_id,
+      id: d.id, no: d.no, title: d.title, client: d.client_id, manager: d.manager_id, phone: d.phone,
       coManager: d.co_manager_id, comments: d.comments, address: d.address,
       deliveryDate: d.delivery_date, deliveryTransport: d.delivery_transport, deliveryDriver: d.delivery_driver,
       stage: d.stage_id, amount: d.amount, items: d.items, created: d.created, target: d.target,
@@ -113,7 +113,7 @@
       balance: c.balance, ltv: c.ltv, last_deal: c.lastDeal, tags: c.tags,
     }),
     deal: (d) => clean({
-      id: d.id, no: d.no, title: d.title, client_id: d.client, manager_id: d.manager,
+      id: d.id, no: d.no, title: d.title, client_id: d.client, manager_id: d.manager, phone: d.phone,
       co_manager_id: d.coManager, comments: d.comments, address: d.address,
       delivery_date: d.deliveryDate, delivery_transport: d.deliveryTransport, delivery_driver: d.deliveryDriver,
       stage_id: d.stage, amount: d.amount, created: d.created, target: d.target,
