@@ -3633,19 +3633,7 @@ async function openDealDetail(id, opts) {
     return el('div', { class:'msg ' + (out ? 'out' : 'in') }, kids);
   }
   function exampleChat() {
-    chatBody.append(
-      el('div', { class:'chat-date' }, 'Сегодня'),
-      el('div', { class:'msg in' }, [
-        el('div', { class:'msg-file' }, [
-          el('span', { class:'fi' }, '📄'),
-          el('div', {}, [el('div', { class:'fn' }, 'Счёт.pdf'), el('div', { class:'fd' }, 'PDF · 142 КБ · коммерческое предложение')]),
-        ]),
-        el('div', { class:'time' }, '09:14'),
-      ]),
-      el('div', { class:'msg in' }, [el('div', {}, 'Здравствуйте! Получили счёт, спасибо.'), el('div', { class:'time' }, '09:20')]),
-      el('div', { class:'msg out' }, [el('div', {}, 'Добрый день! Готовы отгрузить на этой неделе.'), el('div', { class:'time' }, '09:25 ✓')]),
-      el('div', { class:'msg-sys' }, ['✓ Клиент согласовал условия сделки · 09:40']),
-    );
+    chatBody.append(el('div', { class:'muted', style:'padding:24px;text-align:center;font-size:13px' }, 'Сообщений пока нет'));
   }
   let chatSig = '';
   function renderChat(force) {
