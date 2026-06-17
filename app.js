@@ -7134,7 +7134,6 @@ function renderShell() {
         </div>
         <div class="header-actions">
           <button class="icon-btn" title="Уведомления" id="notif-btn">🔔<span class="dot"></span></button>
-          <button class="icon-btn" title="Помощь">?</button>
           <div class="user-chip">
             <div class="avatar" style="background:${currentUser.color}">${currentUser.avatar}</div>
             <div>
