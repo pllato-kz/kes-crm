@@ -816,7 +816,10 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .price-chip.active { background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 700; box-shadow: 0 0 0 2px rgba(0,166,226,.22); }
 .price-chip.active:hover { background: var(--brand-dark); border-color: var(--brand-dark); }
 
-.deal-right { display: flex; flex-direction: column; min-height: 0; }
+.deal-right { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+/* min-width:0 — чтобы широкий контент раздела (например, таблица счетов) не
+   распирал колонку и не «съезжали» все разделы; вместо этого скроллится внутри. */
+.chat-pane { min-width: 0; }
 .section-title { font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: #9CA3AF; margin: 0 0 12px; }
 
 .client-block { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
@@ -880,6 +883,14 @@ table.data .muted { color: var(--muted); font-size: 12px; }
   .line-items-table td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); font-weight: 500; margin-bottom: 3px; }
   .line-items-table td.li-del { text-align: right; padding-top: 2px; }
   .line-items-table input.qty { width: 100%; max-width: 200px; height: 38px; font-size: 15px; }
+
+  /* Таблицы внутри разделов (счета и т.п.) — карточками, без распирания/съезда */
+  table.mobile-cards thead { display: none; }
+  table.mobile-cards, table.mobile-cards tbody, table.mobile-cards tr, table.mobile-cards td { display: block; width: auto; }
+  table.mobile-cards tr { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; background: #fff; }
+  table.mobile-cards td { border: 0; padding: 3px 0; text-align: left; white-space: normal; }
+  table.mobile-cards td.num { text-align: left; }
+  table.mobile-cards td[data-label]::before { content: attr(data-label) ': '; color: var(--muted); font-size: 11px; font-weight: 500; }
 
   /* плавный переход между разделами при свайпе/тапе */
   .chat-pane.active { animation: dealPaneIn .18s ease; }

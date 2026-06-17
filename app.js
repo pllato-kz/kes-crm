@@ -3753,7 +3753,7 @@ async function openDealDetail(id, opts) {
   const paneHist = el('div', { class:'chat-pane', 'data-pane':'history' }, [histList]);
 
   // ----- Документы: счета клиента (синхронно с разделом «Документы») -----
-  const docsList = el('div', { style:'padding:0 14px 14px;overflow-y:auto' });
+  const docsList = el('div', { style:'padding:0 14px 14px;overflow:auto' });
   function renderDocs() {
     const invs = state.invoices.filter(iv => iv.client === d.client || iv.deal === d.id);
     docsList.innerHTML = '';
@@ -3761,15 +3761,15 @@ async function openDealDetail(id, opts) {
       docsList.append(el('div', { class:'muted', style:'font-size:12px;padding:8px 0' }, 'Счетов по сделке нет'));
     } else {
       const stMap = { paid:['pill-success','Оплачено'], pending:['pill-warn','Ожидает'], overdue:['pill-danger','Просрочка'] };
-      const t = el('table', { class:'data' });
+      const t = el('table', { class:'data mobile-cards' });
       t.append(el('thead', {}, el('tr', {}, [el('th', {}, '№ счёта'), el('th', {}, 'Дата'), el('th', { class:'num' }, 'Сумма'), el('th', {}, 'Статус')])));
       t.append(el('tbody', {}, invs.map(iv => {
         const sp = stMap[iv.status] || ['pill-muted', iv.status || '—'];
         return el('tr', { style:'cursor:pointer', onclick: () => { closeModal(); openInvoiceDetail(iv.id); } }, [
-          el('td', { class:'strong' }, iv.no),
-          el('td', { class:'muted' }, iv.date ? fmtDate(iv.date) : '—'),
-          el('td', { class:'num strong' }, fmtMoneyK(iv.amount)),
-          el('td', {}, el('span', { class:'pill ' + sp[0] }, sp[1])),
+          el('td', { class:'strong', 'data-label':'№ счёта' }, iv.no),
+          el('td', { class:'muted', 'data-label':'Дата' }, iv.date ? fmtDate(iv.date) : '—'),
+          el('td', { class:'num strong', 'data-label':'Сумма' }, fmtMoneyK(iv.amount)),
+          el('td', { 'data-label':'Статус' }, el('span', { class:'pill ' + sp[0] }, sp[1])),
         ]);
       })));
       docsList.append(t);
