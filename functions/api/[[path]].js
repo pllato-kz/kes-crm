@@ -903,7 +903,11 @@ async function listNotifications(env, auth) {
 async function markNotificationsRead(env, auth) {
   await ensureNotifSchema(env);
   const uid = auth ? auth.sub : null;
-  if (uid) await env.DB.prepare('UPDATE notifications SET read=1 WHERE user_id=?').bind(uid).run();
+  // Помечаем прочитанными и адресные (user_id = текущий), и общие (user_id IS NULL) —
+  // иначе общие/легаси-уведомления (созданные до появления колонки user_id) listNotifications
+  // возвращал бы снова после перезагрузки, и они «приходили» бы повторно.
+  if (uid) await env.DB.prepare('UPDATE notifications SET read=1 WHERE user_id=? OR user_id IS NULL').bind(uid).run();
+  else await env.DB.prepare('UPDATE notifications SET read=1 WHERE user_id IS NULL').run();
   return json({ ok: true });
 }
 
