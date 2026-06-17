@@ -3478,7 +3478,23 @@ async function pricingSettingsSave(env, request) {
   if (b.opt != null) await setSetting(env, 'pricing_opt_pct', String(Number(b.opt) || 0));
   if (b.rozn != null) await setSetting(env, 'pricing_rozn_pct', String(Number(b.rozn) || 0));
   if (b.vat != null) await setSetting(env, 'pricing_vat_pct', String(Number(b.vat) || 0));
-  return pricingSettingsGet(env);
+  // Сразу применяем формулу ко всему каталогу (по закупу), чтобы опт/розница пересчитались
+  // не дожидаясь следующей синхронизации цен. Если выключено — очищаем опт/розницу.
+  const pc = await getPricingConfig(env);
+  let applied = 0;
+  if (pc.enabled) {
+    const vatM = 1 + (pc.vat / 100);
+    const optM = (1 + pc.opt / 100) * vatM;
+    const roznM = (1 + pc.rozn / 100) * vatM;
+    const res = await env.DB.prepare(
+      'UPDATE products SET price_wholesale=ROUND(price_cost*?,2), price_retail=ROUND(price_cost*?,2) WHERE price_cost IS NOT NULL AND price_cost>0'
+    ).bind(optM, roznM).run();
+    applied = (res.meta && res.meta.changes) || 0;
+  } else {
+    await env.DB.prepare('UPDATE products SET price_wholesale=0, price_retail=0').run();
+  }
+  const out = await getPricingConfig(env);
+  return json({ ...out, applied });
 }
 
 // Цены из приходов 1С -> опт/розница товара по единице измерения (price_retail для штучных,
@@ -3581,8 +3597,22 @@ async function syncPrices(env, mode) {
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
+  // Опт/Розница по формуле — для ВСЕХ товаров с закупом (а не только тех, что были в приходах
+  // этого прохода): закуп мог прийти из регистра цен или быть задан раньше. Так формула
+  // покрывает весь каталог, где есть закупочная цена.
+  let formulaAll = 0;
+  if (pc.enabled) {
+    const vatM = 1 + (pc.vat / 100);
+    const optM = (1 + pc.opt / 100) * vatM;
+    const roznM = (1 + pc.rozn / 100) * vatM;
+    const res = await env.DB.prepare(
+      'UPDATE products SET price_wholesale=ROUND(price_cost*?,2), price_retail=ROUND(price_cost*?,2) WHERE price_cost IS NOT NULL AND price_cost>0'
+    ).bind(optM, roznM).run();
+    formulaAll = (res.meta && res.meta.changes) || 0;
+  }
+
   const info = pc.enabled
-    ? `формулы (опт +${pc.opt}%, розн +${pc.rozn}%, НДС ${pc.vat}%): приходов ${docs}, строк ${lines}, с ценой ${priced}, закуп/опт/розн ${updC}, не сопоставлено ${missing}`
+    ? `формулы (опт +${pc.opt}%, розн +${pc.rozn}%, НДС ${pc.vat}%): приходов ${docs}, строк ${lines}, с ценой ${priced}, закуп ${updC}, опт/розн по формуле ${formulaAll}, не сопоставлено ${missing}`
     : `закуп из приходов: приходов ${docs}, строк ${lines}, закуп ${updC}, не сопоставлено ${missing} (опт/розница — через ценообразование)`;
   await env.DB.prepare(
     `INSERT INTO sync_state (entity, last_at, info) VALUES ('prices_1c', datetime('now'), ?)
