@@ -248,6 +248,11 @@ export async function onRequest(context) {
       return err(404, 'Неизвестный метод Green API');
     }
 
+    // Ценообразование: формулы опт/розницы (настройки)
+    if (seg[0] === 'pricing' && seg[1] === 'settings') {
+      if (request.method === 'GET') return pricingSettingsGet(env);
+      if (request.method === 'POST') return auth.role === 'director' ? pricingSettingsSave(env, request) : err(403, 'Только директор');
+    }
     // Binotel (IP-телефония): click-to-call + настройки
     if (seg[0] === 'binotel') {
       if (seg[1] === 'call' && request.method === 'POST') return binotelCall(env, request, auth);
@@ -3455,6 +3460,26 @@ function priceKindByUnit(unit) {
   return /шт|штук/.test(u) ? 'retail' : 'wholesale';
 }
 
+// Ценообразование (раздел «Ценообразование» в настройках): формулы опт/розницы от приходной цены.
+async function getPricingConfig(env) {
+  return {
+    enabled: (await getSetting(env, 'pricing_enabled')) === '1',
+    opt: parseFloat(await getSetting(env, 'pricing_opt_pct')) || 0,   // наценка опт, %
+    rozn: parseFloat(await getSetting(env, 'pricing_rozn_pct')) || 0, // наценка розница, %
+    vat: parseFloat(await getSetting(env, 'pricing_vat_pct')) || 0,   // НДС, % (на опт/розницу)
+  };
+}
+async function pricingSettingsGet(env) { await ensureAppSettings(env); return json(await getPricingConfig(env)); }
+async function pricingSettingsSave(env, request) {
+  await ensureAppSettings(env);
+  const b = await request.json().catch(() => ({}));
+  if (b.enabled != null) await setSetting(env, 'pricing_enabled', b.enabled ? '1' : '0');
+  if (b.opt != null) await setSetting(env, 'pricing_opt_pct', String(Number(b.opt) || 0));
+  if (b.rozn != null) await setSetting(env, 'pricing_rozn_pct', String(Number(b.rozn) || 0));
+  if (b.vat != null) await setSetting(env, 'pricing_vat_pct', String(Number(b.vat) || 0));
+  return pricingSettingsGet(env);
+}
+
 // Цены из приходов 1С -> опт/розница товара по единице измерения (price_retail для штучных,
 // price_wholesale для прочих). Закупочную цену приходы НЕ трогают — она тянется из регистра цен.
 //   mode='last' (по умолчанию): цена из ПОСЛЕДНЕГО по дате прихода прихода по номенклатуре;
@@ -3519,9 +3544,12 @@ async function syncPrices(env, mode) {
     skip += TOP;
   }
 
-  // 3) запись цены прихода в опт/розницу товара по его единице измерения
+  // 3) запись цены прихода в цены товара.
+  //   — если включено «Ценообразование» (формулы): закуп = приходная, опт/розница = закуп+наценка% (+НДС);
+  //   — иначе: приходная цена идёт в опт/розницу по единице измерения.
+  const pc = await getPricingConfig(env);
   const stmts = [];
-  let updW = 0, updR = 0, missing = 0, priced = 0;
+  let updW = 0, updR = 0, updC = 0, missing = 0, priced = 0;
   for (const nk in agg) {
     const a = agg[nk];
     const price = isAvg ? a.sum / a.count : a.price;
@@ -3529,13 +3557,24 @@ async function syncPrices(env, mode) {
     priced++;
     const p = byRef[nk];
     if (!p) { missing++; continue; }
-    const col = priceKindByUnit(p.unit) === 'retail' ? 'price_retail' : 'price_wholesale';
-    if (col === 'price_retail') updR++; else updW++;
-    stmts.push(env.DB.prepare(`UPDATE products SET ${col}=? WHERE id=?`).bind(Math.round(price * 100) / 100, p.id));
+    if (pc.enabled) {
+      const vat = 1 + (pc.vat / 100);
+      const cost = Math.round(price * 100) / 100;
+      const opt = Math.round(price * (1 + pc.opt / 100) * vat * 100) / 100;
+      const rozn = Math.round(price * (1 + pc.rozn / 100) * vat * 100) / 100;
+      stmts.push(env.DB.prepare('UPDATE products SET price_cost=?, price_wholesale=?, price_retail=? WHERE id=?').bind(cost, opt, rozn, p.id));
+      updC++; updW++; updR++;
+    } else {
+      const col = priceKindByUnit(p.unit) === 'retail' ? 'price_retail' : 'price_wholesale';
+      if (col === 'price_retail') updR++; else updW++;
+      stmts.push(env.DB.prepare(`UPDATE products SET ${col}=? WHERE id=?`).bind(Math.round(price * 100) / 100, p.id));
+    }
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
-  const info = `${isAvg ? 'средняя' : 'последняя'}: приходов ${docs}, строк ${lines}, с ценой ${priced}, опт ${updW}, розница ${updR}, не сопоставлено ${missing}`;
+  const info = pc.enabled
+    ? `формулы (опт +${pc.opt}%, розн +${pc.rozn}%, НДС ${pc.vat}%): приходов ${docs}, строк ${lines}, с ценой ${priced}, закуп/опт/розн ${updC}, не сопоставлено ${missing}`
+    : `${isAvg ? 'средняя' : 'последняя'}: приходов ${docs}, строк ${lines}, с ценой ${priced}, опт ${updW}, розница ${updR}, не сопоставлено ${missing}`;
   await env.DB.prepare(
     `INSERT INTO sync_state (entity, last_at, info) VALUES ('prices_1c', datetime('now'), ?)
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
@@ -3721,8 +3760,8 @@ async function syncSalePrices(env) {
     // опт/розница из регистра — только в пробелы (основной источник опт/розницы — приходы)
     if (v.wholesale != null) { stmts.push(env.DB.prepare('UPDATE products SET price_wholesale=? WHERE id=? AND (price_wholesale IS NULL OR price_wholesale=0)').bind(rnd(v.wholesale), pid)); updW++; }
     if (v.retail != null) { stmts.push(env.DB.prepare('UPDATE products SET price_retail=? WHERE id=? AND (price_retail IS NULL OR price_retail=0)').bind(rnd(v.retail), pid)); updR++; }
-    // закуп — только из регистра цен (единственный источник закупочной цены)
-    if (v.cost != null) { stmts.push(env.DB.prepare('UPDATE products SET price_cost=? WHERE id=?').bind(rnd(v.cost), pid)); updC++; }
+    // закуп из регистра — только в пробелы (если включены формулы, закуп уже = приходная)
+    if (v.cost != null) { stmts.push(env.DB.prepare('UPDATE products SET price_cost=? WHERE id=? AND (price_cost IS NULL OR price_cost=0)').bind(rnd(v.cost), pid)); updC++; }
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 

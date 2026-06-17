@@ -6471,6 +6471,44 @@ VIEWS.settings = () => {
       el('button', { class:'btn', onclick: openAutoDistributeModal }, 'Автораспределение заявок'),
     ]));
     wrap.append(intCard);
+
+    // ----- Ценообразование: формулы опт/розницы от приходной цены -----
+    const prCard = el('div', { class:'card mt-16' });
+    prCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Ценообразование')));
+    prCard.append(el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' },
+      'Если включить — при синхронизации цен из приходов: Закуп = приходная цена, а Опт/Розница считаются по формуле от закупа с наценкой и НДС. Если выключено — опт/розница берутся из приходов по единице измерения (как сейчас).'));
+    const numI = (ph) => el('input', { type:'number', step:'0.1', min:'0', placeholder: ph, style:'width:120px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px' });
+    const prEnabled = el('input', { type:'checkbox', style:'width:16px;height:16px' });
+    const prOpt = numI('напр. 15'), prRozn = numI('напр. 30'), prVat = numI('напр. 12');
+    const row = (label, node, suffix) => el('div', { class:'form-row' }, [el('label', {}, label), el('div', { style:'display:flex;align-items:center;gap:6px' }, [node, suffix ? el('span', { class:'muted', style:'font-size:13px' }, suffix) : null])]);
+    const prExample = el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, '');
+    const recalcExample = () => {
+      const o = Number(prOpt.value) || 0, r = Number(prRozn.value) || 0, v = Number(prVat.value) || 0;
+      const base = 1000, vat = 1 + v / 100;
+      prExample.textContent = `Пример: закуп 1000 ₸ → опт ${Math.round(base * (1 + o / 100) * vat)} ₸, розница ${Math.round(base * (1 + r / 100) * vat)} ₸.`;
+    };
+    [prOpt, prRozn, prVat].forEach(i => i.oninput = recalcExample);
+    const prSave = el('button', { class:'btn btn-primary', onclick: async () => {
+      prSave.disabled = true;
+      try {
+        await window.__API__.apiFetch('pricing/settings', { method:'POST', body:{ enabled: prEnabled.checked, opt: Number(prOpt.value) || 0, rozn: Number(prRozn.value) || 0, vat: Number(prVat.value) || 0 } });
+        toast('Ценообразование сохранено. Применится при ближайшей синхронизации цен.', 'success');
+      } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
+      prSave.disabled = false;
+    } }, '💾 Сохранить');
+    prCard.append(
+      el('label', { style:'display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:10px' }, [prEnabled, el('span', {}, 'Включить формулы ценообразования')]),
+      row('Наценка опт', prOpt, '%'),
+      row('Наценка розница', prRozn, '%'),
+      row('НДС (на опт/розницу)', prVat, '%'),
+      prExample,
+      el('div', { style:'margin-top:12px' }, prSave),
+    );
+    wrap.append(prCard);
+    window.__API__.apiFetch('pricing/settings').then(c => {
+      if (!c) return;
+      prEnabled.checked = !!c.enabled; prOpt.value = c.opt || 0; prRozn.value = c.rozn || 0; prVat.value = c.vat || 0; recalcExample();
+    }).catch(() => {});
   }
 
   // Статус синхронизации с 1С + очередь отправок — скрыто по запросу (синк идёт в фоне).
