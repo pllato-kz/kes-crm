@@ -3285,7 +3285,7 @@ async function openDealDetail(id, opts) {
   // Сумма позиций (товаров)
   const lineItemsSum = () => d.lineItems.reduce((s, it) => {
     const p = byId(state.products, it.product);
-    const price = it.priceUsed != null ? it.priceUsed : (p ? p.priceWholesale : 0);
+    const price = it.priceUsed != null ? it.priceUsed : (p ? (p.priceRetail || p.priceWholesale) : 0);
     return s + it.qty * price;
   }, 0);
   // База — часть суммы сделки, не относящаяся к позициям (ручная сумма).
@@ -3315,7 +3315,7 @@ async function openDealDetail(id, opts) {
         const p = byId(state.products, it.product);
         if (!p) return;
         const cost = Number(p.priceCost) || 0, opt = Number(p.priceWholesale) || 0, rozn = Number(p.priceRetail) || 0;
-        if (it.priceUsed == null) it.priceUsed = opt || rozn || 0;
+        if (it.priceUsed == null) it.priceUsed = rozn || opt || 0; // по умолчанию — розничная цена
         const sumCell = el('td', { class:'num strong' }, fmtMoney(it.qty * it.priceUsed));
         const recalc = () => { sumCell.textContent = fmtMoney(it.qty * it.priceUsed); recomputeAmount(); };
 
@@ -3411,7 +3411,7 @@ async function openDealDetail(id, opts) {
           if (out) toast('«' + p.name + '» нет на складе (остаток 0) — добавлено под заказ', 'warn');
           const existing = d.lineItems.find(it => it.product === p.id);
           if (existing) { existing.qty += 1; toast('Количество увеличено', 'info'); }
-          else { d.lineItems.push({ product: p.id, qty: 1, priceUsed: (Number(p.priceWholesale) || 0) || (Number(p.priceRetail) || 0) }); if (!out) toast('Товар добавлен', 'success'); }
+          else { d.lineItems.push({ product: p.id, qty: 1, priceUsed: (Number(p.priceRetail) || 0) || (Number(p.priceWholesale) || 0) }); if (!out) toast('Товар добавлен', 'success'); } // по умолчанию — розничная цена
           recomputeAmount(); renderItems();
         } }, [
           el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku + (p.brand ? ' · ' + p.brand : ''))]),
