@@ -3097,6 +3097,9 @@ async function openDealDetail(id, opts) {
   if (dpid && pipelineById(dpid) && dpid !== DEALS_PIPELINE) setDealsPipeline(dpid, true);
   setEntityHash('deals', d.id); // уникальный URL карточки
   if (!d.lineItems) d.lineItems = [];
+  // Формулы ценообразования (из настроек) — для быстрых кнопок «по формуле» в строках
+  let dealPricingCfg = null;
+  window.__API__.apiFetch('pricing/settings').then(c => { dealPricingCfg = c || null; try { renderItems(); } catch (e) {} }).catch(() => {});
   // Цены позиций синхронизируем с каталогом: тянем АКТУАЛЬНЫЕ карточки товаров по всем
   // позициям сделки (не только отсутствующим) — чтобы базы закуп/опт/розница были свежими.
   const itemPids = [...new Set(d.lineItems.map(it => it.product).filter(Boolean))];
@@ -3168,7 +3171,18 @@ async function openDealDetail(id, opts) {
             el('div', { style:'flex:1;min-width:0' }, priceInput),
             cost > 0 ? el('div', { style:'display:flex;align-items:center;gap:2px;flex:none' }, [pctInput, el('span', { class:'muted', style:'font-size:11px' }, '%')]) : null,
           ]));
+          const applyPrice = (val) => { it.priceUsed = Math.round(val); priceInput.value = Math.round(val); setPct(); markBelow(); recalc(); };
           basesRow = el('div', { style:'display:flex;flex-wrap:wrap;gap:4px;margin-top:5px' }, [chip('Закуп', cost), chip('Опт', opt), chip('Розн', rozn)]);
+          // быстрые кнопки «по формуле» (из раздела «Ценообразование»): закуп + наценка опт/розн (+НДС)
+          if (dealPricingCfg && cost > 0) {
+            const vat = 1 + (Number(dealPricingCfg.vat) || 0) / 100;
+            const fOpt = Math.round(cost * (1 + (Number(dealPricingCfg.opt) || 0) / 100) * vat);
+            const fRozn = Math.round(cost * (1 + (Number(dealPricingCfg.rozn) || 0) / 100) * vat);
+            basesRow.append(
+              el('span', { class:'price-chip', style:'background:#EEF7EE;border-color:#CDE6CD;color:#2A6B2A', title:`Опт по формуле: закуп +${dealPricingCfg.opt || 0}%` + (dealPricingCfg.vat ? ` +НДС ${dealPricingCfg.vat}%` : ''), onclick: () => applyPrice(fOpt) }, 'фОпт ' + fmtMoney(fOpt)),
+              el('span', { class:'price-chip', style:'background:#EEF7EE;border-color:#CDE6CD;color:#2A6B2A', title:`Розница по формуле: закуп +${dealPricingCfg.rozn || 0}%` + (dealPricingCfg.vat ? ` +НДС ${dealPricingCfg.vat}%` : ''), onclick: () => applyPrice(fRozn) }, 'фРозн ' + fmtMoney(fRozn)),
+            );
+          }
         } else {
           const m = cost > 0 ? Math.round(((Number(it.priceUsed) || 0) - cost) / cost * 100) : null;
           priceCell = el('td', { class:'num' }, [
