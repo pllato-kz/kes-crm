@@ -3546,8 +3546,16 @@ async function syncPrices(env, mode) {
   }
 
   // 3) запись цены прихода в цены товара.
-  //   — если включено «Ценообразование» (формулы): закуп = приходная, опт/розница = закуп+наценка% (+НДС);
-  //   — иначе: приходная цена идёт в опт/розницу по единице измерения.
+  //   Закуп = приходная цена (всегда). Опт/Розница выводятся через «Ценообразование»:
+  //   если формулы включены — опт/розница = закуп+наценка% (+НДС); иначе опт/розница пусты.
+  // Одноразово очищаем старые опт/розница (раньше заполнялись из приходов по единице).
+  try {
+    await ensureAppSettings(env);
+    if (!(await getSetting(env, 'optrozn_reset_v1'))) {
+      await env.DB.prepare('UPDATE products SET price_wholesale=0, price_retail=0').run();
+      await setSetting(env, 'optrozn_reset_v1', '1');
+    }
+  } catch (e) {}
   const pc = await getPricingConfig(env);
   const stmts = [];
   let updW = 0, updR = 0, updC = 0, missing = 0, priced = 0;
@@ -3558,24 +3566,24 @@ async function syncPrices(env, mode) {
     priced++;
     const p = byRef[nk];
     if (!p) { missing++; continue; }
+    const cost = Math.round(price * 100) / 100;
     if (pc.enabled) {
       const vat = 1 + (pc.vat / 100);
-      const cost = Math.round(price * 100) / 100;
       const opt = Math.round(price * (1 + pc.opt / 100) * vat * 100) / 100;
       const rozn = Math.round(price * (1 + pc.rozn / 100) * vat * 100) / 100;
       stmts.push(env.DB.prepare('UPDATE products SET price_cost=?, price_wholesale=?, price_retail=? WHERE id=?').bind(cost, opt, rozn, p.id));
       updC++; updW++; updR++;
     } else {
-      const col = priceKindByUnit(p.unit) === 'retail' ? 'price_retail' : 'price_wholesale';
-      if (col === 'price_retail') updR++; else updW++;
-      stmts.push(env.DB.prepare(`UPDATE products SET ${col}=? WHERE id=?`).bind(Math.round(price * 100) / 100, p.id));
+      // закуп из прихода; опт/розницу очищаем — они задаются через «Ценообразование»
+      stmts.push(env.DB.prepare('UPDATE products SET price_cost=?, price_wholesale=0, price_retail=0 WHERE id=?').bind(cost, p.id));
+      updC++;
     }
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
   const info = pc.enabled
     ? `формулы (опт +${pc.opt}%, розн +${pc.rozn}%, НДС ${pc.vat}%): приходов ${docs}, строк ${lines}, с ценой ${priced}, закуп/опт/розн ${updC}, не сопоставлено ${missing}`
-    : `${isAvg ? 'средняя' : 'последняя'}: приходов ${docs}, строк ${lines}, с ценой ${priced}, опт ${updW}, розница ${updR}, не сопоставлено ${missing}`;
+    : `закуп из приходов: приходов ${docs}, строк ${lines}, закуп ${updC}, не сопоставлено ${missing} (опт/розница — через ценообразование)`;
   await env.DB.prepare(
     `INSERT INTO sync_state (entity, last_at, info) VALUES ('prices_1c', datetime('now'), ?)
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`
@@ -3758,18 +3766,16 @@ async function syncSalePrices(env) {
   for (const nk in latest) {
     const pid = byRef[nk]; if (!pid) { miss++; continue; }
     const v = latest[nk];
-    // опт/розница из регистра — только в пробелы (основной источник опт/розницы — приходы)
-    if (v.wholesale != null) { stmts.push(env.DB.prepare('UPDATE products SET price_wholesale=? WHERE id=? AND (price_wholesale IS NULL OR price_wholesale=0)').bind(rnd(v.wholesale), pid)); updW++; }
-    if (v.retail != null) { stmts.push(env.DB.prepare('UPDATE products SET price_retail=? WHERE id=? AND (price_retail IS NULL OR price_retail=0)').bind(rnd(v.retail), pid)); updR++; }
-    // закуп из регистра — только в пробелы (если включены формулы, закуп уже = приходная)
+    // опт/розницу из регистра НЕ пишем — они выводятся через «Ценообразование» (формулу)
+    // закуп из регистра — только в пробелы (для товаров без прихода; иначе закуп = приходная)
     if (v.cost != null) { stmts.push(env.DB.prepare('UPDATE products SET price_cost=? WHERE id=? AND (price_cost IS NULL OR price_cost=0)').bind(rnd(v.cost), pid)); updC++; }
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
   const foundTypes = [...new Set(Object.values(typeName))].filter(Boolean).slice(0, 10).join(', ');
   const src = reg.fromDoc ? ` (док ${reg.doc}_${reg.tab})` : (reg.nested ? ' (из RecordSet)' : '');
-  await logState(`строк ${(reg.rows || []).length}${src} [ном=${f.nomKey}, вид=${f.typeSrc || f.typeKey || '—'}, цена=${f.priceField}]; закуп ${updC}, опт ${updW}, розница ${updR}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
-  return json({ rows: (reg.rows || []).length, fields: f, cost: updC, wholesale: updW, retail: updR, missing: miss, types: foundTypes });
+  await logState(`строк ${(reg.rows || []).length}${src} [ном=${f.nomKey}, цена=${f.priceField}]; закуп (в пробелы) ${updC}, не сопоставлено ${miss}; виды цен: ${foundTypes || '—'}`);
+  return json({ rows: (reg.rows || []).length, fields: f, cost: updC, missing: miss, types: foundTypes });
 }
 
 // --------------------------------------------------------------------------
