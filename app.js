@@ -3408,8 +3408,8 @@ async function openDealDetail(id, opts) {
   const invoiceBtn = canDocs ? el('button', { class:'btn btn-sm', title:'Сформировать счёт и прикрепить к чату с клиентом', onclick: () => attachDocToChat() }, '🧾 Счёт на оплату') : null;
   const kpBtn = canDocs ? el('button', { class:'btn btn-sm', title:'Сформировать КП и прикрепить к чату с клиентом', onclick: () => attachDocToChat('kp') }, '📋 КП') : null;
   // Доп. кнопки печати (открыть как PDF/распечатать) — отдельно от отправки в чат
-  const invoicePrintBtn = canDocs ? el('button', { class:'btn btn-sm', title:'Открыть для печати', onclick: () => printInvoice(d) }, '🖨') : null;
-  const kpPrintBtn = canDocs ? el('button', { class:'btn btn-sm', title:'Открыть КП для печати', onclick: () => printKP(d) }, '🖨') : null;
+  const invoicePrintBtn = canDocs ? el('button', { class:'btn btn-sm', title:'Открыть счёт для печати / PDF', onclick: () => printInvoice(d) }, '🖨 Печать счёта') : null;
+  const kpPrintBtn = canDocs ? el('button', { class:'btn btn-sm', title:'Открыть КП для печати / PDF', onclick: () => printKP(d) }, '🖨 Печать КП') : null;
   const delBtn = (currentUser && currentUser.roleKey === 'director') ? el('button', { class:'btn btn-sm btn-danger', onclick: async () => {
     if (!(await confirmModal({ title:'Удаление сделки', message:`Удалить сделку «${d.title}»? Она переместится в архив на 30 дней, затем удалится навсегда.`, confirmText:'Удалить', danger:true }))) return;
     try {
