@@ -2580,7 +2580,7 @@ function runSearch(q) {
     body.append(el('div', { style:'font-weight:600;font-size:12px;color:#6B7280;margin:12px 0 4px;text-transform:uppercase;letter-spacing:.5px' }, `Товары (${hits.products.length})`));
     hits.products.slice(0,10).forEach(p => body.append(el('div', { class:'dropdown-item', style:'border-radius:6px;border:0', onclick: () => { closeModal(); openProductDetail(p.id); } }, [
       el('span', { class:'di-icon' }, '📦'),
-      el('div', { class:'di-body' }, [el('div', { class:'strong' }, p.name), el('div', { class:'di-time' }, p.sku + ' · ' + p.brand)]),
+      el('div', { class:'di-body' }, [el('div', { class:'strong' }, nn(p.name) || '—'), el('div', { class:'di-time' }, nn(p.sku) + (nn(p.brand) ? ' · ' + nn(p.brand) : ''))]),
     ])));
   }
   openModal({ title: 'Результаты: ' + total, body, foot: [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')] });
@@ -2692,8 +2692,8 @@ VIEWS.dashboard = () => {
       const free = p.stock - p.reserved;
       return el('tr', { onclick: () => openProductDetail(p) }, [
         el('td', {}, [
-          el('div', { class: 'strong' }, p.name),
-          el('div', { class: 'muted' }, p.sku + (p.brand ? ' · ' + p.brand : '')),
+          el('div', { class: 'strong' }, nn(p.name) || '—'),
+          el('div', { class: 'muted' }, nn(p.sku) + (nn(p.brand) ? ' · ' + nn(p.brand) : '')),
         ]),
         el('td', { class: 'num' }, stockIndicator(free, p.stock)),
       ]);
@@ -3410,8 +3410,8 @@ async function openDealDetail(id, opts) {
         }
 
         const nameBlock = el('div', {}, [
-          el('div', { style:'font-weight:500' }, p.name),
-          el('div', { class:'muted', style:'font-size:11px' }, p.sku + (p.brand ? ' · ' + p.brand : '')),
+          el('div', { style:'font-weight:500' }, nn(p.name) || '—'),
+          el('div', { class:'muted', style:'font-size:11px' }, nn(p.sku) + (nn(p.brand) ? ' · ' + nn(p.brand) : '')),
           basesRow,
         ]);
         // data-label — подписи для мобильной карточной раскладки (CSS ::before)
@@ -3466,7 +3466,7 @@ async function openDealDetail(id, opts) {
           else { d.lineItems.push({ product: p.id, qty: 1, priceUsed: (Number(p.priceRetail) || 0) || (Number(p.priceWholesale) || 0) }); if (!out) toast('Товар добавлен', 'success'); } // по умолчанию — розничная цена
           recomputeAmount(); renderItems();
         } }, [
-          el('div', {}, [el('div', {}, p.name), el('div', { class:'pp-sku' }, p.sku + (p.brand ? ' · ' + p.brand : ''))]),
+          el('div', {}, [el('div', {}, nn(p.name) || '—'), el('div', { class:'pp-sku' }, nn(p.sku) + (nn(p.brand) ? ' · ' + nn(p.brand) : ''))]),
           el('div', { style:'text-align:right;white-space:nowrap' }, [
             (() => {
               const cost = Number(p.priceCost) || 0, opt = Number(p.priceWholesale) || 0, rozn = Number(p.priceRetail) || 0;
@@ -5089,8 +5089,8 @@ VIEWS.warehouse = () => {
         const p = window.__API__.map.product(row);
         const free = p.stock - p.reserved;
         return el('tr', { onclick: () => openProductDetail(p) }, [
-          el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, p.sku),
-          el('td', { class:'strong' }, p.name),
+          el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, nn(p.sku) || '—'),
+          el('td', { class:'strong' }, nn(p.name) || '—'),
           el('td', { class:'num' }, p.stock),
           p.reserved > 0
             ? el('td', { class:'num strong', style:'cursor:pointer;color:var(--brand)', title:'Показать, какие сделки держат резерв', onclick: (e) => { e.stopPropagation(); openReservations(p); } }, p.reserved)
