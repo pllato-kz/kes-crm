@@ -2545,7 +2545,7 @@ function stockIndicator(free, total) {
   const cls = free < 20 ? 'crit' : free < 50 ? 'low' : '';
   return el('span', { class: 'stock-bar ' + cls }, [
     el('span', { class: 'bar' }, el('span', { class: 'bar-fill', style: `width:${pct}%` })),
-    el('span', {}, free + ' ' + (total > 0 ? `/ ${total}` : '')),
+    el('span', {}, String(free)),
   ]);
 }
 
