@@ -664,6 +664,7 @@ async function ensureDealColumns(env) {
     'ALTER TABLE deals ADD COLUMN delivery_date TEXT',
     'ALTER TABLE deals ADD COLUMN delivery_transport TEXT',
     'ALTER TABLE deals ADD COLUMN delivery_driver TEXT',
+    'ALTER TABLE deals ADD COLUMN phone TEXT',
   ]) { try { await env.DB.prepare(ddl).run(); } catch (e) { /* уже есть */ } }
   DEALS_SCHEMA_OK = true;
 }
@@ -992,7 +993,7 @@ async function greenapiSend(env, request, auth) {
 
   if ((!phone || !clientId) && dealId) {
     const d = await env.DB.prepare(
-      'SELECT c.id AS cid, c.phone AS phone FROM deals dd LEFT JOIN clients c ON c.id = dd.client_id WHERE dd.id=?'
+      'SELECT c.id AS cid, COALESCE(NULLIF(c.phone,\'\'), dd.phone) AS phone FROM deals dd LEFT JOIN clients c ON c.id = dd.client_id WHERE dd.id=?'
     ).bind(dealId).first();
     if (d) { phone = phone || d.phone; clientId = clientId || d.cid; }
   }
@@ -1046,7 +1047,7 @@ async function greenapiSendFile(env, request, auth) {
   let phone = b.phone || null, clientId = b.clientId || null;
   const dealId = b.dealId || null;
   if ((!phone || !clientId) && dealId) {
-    const d = await env.DB.prepare('SELECT c.id AS cid, c.phone AS phone FROM deals dd LEFT JOIN clients c ON c.id = dd.client_id WHERE dd.id=?').bind(dealId).first();
+    const d = await env.DB.prepare('SELECT c.id AS cid, COALESCE(NULLIF(c.phone,\'\'), dd.phone) AS phone FROM deals dd LEFT JOIN clients c ON c.id = dd.client_id WHERE dd.id=?').bind(dealId).first();
     if (d) { phone = phone || d.phone; clientId = clientId || d.cid; }
   }
   if (!phone && clientId) { const c = await env.DB.prepare('SELECT phone FROM clients WHERE id=?').bind(clientId).first(); phone = c && c.phone; }

@@ -3305,6 +3305,7 @@ async function openDealDetail(id, opts) {
   // ----- Левая панель: форма -----
   const titleI = el('input', { value: d.title || '', placeholder:'Название сделки' });
   const addressI = el('input', { value: d.address || '', placeholder:'Адрес объекта / доставки' });
+  const dealPhoneI = el('input', { type:'tel', value: d.phone || (clientById(d.client) || {}).phone || '', placeholder:'+7… — для WhatsApp/звонка' });
   const amountI = el('input', { type:'number', value: Math.round(d.amount || 0), min:'0' });
   const dealItemsTotal = el('span', {}, fmtMoney(d.amount));
   recomputeAmount = (function (orig) { return function () { orig(); amountI.value = Math.round(d.amount || 0); dealItemsTotal.textContent = fmtMoney(d.amount); }; })(recomputeAmount);
@@ -3349,7 +3350,7 @@ async function openDealDetail(id, opts) {
           el('div', { class:'who' }, [el('div', { class:'nm' }, c.name || '—'), el('div', { class:'ph' }, c.phone || 'телефон не указан')]),
         ]),
         el('div', { class:'cact' }, [
-          el('button', { title:'Позвонить', onclick: () => callPhone(c.phone, { dealId: d.id, clientId: c.id }) }, '📞'),
+          el('button', { title:'Позвонить', onclick: () => callPhone(dealPhoneI.value.trim() || c.phone, { dealId: d.id, clientId: c.id }) }, '📞'),
           el('button', { title:'Написать в WhatsApp', onclick: () => switchTab('whatsapp') }, '💬'),
           canEdit ? el('button', { title:'Заменить клиента', onclick: () => { const open = clientPicker.style.display === 'none'; clientPicker.style.display = open ? 'block' : 'none'; if (open) { clientSearch.value = ''; fillClientList(''); setTimeout(() => clientSearch.focus(), 0); } } }, '✏') : null,
         ]),
@@ -3378,6 +3379,7 @@ async function openDealDetail(id, opts) {
       el('div', { class:'section-title' }, 'О сделке'),
       fieldRow('Название', titleI),
       el('div', { class:'form-row' }, [el('label', {}, 'Клиент'), clientHost]),
+      fieldRow('Телефон', dealPhoneI),
       fieldRow('Адрес', addressI),
       fieldRow('Сумма, ₸', amountI),
       fieldRow('Отв. менеджер', mgrSel),
@@ -3446,7 +3448,7 @@ async function openDealDetail(id, opts) {
     toast('Отправка файла…', 'info');
     try {
       const up = await window.__API__.uploadFile(f);
-      await window.__API__.apiFetch('greenapi/sendfile', { method:'POST', body:{ dealId: d.id, url: up.url, fileName: f.name, caption } });
+      await window.__API__.apiFetch('greenapi/sendfile', { method:'POST', body:{ dealId: d.id, phone: dealPhoneI.value.trim() || undefined, url: up.url, fileName: f.name, caption } });
       chatInputEl.value = ''; renderChat(true);
     } catch (e) { toast('Не удалось отправить файл: ' + ((e && e.message) || e), 'error'); }
     chatFileInput.value = '';
@@ -3658,7 +3660,7 @@ async function openDealDetail(id, opts) {
     const text = chatInputEl.value.trim();
     if (!text) return;
     chatInputEl.value = '';
-    try { await window.__API__.apiFetch('greenapi/send', { method:'POST', body:{ dealId: d.id, text } }); renderChat(true); }
+    try { await window.__API__.apiFetch('greenapi/send', { method:'POST', body:{ dealId: d.id, phone: dealPhoneI.value.trim() || undefined, text } }); renderChat(true); }
     catch (e) { toast('WhatsApp: ' + ((e && e.message) || e), 'error'); chatInputEl.value = text; }
   }
   chatInputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendChat(); } });
@@ -3715,6 +3717,7 @@ async function openDealDetail(id, opts) {
         d.stage = chosenStage;
         d.title = titleI.value.trim() || d.title;
         d.address = addressI.value;
+        d.phone = dealPhoneI.value.trim() || null;
         d.manager = mgrSel.value;
         d.deliveryDate = delDateI.value || null;
         d.deliveryTransport = delTransportSel.value || null;
@@ -3801,6 +3804,7 @@ function openWhatsApp(deal) {
 function openNewDeal() {
   const form = el('div');
   const titleI = el('input', { placeholder: 'Например: Кабель ВВГнг 3×2.5 для офиса' });
+  const phoneI = el('input', { type: 'tel', placeholder: '+7… — для WhatsApp/звонка (необязательно)' });
   const amountI = el('input', { type: 'number', placeholder: '0' });
   const mgrSel = el('select');
   state.users.filter(u => u.role.includes('Менеджер')).forEach(u => mgrSel.append(el('option', { value: u.id }, u.name)));
@@ -3815,7 +3819,7 @@ function openNewDeal() {
 
   function selectClient(c) {
     selectedClientId = c ? c.id : null;
-    if (c) { clientSelectedLabel.textContent = '✓ Выбран: ' + (c.name || '—'); clientSelectedLabel.style.cssText = 'font-size:12px;margin-top:6px;color:#10B981;font-weight:600'; }
+    if (c) { clientSelectedLabel.textContent = '✓ Выбран: ' + (c.name || '—'); clientSelectedLabel.style.cssText = 'font-size:12px;margin-top:6px;color:#10B981;font-weight:600'; if (c.phone && !phoneI.value.trim()) phoneI.value = c.phone; }
     else { clientSelectedLabel.textContent = 'Без клиента'; clientSelectedLabel.style.cssText = 'font-size:12px;margin-top:6px;color:#6B7280'; }
     fillClients(clientSearch.value);
   }
@@ -3848,6 +3852,7 @@ function openNewDeal() {
   form.append(
     el('div', { class:'form-row' }, [el('label', {}, 'Название сделки'), titleI]),
     clientRow,
+    el('div', { class:'form-row' }, [el('label', {}, 'Телефон'), phoneI]),
     el('div', { class:'form-row' }, [el('label', {}, 'Сумма, ₸'), amountI]),
     el('div', { class:'form-row' }, [el('label', {}, 'Менеджер'), mgrSel]),
   );
@@ -3863,7 +3868,7 @@ function openNewDeal() {
         const num = state.deals.length + 160;
         ensureActivePipeline();
         const firstStage = pipelineStages(DEALS_PIPELINE)[0];
-        const nd = { no: '2026-0' + num, client: selectedClientId || null, manager: mgrSel.value, stage: firstStage ? firstStage.id : 'new', amount: Number(amountI.value) || 0, items: 0, created: today, target: today, title: titleI.value.trim() };
+        const nd = { no: '2026-0' + num, client: selectedClientId || null, phone: phoneI.value.trim() || null, manager: mgrSel.value, stage: firstStage ? firstStage.id : 'new', amount: Number(amountI.value) || 0, items: 0, created: today, target: today, title: titleI.value.trim() };
         try {
           const saved = await window.__API__.apiFetch('deals', { method: 'POST', body: window.__API__.toApi.deal(nd) });
           state.deals.unshift(window.__API__.map.deal(saved));
