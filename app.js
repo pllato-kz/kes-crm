@@ -3097,9 +3097,9 @@ async function openDealDetail(id, opts) {
   if (dpid && pipelineById(dpid) && dpid !== DEALS_PIPELINE) setDealsPipeline(dpid, true);
   setEntityHash('deals', d.id); // уникальный URL карточки
   if (!d.lineItems) d.lineItems = [];
-  // Формулы ценообразования (из настроек) — для быстрых кнопок «по формуле» в строках
-  let dealPricingCfg = null;
-  window.__API__.apiFetch('pricing/settings').then(c => { dealPricingCfg = c || null; try { renderItems(); } catch (e) {} }).catch(() => {});
+  // Наценка ценообразования — редактируется в разделе «Товары» сделки (драйвит чипсы фОпт/фРозн)
+  let dealPricingCfg = { enabled: false, opt: 0, rozn: 0, vat: 0 };
+  window.__API__.apiFetch('pricing/settings').then(c => { if (c) Object.assign(dealPricingCfg, c); try { onPricingLoaded(); } catch (e) {} }).catch(() => {});
   // Цены позиций синхронизируем с каталогом: тянем АКТУАЛЬНЫЕ карточки товаров по всем
   // позициям сделки (не только отсутствующим) — чтобы базы закуп/опт/розница были свежими.
   const itemPids = [...new Set(d.lineItems.map(it => it.product).filter(Boolean))];
@@ -3173,8 +3173,8 @@ async function openDealDetail(id, opts) {
           ]));
           const applyPrice = (val) => { it.priceUsed = Math.round(val); priceInput.value = Math.round(val); setPct(); markBelow(); recalc(); };
           basesRow = el('div', { style:'display:flex;flex-wrap:wrap;gap:4px;margin-top:5px' }, [chip('Закуп', cost), chip('Опт', opt), chip('Розн', rozn)]);
-          // быстрые кнопки «по формуле» (из раздела «Ценообразование»): закуп + наценка опт/розн (+НДС)
-          if (dealPricingCfg && cost > 0) {
+          // быстрые кнопки «по формуле» (наценка задаётся в панели «Товары» сделки): закуп + опт/розн % (+НДС)
+          if (cost > 0 && dealPricingCfg && ((dealPricingCfg.opt || 0) > 0 || (dealPricingCfg.rozn || 0) > 0 || (dealPricingCfg.vat || 0) > 0)) {
             const vat = 1 + (Number(dealPricingCfg.vat) || 0) / 100;
             const fOpt = Math.round(cost * (1 + (Number(dealPricingCfg.opt) || 0) / 100) * vat);
             const fRozn = Math.round(cost * (1 + (Number(dealPricingCfg.rozn) || 0) / 100) * vat);
@@ -3398,8 +3398,27 @@ async function openDealDetail(id, opts) {
   const paneComments = el('div', { class:'chat-pane chat-comments', 'data-pane':'comments' }, [commentsTA]);
 
   // вкладка «Товары» — рядом с WhatsApp
+  // Наценка для этой сделки: редактируемые %, драйвят чипсы «фОпт/фРозн» и кнопки «ко всем»
+  const prcInput = (v) => el('input', { type:'number', step:'1', min:'0', value: v, style:'width:46px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;text-align:right' });
+  const prcOpt = prcInput(dealPricingCfg.opt || 0), prcRozn = prcInput(dealPricingCfg.rozn || 0), prcVat = prcInput(dealPricingCfg.vat || 0);
+  const applyAllPricing = (kind) => {
+    let n = 0;
+    d.lineItems.forEach(it => { const p = byId(state.products, it.product); const cost = p ? Number(p.priceCost) || 0 : 0; if (cost <= 0) return; const vat = 1 + (Number(dealPricingCfg.vat) || 0) / 100; const pct = kind === 'opt' ? dealPricingCfg.opt : dealPricingCfg.rozn; it.priceUsed = Math.round(cost * (1 + (Number(pct) || 0) / 100) * vat); n++; });
+    recomputeAmount(); renderItems();
+    toast(n ? `Применено к ${n} поз.` : 'Нет позиций с закупом', n ? 'success' : 'warn');
+  };
+  [prcOpt, prcRozn, prcVat].forEach(i => { if (!canEdit) i.disabled = true; i.oninput = () => { dealPricingCfg.opt = Number(prcOpt.value) || 0; dealPricingCfg.rozn = Number(prcRozn.value) || 0; dealPricingCfg.vat = Number(prcVat.value) || 0; renderItems(); }; });
+  function onPricingLoaded() { prcOpt.value = dealPricingCfg.opt || 0; prcRozn.value = dealPricingCfg.rozn || 0; prcVat.value = dealPricingCfg.vat || 0; try { renderItems(); } catch (e) {} }
+  const pricingPanel = el('div', { style:'display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;margin-bottom:10px;color:#6B7280;padding:8px 10px;background:#F7F8FA;border-radius:8px' }, [
+    el('span', { style:'font-weight:600' }, 'Наценка для сделки:'),
+    prcOpt, el('span', {}, '% опт'), prcRozn, el('span', {}, '% розн'), prcVat, el('span', {}, '% НДС'),
+    canEdit ? el('button', { class:'btn btn-sm', style:'margin-left:auto', onclick: () => applyAllPricing('opt') }, 'Опт ко всем') : null,
+    canEdit ? el('button', { class:'btn btn-sm', onclick: () => applyAllPricing('rozn') }, 'Розн ко всем') : null,
+  ]);
+
   const paneItems = el('div', { class:'chat-pane chat-items', 'data-pane':'items' }, [
     el('div', { class:'section-title' }, 'Товары сделки'),
+    pricingPanel,
     itemsHost,
     pickerHost,
     el('div', { class:'row', style:'justify-content:space-between;margin-top:12px;font-size:14px;font-weight:600' }, [
