@@ -1935,21 +1935,21 @@ function openAbout() {
   });
 }
 
-// ---------- Печать документа: «Счёт на оплату» или «КП» (PDF via window.print) ----------
+// ---------- Документ «Счёт на оплату» или «КП»: сборка разметки, печать, PDF в чат ----------
 function printKP(deal, noArg) { return printInvoice(deal, noArg, 'kp'); }
-function printInvoice(deal, invNoArg, kind) {
+
+// Собирает внутреннюю разметку .print-area и метаданные документа (номер, имя файла).
+// Возвращает null, если в сделке нет позиций. Используется и печатью, и генерацией PDF в чат.
+function buildInvoiceInner(deal, kind, invNoArg) {
   const isKP = kind === 'kp';
-  const cl = clientById(deal.client);
+  const cl = clientById(deal.client) || {};
   const items = (deal.lineItems || []).map(it => {
     const p = byId(state.products, it.product);
     if (!p) return null;
     const price = it.priceUsed || p.priceWholesale;
     return { sku: p.sku, name: p.name, unit: p.unit, qty: it.qty, price, sum: it.qty * price };
   }).filter(Boolean);
-  if (!items.length) {
-    toast('Нет позиций для печати — добавьте товары', 'warn');
-    return;
-  }
+  if (!items.length) return null;
   const subtotal = items.reduce((s, it) => s + it.sum, 0);
   const vat = Math.round(subtotal * 0.12);
   const total = subtotal + vat;
@@ -1963,18 +1963,7 @@ function printInvoice(deal, invNoArg, kind) {
   // Реквизиты продавца — из 1С (state.meta), с запасными значениями
   const seller = state.meta || {};
   const sellerName = seller.legalName || seller.tenant || 'ТОО «KazEnergoSnab»';
-
-  // Открываем новое окно с print-friendly разметкой
-  const w = window.open('', '_blank', 'width=900,height=1100');
-  if (!w) { toast('Браузер заблокировал окно печати — разрешите popup', 'error'); return; }
-  w.document.write(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>${invNo}</title>
-    <link rel="stylesheet" href="${location.origin}/styles.css">
-  </head><body style="background:#F4F5F7;padding:20px">
-    <div class="print-controls">
-      <button onclick="window.print()" class="btn btn-primary">🖨 Печать / PDF</button>
-      <button onclick="window.close()" class="btn">Закрыть</button>
-    </div>
-    <div class="print-area">
+  const inner = `
       <div class="pr-head">
         <div class="pr-logo">
           <svg width="50" height="56" viewBox="0 0 100 110">
@@ -2054,10 +2043,64 @@ function printInvoice(deal, invNoArg, kind) {
           <div style="margin-top:4px;color:#aaa">М.П.</div>
         </div>
         <div class="pr-stamp">место<br>печати<br>и подписи</div>
-      </div>
+      </div>`;
+  const slug = String(invNo).replace(/[^\wа-яёА-ЯЁ.-]+/gi, '_');
+  const fileName = (isKP ? 'KP-' : 'Schet-') + slug + '.pdf';
+  return { inner, invNo, isKP, title: (isKP ? 'Коммерческое предложение ' : 'Счёт на оплату ') + invNo, fileName };
+}
+
+function printInvoice(deal, invNoArg, kind) {
+  const built = buildInvoiceInner(deal, kind, invNoArg);
+  if (!built) { toast('Нет позиций для печати — добавьте товары', 'warn'); return; }
+  const w = window.open('', '_blank', 'width=900,height=1100');
+  if (!w) { toast('Браузер заблокировал окно печати — разрешите popup', 'error'); return; }
+  w.document.write(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>${built.invNo}</title>
+    <link rel="stylesheet" href="${location.origin}/styles.css">
+  </head><body style="background:#F4F5F7;padding:20px">
+    <div class="print-controls">
+      <button onclick="window.print()" class="btn btn-primary">🖨 Печать / PDF</button>
+      <button onclick="window.close()" class="btn">Закрыть</button>
     </div>
+    <div class="print-area">${built.inner}</div>
   </body></html>`);
   w.document.close();
+}
+
+// Формирует PDF документа (Счёт/КП) из той же разметки и отдаёт его как файл в колбэк.
+// Рендер делаем html2canvas → jsPDF (поддержка кириллицы через растеризацию).
+async function buildInvoicePdfFile(deal, kind) {
+  const built = buildInvoiceInner(deal, kind);
+  if (!built) { toast('Нет позиций — добавьте товары в сделку', 'warn'); return null; }
+  const jspdfNS = window.jspdf, h2c = window.html2canvas;
+  if (!jspdfNS || !jspdfNS.jsPDF || !h2c) { toast('Модуль PDF ещё загружается — повторите через секунду', 'warn'); return null; }
+  const holder = el('div', { style:'position:fixed;left:-10000px;top:0;width:760px;background:#fff;z-index:-1' });
+  const area = el('div', { class:'print-area' }); area.innerHTML = built.inner;
+  holder.appendChild(area); document.body.appendChild(holder);
+  try {
+    const canvas = await h2c(area, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+    const pdf = new jspdfNS.jsPDF('p', 'mm', 'a4');
+    const pw = pdf.internal.pageSize.getWidth();
+    const ph = pdf.internal.pageSize.getHeight();
+    const imgH = canvas.height * pw / canvas.width;
+    const img = canvas.toDataURL('image/jpeg', 0.92);
+    if (imgH <= ph) {
+      pdf.addImage(img, 'JPEG', 0, 0, pw, imgH);
+    } else {
+      let remaining = imgH, position = 0;
+      while (remaining > 0) {
+        pdf.addImage(img, 'JPEG', 0, position, pw, imgH);
+        remaining -= ph;
+        if (remaining > 0) { pdf.addPage(); position -= ph; }
+      }
+    }
+    const blob = pdf.output('blob');
+    return { file: new File([blob], built.fileName, { type: 'application/pdf' }), fileName: built.fileName, caption: built.title };
+  } catch (e) {
+    toast('Не удалось сформировать документ: ' + ((e && e.message) || e), 'error');
+    return null;
+  } finally {
+    holder.remove();
+  }
 }
 
 // ---------- Печать ТТН и экспорт отчётов (PDF через window.print) ----------
@@ -3362,8 +3405,11 @@ async function openDealDetail(id, opts) {
   const fieldRow = (label, input) => el('div', { class:'form-row' }, [el('label', {}, label), input]);
   // Счёт на оплату и КП формируют только менеджеры (и директор-владелец)
   const canDocs = currentUser && (currentUser.roleKey === 'manager' || currentUser.roleKey === 'director');
-  const invoiceBtn = canDocs ? el('button', { class:'btn btn-sm', onclick: () => printInvoice(d) }, '🖨 Счёт на оплату') : null;
-  const kpBtn = canDocs ? el('button', { class:'btn btn-sm', onclick: () => printKP(d) }, '📋 КП') : null;
+  const invoiceBtn = canDocs ? el('button', { class:'btn btn-sm', title:'Сформировать счёт и прикрепить к чату с клиентом', onclick: () => attachDocToChat() }, '🧾 Счёт на оплату') : null;
+  const kpBtn = canDocs ? el('button', { class:'btn btn-sm', title:'Сформировать КП и прикрепить к чату с клиентом', onclick: () => attachDocToChat('kp') }, '📋 КП') : null;
+  // Доп. кнопки печати (открыть как PDF/распечатать) — отдельно от отправки в чат
+  const invoicePrintBtn = canDocs ? el('button', { class:'btn btn-sm', title:'Открыть для печати', onclick: () => printInvoice(d) }, '🖨') : null;
+  const kpPrintBtn = canDocs ? el('button', { class:'btn btn-sm', title:'Открыть КП для печати', onclick: () => printKP(d) }, '🖨') : null;
   const delBtn = (currentUser && currentUser.roleKey === 'director') ? el('button', { class:'btn btn-sm btn-danger', onclick: async () => {
     if (!(await confirmModal({ title:'Удаление сделки', message:`Удалить сделку «${d.title}»? Она переместится в архив на 30 дней, затем удалится навсегда.`, confirmText:'Удалить', danger:true }))) return;
     try {
@@ -3395,7 +3441,7 @@ async function openDealDetail(id, opts) {
         el('div', { class:'muted', style:'font-size:11px;margin-top:2px' }, 'Адрес доставки берётся из поля «Адрес» выше.'),
       ]);
     })(),
-    el('div', { class:'deal-actions' }, [invoiceBtn, kpBtn, delBtn]),
+    el('div', { class:'deal-actions' }, [invoiceBtn, invoicePrintBtn, kpBtn, kpPrintBtn, delBtn]),
   ]);
 
   // ----- Правая панель: вкладки (Комментарии / WhatsApp / История) -----
@@ -3439,6 +3485,11 @@ async function openDealDetail(id, opts) {
 
   const chatBody = el('div', { class:'chat-body' });
   const chatInputEl = el('input', { placeholder:'Сообщение…' });
+  // Отправка уже загруженного в R2 файла в WhatsApp (и в чат сделки)
+  async function sendChatFileUrl(url, fileName, caption) {
+    await window.__API__.apiFetch('greenapi/sendfile', { method:'POST', body:{ dealId: d.id, phone: dealPhoneI.value.trim() || undefined, url, fileName, caption } });
+    renderChat(true);
+  }
   // Прикрепление файла/фото: грузим в R2, затем отправляем в WhatsApp (caption — текст из поля)
   const chatFileInput = el('input', { type:'file', accept:'image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt', style:'display:none' });
   chatFileInput.onchange = async () => {
@@ -3447,13 +3498,48 @@ async function openDealDetail(id, opts) {
     toast('Отправка файла…', 'info');
     try {
       const up = await window.__API__.uploadFile(f);
-      await window.__API__.apiFetch('greenapi/sendfile', { method:'POST', body:{ dealId: d.id, phone: dealPhoneI.value.trim() || undefined, url: up.url, fileName: f.name, caption } });
-      chatInputEl.value = ''; renderChat(true);
+      await sendChatFileUrl(up.url, f.name, caption);
+      chatInputEl.value = '';
     } catch (e) { toast('Не удалось отправить файл: ' + ((e && e.message) || e), 'error'); }
     chatFileInput.value = '';
   };
+
+  // Прикреплённый, но ещё не отправленный документ (Счёт/КП) — менеджер жмёт «Отправить».
+  let pendingDoc = null;
+  const pendingBar = el('div', { style:'display:none;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--border);background:#F8FAFC;font-size:13px' });
+  function renderPending() {
+    pendingBar.innerHTML = '';
+    if (!pendingDoc) { pendingBar.style.display = 'none'; return; }
+    pendingBar.style.display = 'flex';
+    pendingBar.append(
+      el('span', {}, '📄'),
+      el('span', { style:'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, pendingDoc.fileName),
+      el('button', { class:'btn btn-sm btn-primary', title:'Отправить документ клиенту', onclick: async () => {
+        const doc = pendingDoc; pendingDoc = null; renderPending();
+        toast('Отправка документа…', 'info');
+        try { await sendChatFileUrl(doc.url, doc.fileName, doc.caption); }
+        catch (e) { toast('Не удалось отправить: ' + ((e && e.message) || e), 'error'); pendingDoc = doc; renderPending(); }
+      } }, 'Отправить'),
+      el('button', { class:'btn btn-sm', title:'Убрать', onclick: () => { pendingDoc = null; renderPending(); } }, '✕'),
+    );
+  }
+  // Сформировать документ (Счёт/КП) → загрузить в R2 → прикрепить к чату как готовый к отправке
+  async function attachDocToChat(kind) {
+    const built = await buildInvoicePdfFile(d, kind);
+    if (!built) return;
+    toast('Загрузка документа…', 'info');
+    try {
+      const up = await window.__API__.uploadFile(built.file);
+      pendingDoc = { url: up.url, fileName: built.fileName, caption: built.caption };
+      renderPending();
+      switchTab('whatsapp');
+      toast('Документ прикреплён к чату — нажмите «Отправить»', 'success');
+    } catch (e) { toast('Не удалось прикрепить документ: ' + ((e && e.message) || e), 'error'); }
+  }
+
   const paneWhats = el('div', { class:'chat-pane active', 'data-pane':'whatsapp' }, [
     chatBody,
+    pendingBar,
     el('div', { class:'chat-input' }, [
       chatFileInput,
       el('button', { title:'Прикрепить файл/фото', onclick: () => chatFileInput.click() }, '📎'),
