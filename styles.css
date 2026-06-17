@@ -822,9 +822,20 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .chat-comments textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 13px; font-family: inherit; outline: none; resize: vertical; min-height: 120px; }
 
 @media (max-width: 860px) {
-  .deal-split { grid-template-columns: 1fr; height: auto; }
-  .deal-left { border-right: 0; border-bottom: 1px solid var(--border); }
-  .deal-right { max-height: 70vh; }
+  /* Карточка сделки на телефоне: вместо двух колонок — стопка, вся карточка
+     прокручивается вертикально, правая панель (чат/товары/документы/отгрузка)
+     получает высоту, чтобы её содержимое скроллилось внутри. */
+  .modal.modal-xl { height: 92vh; max-height: 92vh; }
+  .modal.modal-xl .modal-body { display: block; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .deal-modal { display: block; }
+  .deal-split { display: block; height: auto; }
+  .deal-left { border-right: 0; border-bottom: 1px solid var(--border); overflow: visible; }
+  .deal-right { height: 76vh; max-height: 76vh; }
+  .funnel-steps { padding: 10px 12px; }
+  .deal-actions button { flex: 1 1 auto; }
+  /* таблица товаров: не схлопывать колонки в кашу — даём мин. ширину и прокрутку */
+  .chat-items { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .line-items-table { min-width: 460px; }
 }
 
 .form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
