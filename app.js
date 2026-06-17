@@ -210,6 +210,9 @@ const fmtDate = (d) => {
   return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 
+// Безопасный текст: пусто для null/undefined и для строк-«null»/«undefined» (бывает после импорта)
+const nn = (v) => { const s = v == null ? '' : String(v).trim(); return (s === '' || s.toLowerCase() === 'null' || s.toLowerCase() === 'undefined') ? '' : s; };
+
 const byId = (arr, id) => arr.find(x => x.id === id);
 const stageById = (id) => STAGES.find(s => s.id === id) || STAGES[0];
 // ----- Воронки продаж -----
@@ -1454,7 +1457,7 @@ function openProductDetail(idOrProduct) {
   function renderInfo() {
     const stock = Number(p.stock) || 0, reserved = Number(p.reserved) || 0;
     const free = stock - reserved;
-    const unit = p.unit || '';
+    const unit = nn(p.unit);
     const cost = Number(p.priceCost) || 0, opt = Number(p.priceWholesale) || 0, rozn = Number(p.priceRetail) || 0;
     const below = (opt > 0 && opt < cost) || (rozn > 0 && rozn < cost);
     priceHost.innerHTML = '';
@@ -1469,7 +1472,7 @@ function openProductDetail(idOrProduct) {
     const margin = priceMarginPct(cost, rozn);
     kvHost.innerHTML = '';
     kvHost.append(el('dl', { class:'kv' }, [
-      el('dt', {}, 'Единица'),       el('dd', {}, p.unit || '—'),
+      el('dt', {}, 'Единица'),       el('dd', {}, nn(p.unit) || '—'),
       el('dt', {}, 'Остаток'),       el('dd', {}, `${stock}${unit ? ' ' + unit : ''}`),
       el('dt', {}, 'Зарезервировано'), el('dd', {}, `${reserved}${unit ? ' ' + unit : ''}`),
       el('dt', {}, 'Доступно'),      el('dd', {}, stockIndicator(free, stock, { noBar: true })),
@@ -1479,13 +1482,13 @@ function openProductDetail(idOrProduct) {
   renderInfo();
 
   openModal({
-    title: p.name,
+    title: nn(p.name) || 'Товар',
     body: el('div', {}, [
       imgHost,
       el('div', { class:'row', style:'gap:10px;margin-bottom:14px' }, [
-        p.sku ? el('span', { class:'tag' }, p.sku) : null,
+        nn(p.sku) ? el('span', { class:'tag' }, nn(p.sku)) : null,
         cat ? el('span', { class:'tag' }, cat.icon + ' ' + cat.name) : null,
-        p.brand ? el('span', { class:'tag' }, p.brand) : null,
+        nn(p.brand) ? el('span', { class:'tag' }, nn(p.brand)) : null,
       ]),
       priceHost,
       kvHost,
@@ -4689,11 +4692,11 @@ VIEWS.catalog = () => {
         rowChecks[i] = cb;
         return el('tr', { onclick: () => openProductDetail(p) }, [
           el('td', { style:'text-align:center', onclick: (e) => e.stopPropagation() }, cb),
-          el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, p.sku),
+          el('td', { class:'muted', style:'font-family:monospace;font-size:11.5px' }, nn(p.sku) || '—'),
           el('td', { class:'strong' }, p.image
-            ? el('span', { style:'display:inline-flex;align-items:center;gap:8px' }, [el('img', { src:p.image, alt:'', style:'width:28px;height:28px;object-fit:cover;border-radius:4px;border:1px solid #E5E7EB' }), p.name])
-            : p.name),
-          el('td', {}, el('span', { class:'tag' }, p.brand || '—')),
+            ? el('span', { style:'display:inline-flex;align-items:center;gap:8px' }, [el('img', { src:p.image, alt:'', style:'width:28px;height:28px;object-fit:cover;border-radius:4px;border:1px solid #E5E7EB' }), nn(p.name) || '—'])
+            : (nn(p.name) || '—')),
+          el('td', {}, el('span', { class:'tag' }, nn(p.brand) || '—')),
           el('td', { class:'num strong' }, p.priceCost ? fmtMoney(p.priceCost) : '—'),
           el('td', { class:'num muted' }, p.priceWholesale ? fmtMoney(p.priceWholesale) : '—'),
           el('td', { class:'num muted' }, p.priceRetail ? fmtMoney(p.priceRetail) : '—'),
