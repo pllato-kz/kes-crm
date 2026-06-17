@@ -188,6 +188,20 @@ export async function onRequest(context) {
       return json(r || { total: 0, cost: 0, wholesale: 0, retail: 0, any: 0 });
     }
 
+    // покрытие остатками 1С: сколько позиций с остатком + инфо/время последнего синка остатков
+    if (seg[0] === 'catalog' && seg[1] === 'stock-coverage' && request.method === 'GET') {
+      const r = await env.DB.prepare(
+        `SELECT COUNT(*) AS total,
+                SUM(CASE WHEN COALESCE(s.stock,0)>0 THEN 1 ELSE 0 END) AS withStock,
+                COALESCE(SUM(s.stock),0) AS units
+           FROM products p
+           LEFT JOIN (SELECT product_id, SUM(stock) AS stock FROM product_stock GROUP BY product_id) s
+             ON s.product_id = p.id`
+      ).first();
+      const st = await env.DB.prepare("SELECT last_at, info FROM sync_state WHERE entity='stock_1c'").first();
+      return json({ ...(r || { total: 0, withStock: 0, units: 0 }), lastAt: st && st.last_at, info: st && st.info });
+    }
+
     // сводка по складу (для карточек: SKU, единиц, резерв, стоимость)
     if (seg[0] === 'warehouse' && seg[1] === 'summary' && request.method === 'GET') return warehouseSummary(env);
 

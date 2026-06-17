@@ -4671,6 +4671,21 @@ VIEWS.warehouse = () => {
     ]),
   ]));
 
+  // Покрытие остатками из 1С: сколько номенклатур с остатком + время/итог последнего синка
+  const covLine = el('div', { class:'muted', style:'font-size:12px;margin:-6px 0 14px' }, 'Остатки 1С: загрузка…');
+  wrap.append(covLine);
+  window.__API__.apiFetch('catalog/stock-coverage').then(c => {
+    const total = c.total || 0, withStock = c.withStock || 0;
+    let when = '—';
+    if (c.lastAt) {
+      const dt = new Date(String(c.lastAt).replace(' ', 'T') + 'Z');
+      when = isNaN(dt) ? c.lastAt : dt.toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+    }
+    let txt = `Остатки 1С: ${withStock.toLocaleString('ru-RU')} позиций с остатком из ${total.toLocaleString('ru-RU')} номенклатур · обновлено ${when}`;
+    if (c.info) txt += ` · ${c.info}`;
+    covLine.textContent = txt;
+  }).catch(() => { covLine.textContent = 'Остатки 1С: статус недоступен'; });
+
   // Сводка по складу (серверный подсчёт по всем товарам)
   const stats = el('div', { class:'grid grid-4' }, [
     statCard('SKU на складе', '…', '', '', '📦'),
