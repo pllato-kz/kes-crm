@@ -3496,19 +3496,58 @@ async function openDealDetail(id, opts) {
 
   const clx = cl || { name: '—', phone: '', bin: '' };
 
-  // ----- Воронка-шевроны (этапы воронки этой сделки) -----
+  // ----- Этап сделки: компактный выпадающий список (перемещение сразу, без перезагрузки) -----
   let chosenStage = d.stage;
   const dealStages = pipelineStages(stagePipeline(d.stage)).length ? pipelineStages(stagePipeline(d.stage)) : STAGES;
-  const funnel = el('div', { class:'funnel-steps' });
-  const renderFunnel = () => {
-    funnel.innerHTML = '';
-    const curIdx = dealStages.findIndex(st => st.id === chosenStage);
-    dealStages.forEach((st, i) => {
-      const cls = st.id === chosenStage ? 'active' : (curIdx >= 0 && i < curIdx ? 'done' : '');
-      funnel.append(el('div', { class:'funnel-step ' + cls, title: st.label, onclick: () => { if (!canEdit) return; chosenStage = st.id; renderFunnel(); } }, st.label));
+  const stageBtn = el('button', { class:'stage-dd-btn', type:'button' });
+  const stageMenu = el('div', { class:'stage-dd-menu', style:'display:none' });
+  const stageBar = el('div', { class:'deal-stagebar' }, [el('div', { class:'stage-dd' }, [stageBtn, stageMenu])]);
+  const curStageObj = () => dealStages.find(st => st.id === chosenStage) || { label:'—', color:'#9CA3AF' };
+  const renderStageBtn = () => {
+    const s = curStageObj();
+    stageBtn.innerHTML = '';
+    stageBtn.append(
+      el('span', { class:'stage-dot', style:`background:${s.color || '#9CA3AF'}` }),
+      el('span', { class:'stage-lbl' }, 'Этап: ' + (s.label || '—')),
+      canEdit ? el('span', { class:'stage-caret' }, '▾') : null,
+    );
+  };
+  const closeStageMenu = () => { stageMenu.style.display = 'none'; stageBtn.classList.remove('open'); };
+  const buildStageMenu = () => {
+    stageMenu.innerHTML = '';
+    dealStages.forEach(st => {
+      const active = st.id === chosenStage;
+      stageMenu.append(el('div', { class:'stage-dd-item' + (active ? ' active' : ''), onclick: () => moveDealToStage(st) }, [
+        el('span', { class:'stage-dot', style:`background:${st.color || '#9CA3AF'}` }),
+        el('span', { class:'stage-dd-lbl' }, st.label),
+        active ? el('span', { class:'stage-dd-check' }, '✓') : null,
+      ]));
     });
   };
-  renderFunnel();
+  // alias для существующих вызовов (renderShip и т.п.)
+  const renderFunnel = () => { renderStageBtn(); buildStageMenu(); };
+  async function moveDealToStage(st) {
+    closeStageMenu();
+    if (!canEdit || st.id === chosenStage) return;
+    const prev = chosenStage;
+    chosenStage = st.id; d.stage = st.id; renderStageBtn();
+    try {
+      await window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body:{ stage_id: st.id } });
+      toast('Этап изменён: ' + st.label, 'success');
+    } catch (e) { chosenStage = prev; d.stage = prev; renderStageBtn(); toast('Не удалось изменить этап', 'error'); }
+  }
+  stageBtn.onclick = (e) => {
+    if (!canEdit) return;
+    e.stopPropagation();
+    if (stageMenu.style.display !== 'none') { closeStageMenu(); return; }
+    buildStageMenu(); stageMenu.style.display = 'block'; stageBtn.classList.add('open');
+  };
+  document.addEventListener('click', function onStageDoc(ev) {
+    if (!document.body.contains(stageBtn)) { document.removeEventListener('click', onStageDoc); return; }
+    if (!stageBar.contains(ev.target)) closeStageMenu();
+  });
+  if (!canEdit) stageBtn.disabled = true;
+  renderStageBtn();
 
   // ----- Левая панель: форма -----
   const titleI = el('input', { value: d.title || '', placeholder:'Название сделки' });
@@ -3835,7 +3874,11 @@ async function openDealDetail(id, opts) {
   // Вкладки строятся динамически по правам: разделы Документы/Отгрузка/Задачи
   // показываются только при доступе к соответствующему модулю. Скрытые вкладки
   // не появляются ни как кнопка, ни как панель с данными.
+  // «Сделка» — раздел с информацией о клиенте/сделке; на мобильном сюда переезжает левая
+  // панель (на десктопе она остаётся отдельной колонкой, а эта вкладка скрыта через CSS).
+  const paneInfo = el('div', { class:'chat-pane', 'data-pane':'info' });
   const tabDefs = [
+    ['info', 'Сделка', paneInfo, true],
     ['items', 'Товары', paneItems, true],
     ['whatsapp', 'WhatsApp', paneWhats, true],
     ['comments', 'Комментарии', paneComments, true],
@@ -3846,9 +3889,11 @@ async function openDealDetail(id, opts) {
   ].filter(t => t[3]);
   const tabPanes = tabDefs.map(t => t[2]);
 
+  let curTab = 'whatsapp';
   const tabs = el('div', { class:'chat-tabs' });
   function switchTab(key) {
     if (!tabDefs.some(t => t[0] === key)) return; // нет доступа к вкладке — игнорируем
+    curTab = key;
     tabs.querySelectorAll('.chat-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === key));
     tabPanes.forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === key));
   }
@@ -3857,6 +3902,27 @@ async function openDealDetail(id, opts) {
   if (opts && opts.tab) switchTab(opts.tab); // открыть на нужной вкладке (если доступна)
 
   const right = el('div', { class:'deal-right' }, [tabs, ...tabPanes]);
+  const dealSplitEl = el('div', { class:'deal-split' }, [left, right]);
+
+  // Адаптивность: на телефоне инфо-панель «Сделка» становится вкладкой (left переезжает
+  // в paneInfo), на десктопе — отдельная левая колонка. Переключаем по ширине экрана.
+  const mqMobile = window.matchMedia('(max-width: 860px)');
+  let dealLayoutInit = true;
+  function applyDealLayout() {
+    if (mqMobile.matches) {
+      if (left.parentNode !== paneInfo) paneInfo.appendChild(left);
+      if (dealLayoutInit && !(opts && opts.tab)) switchTab('info'); // на телефоне открываем на «Сделка»
+    } else {
+      if (left.parentNode !== dealSplitEl) dealSplitEl.insertBefore(left, dealSplitEl.firstChild);
+      if (curTab === 'info') switchTab('whatsapp');
+    }
+    dealLayoutInit = false;
+  }
+  applyDealLayout();
+  mqMobile.addEventListener('change', function onMq() {
+    if (!document.body.contains(stageBar)) { mqMobile.removeEventListener('change', onMq); return; }
+    applyDealLayout();
+  });
 
   // ----- Чат (Green API) -----
   function bubble(mm) {
@@ -3922,7 +3988,7 @@ async function openDealDetail(id, opts) {
   openModal({
     wide: true,
     title: d.title,
-    body: el('div', { class:'deal-modal' }, [funnel, el('div', { class:'deal-split' }, [left, right])]),
+    body: el('div', { class:'deal-modal' }, [stageBar, dealSplitEl]),
     foot: [
       el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
       canEdit ? el('button', { class:'btn', title:'Зарезервировать позиции сделки на складе', onclick: async (e) => {
