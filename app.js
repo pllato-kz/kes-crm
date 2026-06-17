@@ -1470,7 +1470,7 @@ function openProductDetail(idOrProduct) {
       el('dt', {}, 'Единица'),       el('dd', {}, p.unit),
       el('dt', {}, 'Остаток'),       el('dd', {}, `${p.stock} ${p.unit}`),
       el('dt', {}, 'Зарезервировано'), el('dd', {}, `${p.reserved} ${p.unit}`),
-      el('dt', {}, 'Доступно'),      el('dd', {}, stockIndicator(free, p.stock)),
+      el('dt', {}, 'Доступно'),      el('dd', {}, stockIndicator(free, p.stock, { noBar: true })),
       el('dt', {}, 'Маржа розница'), el('dd', {}, margin != null ? (margin >= 0 ? '+' : '') + margin + '%' : '—'),
     ]));
   }
@@ -2684,9 +2684,14 @@ function statCard(label, value, delta, dir, icon) {
   ]);
 }
 
-function stockIndicator(free, total) {
-  const pct = total ? Math.min(100, Math.round(free / total * 100)) : 0;
+function stockIndicator(free, total, opts) {
   const cls = free < 20 ? 'crit' : free < 50 ? 'low' : '';
+  if (opts && opts.noBar) {
+    // без полоски — только число (цвет сохраняем для сигнала о низком остатке)
+    const color = free < 20 ? 'var(--red)' : free < 50 ? 'var(--amber)' : 'inherit';
+    return el('span', { style: `font-size:12px;font-variant-numeric:tabular-nums;color:${color}` }, String(free));
+  }
+  const pct = total ? Math.min(100, Math.round(free / total * 100)) : 0;
   return el('span', { class: 'stock-bar ' + cls }, [
     el('span', { class: 'bar' }, el('span', { class: 'bar-fill', style: `width:${pct}%` })),
     el('span', {}, String(free)),
@@ -4938,7 +4943,7 @@ VIEWS.warehouse = () => {
           p.reserved > 0
             ? el('td', { class:'num strong', style:'cursor:pointer;color:var(--brand)', title:'Показать, какие сделки держат резерв', onclick: (e) => { e.stopPropagation(); openReservations(p); } }, p.reserved)
             : el('td', { class:'num muted' }, p.reserved),
-          el('td', { class:'num' }, stockIndicator(free, p.stock)),
+          el('td', { class:'num' }, stockIndicator(free, p.stock, { noBar: true })),
           el('td', { class:'num' }, p.priceCost ? fmtMoney(p.priceCost) : '—'),
         ]);
       });
