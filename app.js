@@ -1776,16 +1776,15 @@ function openSupplierDetail(id) {
   const fContact = fInput('Контактное лицо', sp.contact || '');
   const fPhone = fInput('Телефон', sp.phone || '');
   const fEmail = fInput('Email', sp.email || '', { type: 'email' });
-  const fShare = fInput('Доля закупок, %', sp.share != null ? sp.share : '', { type: 'number' });
   const fDelivery = fDateField('Последняя поставка', String(sp.lastDelivery || '').slice(0, 10));
   const fNote = fTextarea('Комментарий', sp.note || '');
-  const fields = [fName, fBin, fContact, fPhone, fEmail, fShare, fDelivery, fNote];
+  const fields = [fName, fBin, fContact, fPhone, fEmail, fDelivery, fNote];
 
   async function save(btn) {
     if (btn) btn.disabled = true;
     const upd = {
       id: sp.id, name: fName.get().trim() || sp.name, bin: fBin.get(), contact: fContact.get(), phone: fPhone.get(),
-      email: fEmail.get(), share: Number(fShare.get()) || 0, lastDelivery: fDelivery.getDate(), note: fNote.get(),
+      email: fEmail.get(), share: sp.share || 0, lastDelivery: fDelivery.getDate(), note: fNote.get(),
     };
     try {
       const saved = await window.__API__.apiFetch('suppliers/' + sp.id, { method:'PUT', body: window.__API__.toApi.supplier(upd) });
@@ -5468,9 +5467,7 @@ VIEWS.suppliers = () => {
       grid.append(el('div', { class:'card', style:'cursor:pointer', title:'Открыть и редактировать поставщика', onclick: () => openSupplierDetail(s.id) }, [
         el('div', { class:'row', style:'justify-content:space-between;margin-bottom:8px' }, [
           el('div', { class:'strong', style:'font-size:15px' }, s.name),
-          el('span', { class:'pill pill-info' }, s.share + '% закупок'),
         ]),
-        el('div', { class:'bar-mini' }, el('div', { style:`width:${s.share}%` })),
         el('dl', { class:'kv mt-12', style:'grid-template-columns:120px 1fr' }, [
           el('dt', {}, 'БИН'),           el('dd', {}, s.bin || '—'),
           el('dt', {}, 'Контакт'),       el('dd', {}, s.contact || '—'),
