@@ -3409,14 +3409,17 @@ async function openDealDetail(id, opts) {
           el('div', { class:'muted', style:'font-size:11px' }, p.sku + (p.brand ? ' · ' + p.brand : '')),
           basesRow,
         ]);
+        // data-label — подписи для мобильной карточной раскладки (CSS ::before)
+        priceCell.setAttribute('data-label', 'Цена / наценка');
+        sumCell.setAttribute('data-label', 'Сумма');
         tb.append(el('tr', {}, [
-          el('td', {}, nameBlock),
-          el('td', { class:'num' }, canEdit
+          el('td', { class:'li-name' }, nameBlock),
+          el('td', { class:'num', 'data-label':'Кол-во' }, canEdit
             ? el('input', { class:'qty', type:'number', min:'1', value: it.qty, oninput: (e) => { it.qty = Math.max(1, +e.target.value || 1); recalc(); } })
             : String(it.qty)),
           priceCell,
           sumCell,
-          el('td', {}, canEdit ? el('button', { class:'x-btn', title:'Удалить', onclick: () => { d.lineItems.splice(idx, 1); recomputeAmount(); renderItems(); } }, '×') : null),
+          el('td', { class:'li-del' }, canEdit ? el('button', { class:'x-btn', title:'Удалить', onclick: () => { d.lineItems.splice(idx, 1); recomputeAmount(); renderItems(); } }, '×') : null),
         ]));
       });
     }
@@ -3903,6 +3906,31 @@ async function openDealDetail(id, opts) {
 
   const right = el('div', { class:'deal-right' }, [tabs, ...tabPanes]);
   const dealSplitEl = el('div', { class:'deal-split' }, [left, right]);
+
+  // Свайп между разделами (только на телефоне): горизонтальный жест листает вкладки.
+  // После переключения активную вкладку подкручиваем в зону видимости панели вкладок.
+  function gotoTabDelta(delta) {
+    const keys = tabDefs.map(td => td[0]);
+    const i = keys.indexOf(curTab);
+    if (i < 0) return;
+    const j = i + delta;
+    if (j < 0 || j >= keys.length) return;
+    switchTab(keys[j]);
+    const at = tabs.querySelector('.chat-tab.active');
+    if (at && at.scrollIntoView) at.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  }
+  let swX = 0, swY = 0, swReady = false;
+  right.addEventListener('touchstart', (e) => {
+    if (!mqMobile.matches || e.touches.length !== 1) { swReady = false; return; }
+    swX = e.touches[0].clientX; swY = e.touches[0].clientY; swReady = true;
+  }, { passive: true });
+  right.addEventListener('touchend', (e) => {
+    if (!swReady) return; swReady = false;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - swX, dy = t.clientY - swY;
+    if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.6) return; // не горизонтальный свайп
+    gotoTabDelta(dx < 0 ? 1 : -1);
+  }, { passive: true });
 
   // Адаптивность: на телефоне инфо-панель «Сделка» становится вкладкой (left переезжает
   // в paneInfo), на десктопе — отдельная левая колонка. Переключаем по ширине экрана.

@@ -855,20 +855,37 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 
 @media (max-width: 860px) {
   /* Карточка сделки на телефоне: одна колонка (инфо-панель уезжает во вкладку «Сделка»),
-     карточка заполняет модалку, прокрутка — внутри активной вкладки. */
+     карточка заполняет модалку, прокрутка — внутри активной вкладки, разделы листаются свайпом. */
   .modal.modal-xl { height: 92vh; max-height: 92vh; }
   .deal-split { grid-template-columns: 1fr; }
   .deal-right { min-height: 0; }
   .deal-stagebar { padding: 10px 12px; }
   .deal-actions button { flex: 1 1 auto; }
-  /* таблица товаров: не схлопывать колонки в кашу — даём мин. ширину и прокрутку */
-  .chat-items { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .line-items-table { min-width: 460px; }
-  /* «Сделка» — вкладка; полоса вкладок прокручивается по горизонтали */
+
+  /* «Сделка» — вкладка; вкладки ПЕРЕНОСятся, чтобы все были видны (ничего не скрыто) */
   .chat-tab[data-tab="info"] { display: block; }
-  .chat-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }
-  .chat-tab { flex: none; }
+  .chat-tabs { flex-wrap: wrap; overflow: visible; white-space: normal; padding: 8px 10px; gap: 5px 6px; }
+  .chat-tab { flex: none; padding: 6px 10px; font-size: 12.5px; border-bottom: 0; border-radius: 7px; background: #F1F3F5; color: var(--muted); }
+  .chat-tab.active { background: var(--brand-soft); color: var(--brand-dark); }
+
+  /* Товары — вертикальные карточки вместо широкой таблицы (без перегруза в одну строку) */
+  .chat-items { overflow-x: visible; }
+  .line-items-table { min-width: 0; }
+  .line-items-table thead { display: none; }
+  .line-items-table, .line-items-table tbody, .line-items-table tr, .line-items-table td { display: block; width: auto; }
+  .line-items-table tr { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: #fff; }
+  .line-items-table td { border: 0; padding: 4px 0; text-align: left; white-space: normal; }
+  .line-items-table td.num { text-align: left; }
+  .line-items-table td.li-name { font-weight: 600; padding-bottom: 6px; }
+  .line-items-table td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); font-weight: 500; margin-bottom: 3px; }
+  .line-items-table td.li-del { text-align: right; padding-top: 2px; }
+  .line-items-table input.qty { width: 100%; max-width: 200px; height: 38px; font-size: 15px; }
+
+  /* плавный переход между разделами при свайпе/тапе */
+  .chat-pane.active { animation: dealPaneIn .18s ease; }
 }
+
+@keyframes dealPaneIn { from { opacity: .4; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 
 .form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
 .form-row label { font-size: 12px; color: var(--muted); font-weight: 500; }
@@ -1444,9 +1461,7 @@ body.dragging-stage { user-select: none; cursor: grabbing; }
   .page-head .actions { width: 100%; }
   .page-head .actions > * { flex: 1 1 auto; }
 
-  /* карточка сделки: вкладки чата прокручиваются, воронка не сжимается в кашу */
-  .chat-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .funnel-steps { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* (вкладки карточки сделки настраиваются ниже — перенос строк, чтобы все были видны) */
 }
 
 @media (max-width: 480px) {
