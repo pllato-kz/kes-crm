@@ -91,7 +91,7 @@
     shipment: (s) => ({
       id: s.id, no: s.no, deal: s.deal_id, client: s.client_id, date: s.date, items: s.items,
       weight: s.weight, transport: s.transport, driver: s.driver, status: s.status_id, destination: s.destination,
-      deliveryPhoto: s.delivery_photo, deliveredAt: s.delivered_at, deliveredBy: s.delivered_by,
+      deliveryPhoto: s.delivery_photo, deliveryPhotos: s.delivery_photos, deliveredAt: s.delivered_at, deliveredBy: s.delivered_by,
     }),
     receipt: (r) => ({
       id: r.id, no: r.no, supplier: r.supplier_id, supplierName: r.supplier_name, date: r.date, items: r.items,
