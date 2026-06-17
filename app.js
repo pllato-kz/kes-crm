@@ -1452,7 +1452,9 @@ function openProductDetail(idOrProduct) {
   const priceHost = el('div', { style:'margin-bottom:14px' });
   const kvHost = el('div');
   function renderInfo() {
-    const free = p.stock - p.reserved;
+    const stock = Number(p.stock) || 0, reserved = Number(p.reserved) || 0;
+    const free = stock - reserved;
+    const unit = p.unit || '';
     const cost = Number(p.priceCost) || 0, opt = Number(p.priceWholesale) || 0, rozn = Number(p.priceRetail) || 0;
     const below = (opt > 0 && opt < cost) || (rozn > 0 && rozn < cost);
     priceHost.innerHTML = '';
@@ -1467,10 +1469,10 @@ function openProductDetail(idOrProduct) {
     const margin = priceMarginPct(cost, rozn);
     kvHost.innerHTML = '';
     kvHost.append(el('dl', { class:'kv' }, [
-      el('dt', {}, 'Единица'),       el('dd', {}, p.unit),
-      el('dt', {}, 'Остаток'),       el('dd', {}, `${p.stock} ${p.unit}`),
-      el('dt', {}, 'Зарезервировано'), el('dd', {}, `${p.reserved} ${p.unit}`),
-      el('dt', {}, 'Доступно'),      el('dd', {}, stockIndicator(free, p.stock, { noBar: true })),
+      el('dt', {}, 'Единица'),       el('dd', {}, p.unit || '—'),
+      el('dt', {}, 'Остаток'),       el('dd', {}, `${stock}${unit ? ' ' + unit : ''}`),
+      el('dt', {}, 'Зарезервировано'), el('dd', {}, `${reserved}${unit ? ' ' + unit : ''}`),
+      el('dt', {}, 'Доступно'),      el('dd', {}, stockIndicator(free, stock, { noBar: true })),
       el('dt', {}, 'Маржа розница'), el('dd', {}, margin != null ? (margin >= 0 ? '+' : '') + margin + '%' : '—'),
     ]));
   }
@@ -4702,7 +4704,7 @@ VIEWS.catalog = () => {
             return el('td', { class:'num', style: 'font-weight:600;' + (m == null ? 'color:#9CA3AF' : 'color:' + (m < 0 ? '#EF4444' : '#10B981')), title: below ? 'Есть цена ниже закупа' : '' },
               m == null ? '—' : ((m >= 0 ? '+' : '') + m + '%' + (below ? ' ⚠️' : '')));
           })(),
-          el('td', {}, stockIndicator(p.stock - p.reserved, p.stock)),
+          el('td', {}, stockIndicator(p.stock - p.reserved, p.stock, { noBar: true })),
         ]);
       });
       syncSelAll();
