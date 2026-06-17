@@ -730,9 +730,41 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .modal.modal-xl .modal-foot { flex: none; }
 .deal-modal { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .deal-modal .funnel-steps { flex: none; }
+.deal-modal .deal-stagebar { flex: none; }
 /* убираем скроллбары внутри карточки сделки (скролл остаётся) */
 .modal.modal-xl * { scrollbar-width: none; }
 .modal.modal-xl *::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+/* ---------- Этап сделки: компактный выпадающий список (замена воронки-шевронов) ---------- */
+.deal-stagebar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.stage-dd { position: relative; }
+.stage-dd-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px; border: 1px solid var(--border); border-radius: 999px;
+  background: #fff; font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer;
+}
+.stage-dd-btn:hover { border-color: var(--brand); }
+.stage-dd-btn:disabled { cursor: default; opacity: .9; }
+.stage-dd-btn.open { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(0,166,226,.12); }
+.stage-dd-btn .stage-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.stage-dd-btn .stage-caret { color: var(--muted); font-size: 11px; }
+.stage-dd-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40;
+  min-width: 240px; max-height: 320px; overflow-y: auto;
+  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow-lg); padding: 6px;
+}
+.stage-dd-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; cursor: pointer; font-size: 13.5px; }
+.stage-dd-item:hover { background: var(--brand-soft); }
+.stage-dd-item.active { background: var(--brand-soft); font-weight: 700; color: var(--brand-dark); }
+.stage-dd-item .stage-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.stage-dd-item .stage-dd-lbl { flex: 1; }
+.stage-dd-item .stage-dd-check { color: var(--brand); font-weight: 700; }
+
+/* Вкладка «Сделка» (инфо/клиент) — только на мобильном; на десктопе левая колонка видна всегда */
+.chat-tab[data-tab="info"] { display: none; }
+.chat-pane[data-pane="info"] { padding: 0; }
+.chat-pane[data-pane="info"] .deal-left { flex: 1; min-height: 0; width: 100%; border: 0; }
 
 .funnel-steps { display: flex; gap: 3px; padding: 14px 18px; border-bottom: 1px solid var(--border); overflow-x: auto; }
 .funnel-step {
@@ -822,20 +854,20 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .chat-comments textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 13px; font-family: inherit; outline: none; resize: vertical; min-height: 120px; }
 
 @media (max-width: 860px) {
-  /* Карточка сделки на телефоне: вместо двух колонок — стопка, вся карточка
-     прокручивается вертикально, правая панель (чат/товары/документы/отгрузка)
-     получает высоту, чтобы её содержимое скроллилось внутри. */
+  /* Карточка сделки на телефоне: одна колонка (инфо-панель уезжает во вкладку «Сделка»),
+     карточка заполняет модалку, прокрутка — внутри активной вкладки. */
   .modal.modal-xl { height: 92vh; max-height: 92vh; }
-  .modal.modal-xl .modal-body { display: block; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-  .deal-modal { display: block; }
-  .deal-split { display: block; height: auto; }
-  .deal-left { border-right: 0; border-bottom: 1px solid var(--border); overflow: visible; }
-  .deal-right { height: 76vh; max-height: 76vh; }
-  .funnel-steps { padding: 10px 12px; }
+  .deal-split { grid-template-columns: 1fr; }
+  .deal-right { min-height: 0; }
+  .deal-stagebar { padding: 10px 12px; }
   .deal-actions button { flex: 1 1 auto; }
   /* таблица товаров: не схлопывать колонки в кашу — даём мин. ширину и прокрутку */
   .chat-items { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .line-items-table { min-width: 460px; }
+  /* «Сделка» — вкладка; полоса вкладок прокручивается по горизонтали */
+  .chat-tab[data-tab="info"] { display: block; }
+  .chat-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }
+  .chat-tab { flex: none; }
 }
 
 .form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
