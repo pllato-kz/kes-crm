@@ -1575,30 +1575,92 @@ async function setShipmentStatus(s, status) {
   } catch (err) { s.status = prev; toast('Не удалось обновить статус отгрузки', 'error'); return false; }
 }
 
+// Список URL фото доставки отгрузки (из JSON-массива delivery_photos, с откатом на одиночное delivery_photo).
+function shipDeliveryPhotos(ship) {
+  const out = [];
+  if (ship && ship.deliveryPhotos) { try { const a = JSON.parse(ship.deliveryPhotos); if (Array.isArray(a)) out.push(...a); } catch (_) {} }
+  if (!out.length && ship && ship.deliveryPhoto) out.push(ship.deliveryPhoto);
+  return out.filter(Boolean);
+}
+// Галерея загруженных фото доставки + «кто доставил и когда» (видна всем сотрудникам).
+function deliveryGallery(ship) {
+  const photos = shipDeliveryPhotos(ship);
+  if (!photos.length) return null;
+  const who = userById(ship.deliveredBy);
+  let when = '';
+  if (ship.deliveredAt) { const dt = new Date(ship.deliveredAt); if (!isNaN(dt)) when = dt.toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }); }
+  return el('div', { style:'margin-top:10px' }, [
+    el('div', { style:'font-weight:600;font-size:12px;margin-bottom:6px;color:#6B7280;text-transform:uppercase;letter-spacing:.5px' }, 'Фото доставки (' + photos.length + ')'),
+    el('div', { style:'display:flex;flex-wrap:wrap;gap:8px' }, photos.map(u =>
+      el('a', { href: u, target:'_blank', title:'Открыть фото' }, el('img', { src: u, alt:'Фото доставки', loading:'lazy', style:'width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #E5E7EB' })))),
+    (who || when) ? el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, 'Доставил: ' + ((who && who.name) || '—') + (when ? ' · ' + when : '')) : null,
+  ]);
+}
+// Инлайн-форма подтверждения доставки: загрузка одной/нескольких фотографий → статус «Доставлено».
+// Удобна и на телефоне (capture камеры, multiple), и на ПК. onDone() — колбэк после успеха.
+function deliveryConfirmBlock(ship, onDone) {
+  let files = [];
+  const input = el('input', { type:'file', accept:'image/*', capture:'environment', multiple: true, style:'display:none' });
+  const preview = el('div', { style:'display:flex;flex-wrap:wrap;gap:8px;margin:8px 0' });
+  const confirmBtn = el('button', { class:'btn btn-sm btn-primary', disabled:'disabled' }, '✅ Подтвердить доставку');
+  const renderPreview = () => {
+    preview.innerHTML = '';
+    files.forEach((f, i) => {
+      const url = URL.createObjectURL(f);
+      preview.append(el('div', { style:'position:relative' }, [
+        el('img', { src:url, style:'width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid #E5E7EB' }),
+        el('button', { class:'btn btn-sm btn-danger', title:'Убрать', style:'position:absolute;top:-7px;right:-7px;padding:0 6px;border-radius:999px;line-height:1.5', onclick: () => { files.splice(i, 1); renderPreview(); } }, '×'),
+      ]));
+    });
+    confirmBtn.disabled = !files.length;
+  };
+  input.onchange = () => { files = files.concat([...(input.files || [])]); input.value = ''; renderPreview(); };
+  confirmBtn.onclick = async () => {
+    if (!files.length) return;
+    confirmBtn.disabled = true; const old = confirmBtn.textContent; confirmBtn.textContent = 'Загрузка…';
+    try {
+      const urls = [];
+      for (const f of files) { const up = await window.__API__.uploadFile(f); urls.push(up.url); }
+      const saved = await window.__API__.apiFetch('shipments/' + ship.id, { method:'PUT', body:{ status_id:'delivered', delivery_photos: JSON.stringify(urls), delivery_photo: urls[0], delivered_by: currentUser.id, delivered_at: new Date().toISOString() } });
+      if (saved) Object.assign(ship, window.__API__.map.shipment(saved));
+      await setShipmentStatus(ship, 'delivered'); // синхронизируем этап сделки
+      toast('Доставлено · фото сохранено (' + urls.length + '), бухгалтер уведомлён', 'success');
+      if (onDone) onDone();
+    } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); confirmBtn.disabled = false; confirmBtn.textContent = old; }
+  };
+  return el('div', { style:'margin-top:10px;padding:10px;border:1px dashed #CBD5E1;border-radius:10px;background:#F8FAFC' }, [
+    el('div', { style:'font-weight:600;font-size:13px;margin-bottom:2px' }, 'Подтверждение доставки'),
+    el('div', { class:'muted', style:'font-size:12px;margin-bottom:8px' }, 'Прикрепите одну или несколько фотографий — после загрузки статус станет «Доставлено».'),
+    el('button', { class:'btn btn-sm', onclick: () => input.click() }, '📷 Добавить фото'),
+    input,
+    preview,
+    confirmBtn,
+  ]);
+}
+
 function openShipmentDetail(id) {
   const s = byId(state.shipments, id);
   if (!s) return;
   const cl = clientById(s.client);
   const d = byId(state.deals, s.deal);
-  openModal({
-    title: 'Отгрузка ' + s.no,
-    body: el('div', {}, [
-      el('dl', { class:'kv' }, [
-        el('dt', {}, 'Сделка'),    el('dd', {}, d ? d.title : '—'),
-        el('dt', {}, 'Клиент'),     el('dd', {}, cl.name),
-        el('dt', {}, 'Адрес'),      el('dd', {}, s.destination),
-        el('dt', {}, 'Дата'),       el('dd', {}, fmtDate(s.date)),
-        el('dt', {}, 'Позиций'),    el('dd', {}, s.items),
-        el('dt', {}, 'Вес'),        el('dd', {}, s.weight + ' кг'),
-        el('dt', {}, 'Транспорт'),  el('dd', {}, s.transport),
-        el('dt', {}, 'Водитель'),   el('dd', {}, s.driver),
-        el('dt', {}, 'Статус'),     el('dd', {}, s.status),
-      ]),
+  const body = el('div', {}, [
+    el('dl', { class:'kv' }, [
+      el('dt', {}, 'Сделка'),    el('dd', {}, d ? d.title : '—'),
+      el('dt', {}, 'Клиент'),     el('dd', {}, cl.name),
+      el('dt', {}, 'Адрес'),      el('dd', {}, s.destination),
+      el('dt', {}, 'Дата'),       el('dd', {}, fmtDate(s.date)),
+      el('dt', {}, 'Позиций'),    el('dd', {}, s.items),
+      el('dt', {}, 'Вес'),        el('dd', {}, s.weight + ' кг'),
+      el('dt', {}, 'Транспорт'),  el('dd', {}, s.transport),
+      el('dt', {}, 'Водитель'),   el('dd', {}, s.driver),
+      el('dt', {}, 'Статус'),     el('dd', {}, s.status),
     ]),
-    foot: [
-      el('button', { class:'btn btn-primary', onclick: async () => { if (await setShipmentStatus(s, 'delivered')) { closeModal(); toast('Отгрузка доставлена · сделка синхронизирована', 'success'); if (CURRENT_VIEW) navigate(CURRENT_VIEW); } } }, '✓ Доставлено'),
-    ],
-  });
+  ]);
+  const g = deliveryGallery(s); if (g) body.append(g);
+  if (s.status !== 'delivered' && can('mark-delivered')) {
+    body.append(deliveryConfirmBlock(s, () => { closeModal(); toast('Отгрузка доставлена · сделка синхронизирована', 'success'); if (CURRENT_VIEW) navigate(CURRENT_VIEW); }));
+  }
+  openModal({ title: 'Отгрузка ' + s.no, body, foot: [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')] });
 }
 
 // Документ отгрузки → модалка со сводкой по сделке (без перехода в карточку).
@@ -1633,13 +1695,11 @@ async function openShipmentDoc(r) {
     ]),
   ]);
 
-  // Фото-подтверждение доставки (если уже загружено)
-  if (ship && ship.deliveryPhoto) {
-    body.append(el('div', { style:'margin-top:12px' }, [
-      el('div', { style:'font-weight:600;font-size:12px;margin-bottom:6px;color:#6B7280;text-transform:uppercase;letter-spacing:.5px' }, 'Фото доставки'),
-      el('a', { href: ship.deliveryPhoto, target:'_blank' }, el('img', { src: ship.deliveryPhoto, alt:'Фото доставки', style:'max-width:100%;max-height:240px;object-fit:contain;border-radius:8px;border:1px solid #E5E7EB' })),
-      ship.deliveredAt ? el('div', { class:'muted', style:'font-size:12px;margin-top:4px' }, 'Доставлено: ' + fmtDate(ship.deliveredAt)) : null,
-    ]));
+  // Фото-подтверждение доставки (если уже загружены) — галерея, видна всем сотрудникам
+  if (ship) { const g = deliveryGallery(ship); if (g) body.append(g); }
+  // Форма загрузки фото и отметки «Доставлено» (водитель/директор/кладовщик), пока не доставлено
+  if (ship && ship.status !== 'delivered' && can('mark-delivered')) {
+    body.append(deliveryConfirmBlock(ship, () => { closeModal(); if (CURRENT_VIEW) navigate(CURRENT_VIEW); }));
   }
 
   const foot = [];
@@ -1665,23 +1725,7 @@ async function openShipmentDoc(r) {
     };
     foot.push(sel);
   }
-  // «Доставлено» с фото-подтверждением (водитель/директор/кладовщик)
-  if (ship && ship.status !== 'delivered' && can('mark-delivered')) {
-    const photoInput = el('input', { type:'file', accept:'image/*', capture:'environment', style:'display:none' });
-    photoInput.onchange = async () => {
-      const f = photoInput.files && photoInput.files[0]; if (!f) return;
-      toast('Загрузка фото…', 'info');
-      try {
-        const up = await window.__API__.uploadFile(f);
-        const saved = await window.__API__.apiFetch('shipments/' + ship.id, { method:'PUT', body:{ status_id:'delivered', delivery_photo: up.url, delivered_by: currentUser.id } });
-        if (saved) Object.assign(ship, window.__API__.map.shipment(saved));
-        await setShipmentStatus(ship, 'delivered'); // синхронизируем этап сделки
-        toast('Доставлено · фото сохранено, бухгалтер уведомлён', 'success');
-        closeModal(); if (CURRENT_VIEW) navigate(CURRENT_VIEW);
-      } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
-    };
-    foot.push(photoInput, el('button', { class:'btn btn-primary', onclick: () => photoInput.click() }, '✅ Доставлено + фото'));
-  }
+  // (отметка «Доставлено» с фото перенесена в тело модалки — см. deliveryConfirmBlock выше)
   if (deal) foot.push(el('button', { class:'btn', onclick: () => { closeModal(); openDealDetail(deal.id); } }, 'Открыть сделку'));
   openModal({ title: ship ? ('Отгрузка ' + ship.no) : ('Документ · ' + (deal ? deal.title : '—')), body, foot });
 
@@ -3714,16 +3758,25 @@ async function openDealDetail(id, opts) {
     const stMap = { delivered:['pill-success','✓ Доставлена'], planned:['pill-info','⏱ Запланирована'], shipped:['pill-warn','🚚 В пути'] };
     ships.forEach(s => {
       const sp = stMap[s.status] || ['pill-muted', s.status || '—'];
-      const sel = el('select', {}, [
-        el('option', { value:'planned' }, 'Запланирована'),
-        el('option', { value:'shipped' }, 'В пути'),
-        el('option', { value:'delivered' }, 'Доставлена'),
-      ]);
-      sel.value = s.status;
-      sel.onchange = async () => {
-        if (await setShipmentStatus(s, sel.value)) { chosenStage = d.stage; renderFunnel(); renderShip(); toast('Статус отгрузки и сделки синхронизированы', 'success'); }
-        else sel.value = s.status;
-      };
+      // Смена статуса (кроме «Доставлено» — оно через фото-подтверждение) — для не-водителей
+      let statusRow = null;
+      if (canEdit && currentUser && currentUser.roleKey !== 'driver' && s.status !== 'delivered') {
+        const sel = el('select', {}, [
+          el('option', { value:'planned' }, 'Запланирована'),
+          el('option', { value:'shipped' }, 'В пути'),
+        ]);
+        sel.value = s.status === 'shipped' ? 'shipped' : 'planned';
+        sel.onchange = async () => {
+          if (await setShipmentStatus(s, sel.value)) { chosenStage = d.stage; renderFunnel(); renderShip(); toast('Статус отгрузки и сделки синхронизированы', 'success'); }
+          else sel.value = s.status;
+        };
+        statusRow = el('div', { style:'margin-top:8px' }, [el('label', { class:'muted', style:'font-size:12px;display:block;margin-bottom:4px' }, 'Статус отгрузки'), sel]);
+      }
+      // «Доставлено» с фото-подтверждением (водитель/директор/кладовщик); если уже доставлено — галерея
+      const onDelivered = () => { chosenStage = d.stage; renderFunnel(); renderShip(); };
+      const deliveryUI = s.status === 'delivered'
+        ? deliveryGallery(s)
+        : (can('mark-delivered') ? deliveryConfirmBlock(s, onDelivered) : null);
       shipList.append(el('div', { class:'card', style:'padding:12px;margin-bottom:10px' }, [
         el('div', { style:'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px' }, [
           el('div', { class:'strong' }, s.no),
@@ -3740,7 +3793,8 @@ async function openDealDetail(id, opts) {
           el('dt', {}, 'Водитель'), el('dd', {}, s.driver || '—'),
           el('dt', {}, 'Позиций'), el('dd', {}, s.items != null ? s.items : '—'),
         ]),
-        canEdit ? el('div', { style:'margin-top:8px' }, [el('label', { class:'muted', style:'font-size:12px;display:block;margin-bottom:4px' }, 'Статус отгрузки'), sel]) : null,
+        statusRow,
+        deliveryUI,
       ]));
     });
   }
@@ -5389,6 +5443,11 @@ VIEWS.shipments = () => {
           colEl.classList.remove('drag-over'); if (!dragged) return; e.preventDefault();
           const ship = byId(state.shipments, dragged.id);
           if (ship && dragged.status !== col.key) {
+            if (col.key === 'delivered') {
+              // «Доставлено» — только с фото-подтверждением (открываем карточку с формой загрузки)
+              openShipmentDoc({ kind:'ship', id: ship.id, deal: ship.deal });
+              return;
+            }
             const ok = await setShipmentStatus(ship, col.key);
             if (ok) { toast('Статус обновлён', 'success'); render(); } else toast('Не удалось обновить статус', 'error');
           }

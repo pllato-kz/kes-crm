@@ -2482,7 +2482,8 @@ async function ensureShipmentExtRef(env) {
   if (SHIP_EXTREF_OK) return;
   for (const ddl of [
     'ALTER TABLE shipments ADD COLUMN ext_ref TEXT',
-    'ALTER TABLE shipments ADD COLUMN delivery_photo TEXT', // фото-подтверждение доставки (URL в R2)
+    'ALTER TABLE shipments ADD COLUMN delivery_photo TEXT', // фото-подтверждение доставки (URL в R2; первое фото)
+    'ALTER TABLE shipments ADD COLUMN delivery_photos TEXT', // несколько фото доставки (JSON-массив URL в R2)
     'ALTER TABLE shipments ADD COLUMN delivered_at TEXT',
     'ALTER TABLE shipments ADD COLUMN delivered_by TEXT',   // user_id водителя
   ]) { try { await env.DB.prepare(ddl).run(); } catch (e) {} }
