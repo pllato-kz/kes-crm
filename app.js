@@ -3239,12 +3239,7 @@ async function openDealDetail(id, opts) {
           basesRow,
         ]);
         tb.append(el('tr', {}, [
-          el('td', {}, canEdit
-            ? el('div', { style:'display:flex;gap:8px;align-items:flex-start' }, [
-                el('input', { type:'checkbox', title:'Выбрать для наценки по формуле', checked: it.__sel ? 'checked' : null, style:'margin-top:3px;flex:none', onchange: (e) => { it.__sel = e.target.checked; } }),
-                nameBlock,
-              ])
-            : nameBlock),
+          el('td', {}, nameBlock),
           el('td', { class:'num' }, canEdit
             ? el('input', { class:'qty', type:'number', min:'1', value: it.qty, oninput: (e) => { it.qty = Math.max(1, +e.target.value || 1); recalc(); } })
             : String(it.qty)),
@@ -3448,30 +3443,12 @@ async function openDealDetail(id, opts) {
   const paneComments = el('div', { class:'chat-pane chat-comments', 'data-pane':'comments' }, [commentsTA]);
 
   // вкладка «Товары» — рядом с WhatsApp
-  // Наценка для этой сделки: редактируемые %, драйвят чипсы «фОпт/фРозн» и кнопки «ко всем»
-  const prcInput = (v) => el('input', { type:'number', step:'1', min:'0', value: v, style:'width:46px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;text-align:right' });
-  const prcOpt = prcInput(dealPricingCfg.opt || 0), prcRozn = prcInput(dealPricingCfg.rozn || 0), prcVat = prcInput(dealPricingCfg.vat || 0);
-  const applyPricingToSelected = (kind) => {
-    const selected = d.lineItems.filter(it => it.__sel);
-    if (!selected.length) { toast('Отметьте товары галочками слева', 'warn'); return; }
-    let n = 0, skipped = 0;
-    selected.forEach(it => { const p = byId(state.products, it.product); const cost = p ? Number(p.priceCost) || 0 : 0; if (cost <= 0) { skipped++; return; } const vat = 1 + (Number(dealPricingCfg.vat) || 0) / 100; const pct = kind === 'opt' ? dealPricingCfg.opt : dealPricingCfg.rozn; it.priceUsed = Math.round(cost * (1 + (Number(pct) || 0) / 100) * vat); n++; });
-    recomputeAmount(); renderItems();
-    toast(n ? `Применено к ${n} поз.` + (skipped ? ` (${skipped} без закупа пропущено)` : '') : 'У выбранных нет закупа', n ? 'success' : 'warn');
-  };
-  [prcOpt, prcRozn, prcVat].forEach(i => { if (!canEdit) i.disabled = true; i.oninput = () => { dealPricingCfg.opt = Number(prcOpt.value) || 0; dealPricingCfg.rozn = Number(prcRozn.value) || 0; dealPricingCfg.vat = Number(prcVat.value) || 0; renderItems(); }; });
-  function onPricingLoaded() { prcOpt.value = dealPricingCfg.opt || 0; prcRozn.value = dealPricingCfg.rozn || 0; prcVat.value = dealPricingCfg.vat || 0; try { renderItems(); } catch (e) {} }
-  const pricingPanel = el('div', { style:'display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;margin-bottom:10px;color:#6B7280;padding:8px 10px;background:#F7F8FA;border-radius:8px' }, [
-    el('span', { style:'font-weight:600' }, 'Наценка для сделки:'),
-    prcOpt, el('span', {}, '% опт'), prcRozn, el('span', {}, '% розн'), prcVat, el('span', {}, '% НДС'),
-    canEdit ? el('button', { class:'btn btn-sm', style:'margin-left:auto', title:'Выбрать/снять все', onclick: () => { const all = d.lineItems.length && d.lineItems.every(it => it.__sel); d.lineItems.forEach(it => it.__sel = !all); renderItems(); } }, 'Выбрать все') : null,
-    canEdit ? el('button', { class:'btn btn-sm', title:'Применить опт к отмеченным галочкой товарам', onclick: () => applyPricingToSelected('opt') }, 'Опт к выбранным') : null,
-    canEdit ? el('button', { class:'btn btn-sm', title:'Применить розницу к отмеченным галочкой товарам', onclick: () => applyPricingToSelected('rozn') }, 'Розн к выбранным') : null,
-  ]);
+  // Наценка опт/розница/НДС для этой сделки берётся из глобального «Ценообразования»
+  // (dealPricingCfg) и используется только для подсказок «фОпт/фРозн» в строках товара.
+  function onPricingLoaded() { try { renderItems(); } catch (e) {} }
 
   const paneItems = el('div', { class:'chat-pane chat-items', 'data-pane':'items' }, [
     el('div', { class:'section-title' }, 'Товары сделки'),
-    pricingPanel,
     itemsHost,
     pickerHost,
     el('div', { class:'row', style:'justify-content:space-between;margin-top:12px;font-size:14px;font-weight:600' }, [
