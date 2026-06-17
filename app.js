@@ -3366,15 +3366,21 @@ async function openDealDetail(id, opts) {
   const clientSearch = el('input', { placeholder:'Поиск клиента по имени / БИН / телефону…', style:'width:100%' });
   const clientList = el('div', { class:'product-picker' });
   const clientPicker = el('div', { style:'display:none;margin-top:8px' }, [clientSearch, clientList]);
+  let clientPageSize = 30, clientShown = clientPageSize, clientLastQ = null;
   function fillClientList(q) {
+    if (q !== clientLastQ) { clientShown = clientPageSize; clientLastQ = q; } // новый запрос — сброс пагинации
     clientList.innerHTML = '';
     const ql = String(q || '').toLowerCase().trim();
-    const res = state.clients.filter(c => !ql || (c.name + ' ' + (c.bin || '') + ' ' + (c.phone || '')).toLowerCase().includes(ql)).slice(0, 15);
-    if (!res.length) { clientList.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено')); return; }
+    const all = state.clients.filter(c => !ql || (c.name + ' ' + (c.bin || '') + ' ' + (c.phone || '')).toLowerCase().includes(ql));
+    if (!all.length) { clientList.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено')); return; }
+    const res = all.slice(0, clientShown);
     res.forEach(c => clientList.append(el('div', { class:'pp-item', onclick: () => {
       currentClient = c; d.client = c.id; clientPicker.style.display = 'none'; renderClient();
       toast('Клиент изменён: ' + c.name, 'success');
     } }, [el('div', {}, [el('div', {}, c.name), el('div', { class:'pp-sku' }, (c.bin ? 'БИН ' + c.bin + ' · ' : '') + (c.phone || '—'))])])));
+    if (all.length > res.length) {
+      clientList.append(el('div', { class:'pp-item muted', style:'cursor:pointer;justify-content:center;font-weight:600', onclick: () => { clientShown += clientPageSize; fillClientList(q); } }, `Показать ещё (${all.length - res.length})`));
+    }
   }
   clientSearch.oninput = (e) => fillClientList(e.target.value);
   function renderClient() {
