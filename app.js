@@ -1467,8 +1467,9 @@ function openProductDetail(idOrProduct) {
         el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Опт'),   el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, opt ? fmtMoney(opt) : '—'), priceDeltaEl(cost, opt)]),
         el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Розница'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, rozn ? fmtMoney(rozn) : '—'), priceDeltaEl(cost, rozn)]),
       ]),
-      below ? el('div', { class:'pill pill-danger', style:'margin-top:10px' }, '⚠️ Цена продажи ниже закупочной') : null,
     );
+    // ВАЖНО: нативный append(null) вставил бы текст «null» — поэтому добавляем плашку отдельно
+    if (below) priceHost.append(el('div', { class:'pill pill-danger', style:'margin-top:10px' }, '⚠️ Цена продажи ниже закупочной'));
     const margin = priceMarginPct(cost, rozn);
     kvHost.innerHTML = '';
     kvHost.append(el('dl', { class:'kv' }, [
@@ -3517,8 +3518,8 @@ async function openDealDetail(id, opts) {
     stageBtn.append(
       el('span', { class:'stage-dot', style:`background:${s.color || '#9CA3AF'}` }),
       el('span', { class:'stage-lbl' }, 'Этап: ' + (s.label || '—')),
-      canEdit ? el('span', { class:'stage-caret' }, '▾') : null,
     );
+    if (canEdit) stageBtn.append(el('span', { class:'stage-caret' }, '▾')); // нативный append(null) дал бы текст «null»
   };
   const closeStageMenu = () => { stageMenu.style.display = 'none'; stageBtn.classList.remove('open'); };
   const buildStageMenu = () => {
