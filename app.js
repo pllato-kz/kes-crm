@@ -6892,6 +6892,21 @@ VIEWS.settings = () => {
       if (!c) return;
       prEnabled.checked = !!c.enabled; prOpt.value = c.opt || 0; prRozn.value = c.rozn || 0; prVat.value = c.vat || 0; recalcExample();
     }).catch(() => {});
+
+    // ----- Автоматизация: отгрузка при полной оплате -----
+    const autoCard = el('div', { class:'card mt-16' });
+    autoCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Автоматизация')));
+    const aChk = el('input', { type:'checkbox', style:'width:16px;height:16px' });
+    const aSave = el('button', { class:'btn btn-primary btn-sm' }, 'Сохранить');
+    aSave.onclick = async () => { aSave.disabled = true; try { await window.__API__.apiFetch('automation/settings', { method:'POST', body:{ autoShipmentOnPaid: aChk.checked } }); toast('Сохранено', 'success'); } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); } finally { aSave.disabled = false; } };
+    autoCard.append(
+      el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' },
+        'Когда все счета сделки оплачены (статус из 1С), автоматически создаётся отгрузка (статус «Запланирована») и приходит уведомление кладовщику. Списание остатка по-прежнему происходит в 1С при проведении реализации.'),
+      el('label', { style:'display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer' }, [aChk, 'Создавать отгрузку при полной оплате сделки']),
+      el('div', { style:'margin-top:12px' }, aSave),
+    );
+    wrap.append(autoCard);
+    window.__API__.apiFetch('automation/settings').then(c => { if (c) aChk.checked = !!c.autoShipmentOnPaid; }).catch(() => {});
   }
 
   // Статус синхронизации с 1С + очередь отправок — скрыто по запросу (синк идёт в фоне).

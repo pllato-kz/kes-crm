@@ -267,6 +267,16 @@ export async function onRequest(context) {
       if (request.method === 'GET') return pricingSettingsGet(env);
       if (request.method === 'POST') return auth.role === 'director' ? pricingSettingsSave(env, request) : err(403, 'Только директор');
     }
+    // Автоматизация: создавать отгрузку при полной оплате сделки
+    if (seg[0] === 'automation' && seg[1] === 'settings') {
+      if (request.method === 'GET') { await ensureAppSettings(env); return json({ autoShipmentOnPaid: (await getSetting(env, 'auto_shipment_on_paid')) !== '0' }); }
+      if (request.method === 'POST') {
+        if (auth.role !== 'director') return err(403, 'Только директор');
+        const b = await request.json().catch(() => ({}));
+        await setSetting(env, 'auto_shipment_on_paid', b.autoShipmentOnPaid ? '1' : '0');
+        return json({ autoShipmentOnPaid: !!b.autoShipmentOnPaid });
+      }
+    }
     // Binotel (IP-телефония): click-to-call + настройки
     if (seg[0] === 'binotel') {
       if (seg[1] === 'call' && request.method === 'POST') return binotelCall(env, request, auth);
@@ -2192,7 +2202,7 @@ async function syncInvoicePayments(env) {
     `INSERT INTO sync_state (entity, last_at, info) VALUES ('invoice_payments_1c', datetime('now'), ?)
      ON CONFLICT(entity) DO UPDATE SET last_at=datetime('now'), info=excluded.info`).bind(String(msg).slice(0, 300)).run(); } catch (e) {} };
 
-  const inv = await env.DB.prepare("SELECT id, ext_ref, due, status_id FROM invoices WHERE ext_ref IS NOT NULL AND ext_ref<>'' AND (archived_at IS NULL OR archived_at='')").all();
+  const inv = await env.DB.prepare("SELECT id, ext_ref, due, status_id, deal_id FROM invoices WHERE ext_ref IS NOT NULL AND ext_ref<>'' AND (archived_at IS NULL OR archived_at='')").all();
   const crm = {}; for (const r of (inv.results || [])) crm[r.ext_ref] = r;
   if (!Object.keys(crm).length) { await logState('счетов с привязкой к 1С нет'); return json({ ok: true, invoices: 0 }); }
 
@@ -2247,6 +2257,7 @@ async function syncInvoicePayments(env) {
   // 4) обновляем CRM-счета: paid / overdue (по сроку) / pending
   const today = new Date().toISOString().slice(0, 10);
   const stmts = []; let setPaid = 0, setOverdue = 0, setPending = 0, miss = 0;
+  const paidDeals = new Set(); // сделки, чей счёт только что стал оплачен — проверим на авто-отгрузку
   for (const ref in crm) {
     const r = crm[ref];
     if (!billRefs.has(ref)) { miss++; continue; }
@@ -2254,11 +2265,17 @@ async function syncInvoicePayments(env) {
     if (paidRefs.has(ref)) { st = 'paid'; setPaid++; }
     else if (r.due && String(r.due).slice(0, 10) < today) { st = 'overdue'; setOverdue++; }
     else { st = 'pending'; setPending++; }
-    if (st !== r.status_id) stmts.push(env.DB.prepare('UPDATE invoices SET status_id=? WHERE id=?').bind(st, r.id));
+    if (st !== r.status_id) {
+      stmts.push(env.DB.prepare('UPDATE invoices SET status_id=? WHERE id=?').bind(st, r.id));
+      if (st === 'paid' && r.deal_id) paidDeals.add(r.deal_id);
+    }
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
-  await logState(`вариант A (по контрагенту): счетов 1С ${bills.length}, платежи [${payInfo.join(', ') || '—'}]; наших ${Object.keys(crm).length}: оплачено ${setPaid}, просрочено ${setOverdue}, ожидает ${setPending}, не в 1С ${miss}`);
-  return json({ bills: bills.length, payInfo, paid: setPaid, overdue: setOverdue, pending: setPending, missing: miss });
+  // «Отгрузка появляется, когда клиент полностью оплатил» — по сделкам со свежей оплатой
+  let autoShip = 0;
+  for (const did of paidDeals) { try { if (await ensureShipmentForPaidDeal(env, did)) autoShip++; } catch (e) {} }
+  await logState(`вариант A (по контрагенту): счетов 1С ${bills.length}, платежи [${payInfo.join(', ') || '—'}]; наших ${Object.keys(crm).length}: оплачено ${setPaid}, просрочено ${setOverdue}, ожидает ${setPending}, не в 1С ${miss}${autoShip ? `; отгрузок создано ${autoShip}` : ''}`);
+  return json({ bills: bills.length, payInfo, paid: setPaid, overdue: setOverdue, pending: setPending, missing: miss, autoShip });
 }
 
 async function onecRefGet(env, kind, key = '') {
@@ -2440,7 +2457,45 @@ async function writeInvoice(env, request, method, id, ctx) {
   if (job && !(ctx && typeof ctx.waitUntil === 'function')) await job;
 
   const row = await env.DB.prepare('SELECT * FROM invoices WHERE id=?').bind(invId).first();
+  // «Отгрузка появляется, когда клиент полностью оплатил»
+  if (row && row.status_id === 'paid' && row.deal_id) { try { await ensureShipmentForPaidDeal(env, row.deal_id); } catch (e) {} }
   return json(row, method === 'POST' ? 201 : 200);
+}
+
+// Создаёт черновик отгрузки (статус planned), когда сделка ПОЛНОСТЬЮ оплачена (все её счета
+// оплачены) и отгрузки ещё нет. Идемпотентно. Управляется тумблером auto_shipment_on_paid
+// (по умолчанию включено). Уведомляет кладовщиков/директора — «к сборке».
+async function ensureShipmentForPaidDeal(env, dealId) {
+  if (!dealId) return;
+  if ((await getSetting(env, 'auto_shipment_on_paid')) === '0') return; // тумблер выключен
+  await ensureArchiveColumns(env);
+  await ensureShipmentExtRef(env);
+  const exists = await env.DB.prepare('SELECT id FROM shipments WHERE deal_id=?').bind(dealId).first();
+  if (exists) return; // отгрузка уже есть
+  // все ли счета сделки оплачены (и есть хотя бы один)?
+  const inv = await env.DB.prepare(
+    "SELECT COUNT(*) AS total, SUM(CASE WHEN status_id='paid' THEN 1 ELSE 0 END) AS paid FROM invoices WHERE deal_id=? AND (archived_at IS NULL OR archived_at='')"
+  ).bind(dealId).first();
+  if (!inv || !inv.total || (inv.paid || 0) < inv.total) return; // оплачены не все счета
+  const d = await env.DB.prepare('SELECT d.id, d.client_id, d.no AS dno, c.address AS caddr FROM deals d LEFT JOIN clients c ON c.id=d.client_id WHERE d.id=?').bind(dealId).first();
+  if (!d) return;
+  let addr = d.caddr || '';
+  try { const da = await env.DB.prepare('SELECT address FROM deals WHERE id=?').bind(dealId).first(); if (da && da.address) addr = da.address; } catch (e) {}
+  const it = await env.DB.prepare('SELECT COUNT(*) AS n FROM deal_items WHERE deal_id=?').bind(dealId).first();
+  const no = await uniqueDocNo(env, 'shipments', null, 'ТТН-');
+  const id = genId();
+  await env.DB.prepare(
+    'INSERT INTO shipments (id, no, deal_id, client_id, date, items, weight, transport, driver, status_id, destination) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+  ).bind(id, no, dealId, d.client_id, new Date().toISOString().slice(0, 10), (it && it.n) || 0, 0, '', '', 'planned', addr).run();
+  try {
+    await ensureNotifSchema(env);
+    const us = await env.DB.prepare("SELECT id FROM users WHERE role_key IN ('warehouse','director') AND active=1").all();
+    const txt = `Сделка оплачена — создана отгрузка ${no}${d.dno ? ' по сделке ' + d.dno : ''}. К сборке.`;
+    const stmts = [];
+    for (const u of (us.results || [])) stmts.push(env.DB.prepare("INSERT OR IGNORE INTO notifications (text, type, read, created_at, user_id, ref) VALUES (?, 'info', 0, datetime('now'), ?, ?)").bind(txt, u.id, `shipcreated:${id}:${u.id}`));
+    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+  } catch (e) {}
+  return id;
 }
 
 // --------------------------------------------------------------------------
