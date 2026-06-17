@@ -3887,7 +3887,7 @@ VIEWS.clients = () => {
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Клиенты'),
-      el('div', { class: 'sub' }, `${state.clients.length} клиентов · LTV ${fmtMoneyK(state.clients.reduce((s,c)=>s+c.ltv,0))}`),
+      el('div', { class: 'sub' }, `${state.clients.length} клиентов`),
     ]),
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn btn-primary', onclick: openNewClient }, '+ Клиент'),
@@ -3969,11 +3969,19 @@ VIEWS.clients = () => {
           await window.__API__.loadRest(state); navigate('clients');
         } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
       } }, '👥 Распределить базу') : null,
-      isDir ? el('button', { class: 'btn', onclick: () => openImport('clients') }, '📥 Импорт') : null,
-      isDir ? el('button', { class: 'btn', onclick: () => exportClientsCSV() }, [svgIconEl('download', 16), ' Экспорт']) : null,
     ]),
   ]));
   tw.append(bulkBar);
+
+  // Последняя сделка клиента — самая поздняя по дате сделка этого клиента из state.deals.
+  const lastDealByClient = {};
+  for (const dl of state.deals) {
+    if (!dl.client) continue;
+    const dt = String(dl.created || '').slice(0, 10);
+    if (!dt) continue;
+    if (!lastDealByClient[dl.client] || dt > lastDealByClient[dl.client]) lastDealByClient[dl.client] = dt;
+  }
+  const clientLastDeal = (c) => lastDealByClient[c.id] || '';
 
   function refresh() {
     drawer.refreshBadge();
@@ -3983,7 +3991,7 @@ VIEWS.clients = () => {
       if (filterState.city && c.city !== filterState.city) return false;
       if (filterState.manager && c.manager !== filterState.manager) return false;
       if (filterState.from || filterState.to) {
-        const d = String(c.lastDeal || '').slice(0, 10);
+        const d = clientLastDeal(c);
         if (!d) return false;
         if (filterState.from && d < filterState.from) return false;
         if (filterState.to && d > filterState.to) return false;
@@ -4032,11 +4040,7 @@ VIEWS.clients = () => {
           el('span', { class:'avatar', style:`width:22px;height:22px;font-size:10px;background:${m.color}` }, m.avatar),
           el('span', { style:'font-size:12px' }, m.name.split(' ')[0]),
         ])),
-        el('td', { class:'num strong' }, fmtMoneyK(c.ltv)),
-        el('td', { class:'num' }, c.balance < 0
-          ? el('span', { class:'pill pill-danger' }, fmtMoneyK(c.balance))
-          : el('span', { class:'muted' }, '0')),
-        el('td', { class:'muted' }, fmtDate(c.lastDeal)),
+        el('td', { class:'muted' }, clientLastDeal(c) ? fmtDate(clientLastDeal(c)) : '—'),
       ]);
     }));
   }
@@ -4049,8 +4053,6 @@ VIEWS.clients = () => {
     el('th', {}, 'Тип'),
     el('th', {}, 'Город'),
     el('th', {}, 'Менеджер'),
-    el('th', { class: 'num' }, 'LTV'),
-    el('th', { class: 'num' }, 'Баланс'),
     el('th', {}, 'Последняя сделка'),
   ])));
   t.append(buildTbody([]));
@@ -4134,9 +4136,7 @@ async function openClientDetail(id) {
   const fCity = fInput('Город', c.city || '');
   const fAddr = fInput('Адрес', c.address || '');
   const fMgr = fSelect('Менеджер', state.users.filter(u => u.active !== false).map(u => ({ value: u.id, label: u.name })), c.manager);
-  const fLtv = fInput('LTV, ₸', c.ltv != null ? c.ltv : '', { type: 'number' });
-  const fBal = fInput('Баланс, ₸', c.balance != null ? c.balance : '', { type: 'number' });
-  const fields = [fName, fType, fBin, fContact, fPhone, fEmail, fCity, fAddr, fMgr, fLtv, fBal];
+  const fields = [fName, fType, fBin, fContact, fPhone, fEmail, fCity, fAddr, fMgr];
   if (!canEdit) fields.forEach(f => f.row.querySelectorAll('input,select').forEach(i => i.disabled = true));
   const left = el('div', { class:'deal-left' }, [el('div', { class:'section-title' }, 'Информация о клиенте'), ...fields.map(f => f.row)]);
 
@@ -4202,7 +4202,7 @@ async function openClientDetail(id) {
     const upd = {
       id: c.id, name: fName.get().trim() || c.name, type: fType.get(), bin: fBin.get(), contact: fContact.get(),
       phone: fPhone.get(), email: fEmail.get(), city: fCity.get(), address: fAddr.get(), manager: fMgr.get(),
-      ltv: Number(fLtv.get()) || 0, balance: Number(fBal.get()) || 0,
+      ltv: c.ltv || 0, balance: c.balance || 0,
     };
     try {
       const saved = await window.__API__.apiFetch('clients/' + c.id, { method:'PUT', body: window.__API__.toApi.client(upd) });
