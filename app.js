@@ -1963,7 +1963,11 @@ function buildInvoiceInner(deal, kind, invNoArg) {
   // Реквизиты продавца — из 1С (state.meta), с запасными значениями
   const seller = state.meta || {};
   const sellerName = seller.legalName || seller.tenant || 'ТОО «KazEnergoSnab»';
-  const inner = `
+  const esc = (s) => String(s == null ? '' : s);
+  let inner;
+  if (isKP) {
+    // КП — оставляем прежний оформленный вид
+    inner = `
       <div class="pr-head">
         <div class="pr-logo">
           <svg width="50" height="56" viewBox="0 0 100 110">
@@ -1971,13 +1975,13 @@ function buildInvoiceInner(deal, kind, invNoArg) {
             <text x="50" y="62" text-anchor="middle" font-family="Arial" font-weight="900" font-size="32" fill="#111">KES</text>
           </svg>
           <div>
-            <h2>${isKP ? 'КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ' : 'СЧЁТ НА ОПЛАТУ'} ${invNo}</h2>
+            <h2>КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ ${invNo}</h2>
             <div style="color:#666;font-size:12px;margin-top:4px">от ${dateStr}</div>
           </div>
         </div>
         <div class="pr-meta">
-          <div>По сделке: <b>${deal.title}</b></div>
-          <div>${isKP ? 'Предложение действительно: 14 дней' : 'Срок оплаты: 5 раб. дней'}</div>
+          <div>По сделке: <b>${esc(deal.title)}</b></div>
+          <div>Предложение действительно: 14 дней</div>
           <div style="margin-top:6px;color:#888">Образец — не имеет юридической силы</div>
         </div>
       </div>
@@ -1994,10 +1998,10 @@ function buildInvoiceInner(deal, kind, invNoArg) {
         </div>
         <div>
           <div class="party-title">Покупатель</div>
-          <div class="party-name">${cl.name}</div>
-          <div class="party-line">БИН: ${cl.bin}</div>
-          <div class="party-line">${cl.city}, ${cl.address}</div>
-          <div class="party-line">Контакт: ${cl.contact} · ${cl.phone}</div>
+          <div class="party-name">${esc(cl.name)}</div>
+          <div class="party-line">БИН: ${esc(cl.bin)}</div>
+          <div class="party-line">${esc(cl.city)}, ${esc(cl.address)}</div>
+          <div class="party-line">Контакт: ${esc(cl.contact)} · ${esc(cl.phone)}</div>
         </div>
       </div>
 
@@ -2016,9 +2020,9 @@ function buildInvoiceInner(deal, kind, invNoArg) {
         <tbody>
           ${items.map((it, i) => `<tr>
             <td>${i+1}</td>
-            <td>${it.name}</td>
-            <td style="font-family:monospace;font-size:11px">${it.sku}</td>
-            <td class="num">${it.unit}</td>
+            <td>${esc(it.name)}</td>
+            <td style="font-family:monospace;font-size:11px">${esc(it.sku)}</td>
+            <td class="num">${esc(it.unit)}</td>
             <td class="num">${it.qty}</td>
             <td class="num">${fmtMoney(it.price)}</td>
             <td class="num"><b>${fmtMoney(it.sum)}</b></td>
@@ -2029,7 +2033,7 @@ function buildInvoiceInner(deal, kind, invNoArg) {
       <div class="pr-totals">
         <div class="total-line"><span>Сумма без НДС:</span> <span>${fmtMoney(subtotal)}</span></div>
         <div class="total-line"><span>НДС 12%:</span> <span>${fmtMoney(vat)}</span></div>
-        <div class="total-line grand"><span>${isKP ? 'ИТОГО:' : 'ИТОГО К ОПЛАТЕ:'}</span> <span>${fmtMoney(total)}</span></div>
+        <div class="total-line grand"><span>ИТОГО:</span> <span>${fmtMoney(total)}</span></div>
       </div>
 
       <div style="margin-top:14px;padding:12px;background:#FAFBFC;border-radius:6px;font-size:11px;color:#555">
@@ -2044,6 +2048,104 @@ function buildInvoiceInner(deal, kind, invNoArg) {
         </div>
         <div class="pr-stamp">место<br>печати<br>и подписи</div>
       </div>`;
+  } else {
+    // Счёт на оплату — оформление как в печатной форме 1С (Бухгалтерия для Казахстана)
+    const cell = 'border:1px solid #000;padding:4px 8px;font-size:12px';
+    inner = `
+      <table style="width:100%;border-collapse:collapse;margin-bottom:4px">
+        <tr>
+          <td style="${cell};vertical-align:top" rowspan="2">
+            <div style="font-weight:700">${sellerName}</div>
+            <div>БИН ${seller.bin || '—'}</div>
+            <div style="color:#666;font-size:10px;margin-top:2px">Бенефициар</div>
+          </td>
+          <td style="${cell};width:58px">ИИК</td>
+          <td style="${cell};width:200px">${seller.bankAccount || '—'}</td>
+        </tr>
+        <tr>
+          <td style="${cell}">Кбе</td>
+          <td style="${cell}">&nbsp;</td>
+        </tr>
+        <tr>
+          <td style="${cell};vertical-align:top">
+            <div style="font-weight:700">${seller.bankName || '—'}</div>
+            <div style="color:#666;font-size:10px;margin-top:2px">Банк бенефициара</div>
+          </td>
+          <td style="${cell}">БИК</td>
+          <td style="${cell}">${seller.bankBik || '—'}</td>
+        </tr>
+      </table>
+
+      <div style="border-bottom:3px solid #000;margin:16px 0 6px;padding-bottom:6px">
+        <div style="font-size:18px;font-weight:700">Счёт на оплату № ${invNo} от ${dateStr}</div>
+      </div>
+
+      <table style="width:100%;font-size:12px;margin:10px 0 14px">
+        <tr>
+          <td style="width:96px;color:#555;vertical-align:top;padding:2px 0">Поставщик:</td>
+          <td style="padding:2px 0"><b>${sellerName}</b>, БИН ${seller.bin || '—'}${seller.address ? ', ' + seller.address : ''}${seller.phone ? ', тел. ' + seller.phone : ''}</td>
+        </tr>
+        <tr>
+          <td style="color:#555;vertical-align:top;padding:2px 0">Покупатель:</td>
+          <td style="padding:2px 0"><b>${esc(cl.name) || '—'}</b>${cl.bin ? ', БИН ' + cl.bin : ''}${cl.address ? ', ' + (cl.city ? cl.city + ', ' : '') + cl.address : ''}</td>
+        </tr>
+        <tr>
+          <td style="color:#555;vertical-align:top;padding:2px 0">Договор:</td>
+          <td style="padding:2px 0">${deal.title ? 'Основание: ' + esc(deal.title) : 'Без договора'}</td>
+        </tr>
+      </table>
+
+      <table class="pr-table">
+        <thead>
+          <tr>
+            <th style="width:32px">№</th>
+            <th>Товар (работа, услуга)</th>
+            <th class="num" style="width:60px">Кол-во</th>
+            <th class="num" style="width:50px">Ед.</th>
+            <th class="num" style="width:90px">Цена</th>
+            <th class="num" style="width:110px">Сумма</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map((it, i) => `<tr>
+            <td>${i+1}</td>
+            <td>${esc(it.name)}${it.sku ? ` <span style="color:#888;font-size:10px">(${esc(it.sku)})</span>` : ''}</td>
+            <td class="num">${it.qty}</td>
+            <td class="num">${esc(it.unit)}</td>
+            <td class="num">${fmtMoney(it.price)}</td>
+            <td class="num"><b>${fmtMoney(it.sum)}</b></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+
+      <table style="width:100%;font-size:13px;margin-top:8px">
+        <tr>
+          <td></td>
+          <td style="width:300px">
+            <div style="display:flex;justify-content:space-between;padding:2px 0"><span>Итого:</span><b>${fmtMoney(subtotal)}</b></div>
+            <div style="display:flex;justify-content:space-between;padding:2px 0"><span>Сумма НДС (12%):</span><b>${fmtMoney(vat)}</b></div>
+            <div style="display:flex;justify-content:space-between;padding:6px 0;border-top:2px solid #000;font-size:15px"><span><b>Всего к оплате:</b></span><b>${fmtMoney(total)}</b></div>
+          </td>
+        </tr>
+      </table>
+
+      <div style="font-size:12px;margin-top:12px">
+        Всего наименований ${items.length}, на сумму ${fmtMoney(total)} тенге.<br>
+        <b>${numberToRussianWords(total)} тенге 00 тиын.</b>
+      </div>
+
+      <div style="font-size:11px;color:#555;border-top:1px solid #bbb;margin-top:16px;padding-top:8px">
+        Внимание! Оплата данного счёта означает согласие с условиями поставки товара. Счёт действителен в течение 5 банковских дней.
+      </div>
+
+      <table style="width:100%;font-size:13px;margin-top:28px">
+        <tr>
+          <td style="width:50%">Руководитель ____________________</td>
+          <td style="width:50%">Бухгалтер ____________________</td>
+        </tr>
+      </table>
+      <div style="font-size:11px;color:#aaa;margin-top:12px">М.П.</div>`;
+  }
   const slug = String(invNo).replace(/[^\wа-яёА-ЯЁ.-]+/gi, '_');
   const fileName = (isKP ? 'KP-' : 'Schet-') + slug + '.pdf';
   return { inner, invNo, isKP, title: (isKP ? 'Коммерческое предложение ' : 'Счёт на оплату ') + invNo, fileName };
