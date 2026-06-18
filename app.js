@@ -6826,6 +6826,12 @@ function openGreenApiModal() {
 async function callPhone(phone, ctx) {
   const tel = String(phone || '').replace(/[^\d+]/g, '');
   if (!tel) { toast('Телефон не указан', 'warn'); return; }
+  // 1) Браузерный софтфон (WebRTC) — если зарегистрирован, звоним прямо в браузере.
+  if (window.SipClient && window.SipClient.isReady) {
+    try { await window.SipClient.call(tel, { dealId: ctx && ctx.dealId, customerId: ctx && ctx.clientId, contactName: ctx && ctx.contactName }); return; }
+    catch (e) { /* не вышло — падаем на Binotel-callback ниже */ }
+  }
+  // 2) Binotel callback (звонок на телефон менеджера, затем клиент); иначе системный набор.
   try {
     const r = await window.__API__.apiFetch('binotel/call', { method:'POST', body:{ phone: tel, dealId: ctx && ctx.dealId, clientId: ctx && ctx.clientId } });
     if (r && r.ok) { toast('Звонок инициирован — поднимите трубку', 'success'); return; }
