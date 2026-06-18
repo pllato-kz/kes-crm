@@ -3541,8 +3541,20 @@ async function openDealDetail(id, opts) {
       ]));
     });
   };
-  // alias для существующих вызовов (renderShip и т.п.)
-  const renderFunnel = () => { renderStageBtn(); buildStageMenu(); };
+  // Десктоп: горизонтальная воронка-шевроны (как раньше, «этапы» сверху). Клик по
+  // этапу перемещает сделку сразу (moveDealToStage). На мобильном показывается компактный
+  // выпадающий список (stageBar) — переключение видимости через CSS по ширине экрана.
+  const funnel = el('div', { class:'funnel-steps' });
+  const renderFunnelSteps = () => {
+    funnel.innerHTML = '';
+    const curIdx = dealStages.findIndex(st => st.id === chosenStage);
+    dealStages.forEach((st, i) => {
+      const cls = st.id === chosenStage ? 'active' : (curIdx >= 0 && i < curIdx ? 'done' : '');
+      funnel.append(el('div', { class:'funnel-step ' + cls, title: st.label, onclick: () => moveDealToStage(st) }, st.label));
+    });
+  };
+  // alias для существующих вызовов (renderShip и т.п.) — обновляет и воронку, и дропдаун
+  const renderFunnel = () => { renderStageBtn(); buildStageMenu(); renderFunnelSteps(); };
   async function moveDealToStage(st) {
     closeStageMenu();
     if (!canEdit || st.id === chosenStage) return;
@@ -3565,6 +3577,7 @@ async function openDealDetail(id, opts) {
   });
   if (!canEdit) stageBtn.disabled = true;
   renderStageBtn();
+  renderFunnelSteps();
 
   // ----- Левая панель: форма -----
   const titleI = el('input', { value: d.title || '', placeholder:'Название сделки' });
@@ -4042,7 +4055,7 @@ async function openDealDetail(id, opts) {
   openModal({
     wide: true,
     title: d.title,
-    body: el('div', { class:'deal-modal' }, [stageBar, dealSplitEl]),
+    body: el('div', { class:'deal-modal' }, [funnel, stageBar, dealSplitEl]),
     foot: [
       el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
       canEdit ? el('button', { class:'btn', title:'Зарезервировать позиции сделки на складе', onclick: async (e) => {
