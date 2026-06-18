@@ -3306,6 +3306,7 @@ async function openDealDetail(id, opts) {
         window.__API__.apiFetch('deals/' + id + '/history').catch(() => []),
       ]);
       d.lineItems = full.lineItems || [];
+      d.reservations = full.reservations || [];
       if (full.amount != null) d.amount = full.amount;
       if (full.items != null) d.items = full.items;
       history = h || [];
@@ -3410,8 +3411,13 @@ async function openDealDetail(id, opts) {
           ]);
         }
 
+        // пометка «в резерве» по позиции (из d.reservations)
+        const rsv = (d.reservations || []).find(r => r.product === it.product);
         const nameBlock = el('div', {}, [
-          el('div', { style:'font-weight:500' }, nn(p.name) || '—'),
+          el('div', { style:'display:flex;align-items:center;gap:6px;flex-wrap:wrap' }, [
+            el('span', { style:'font-weight:500' }, nn(p.name) || '—'),
+            rsv ? el('span', { class:'pill pill-info', style:'font-size:10px;padding:1px 7px', title:'Зарезервировано: ' + rsv.qty }, '🔒 в резерве' + (rsv.qty ? ' · ' + rsv.qty : '')) : null,
+          ]),
           el('div', { class:'muted', style:'font-size:11px' }, nn(p.sku) + (nn(p.brand) ? ' · ' + nn(p.brand) : '')),
           basesRow,
         ]);
@@ -4043,6 +4049,7 @@ async function openDealDetail(id, opts) {
           payload.lineItems = window.__API__.toApi.dealItems(d.lineItems);
           Object.assign(d, window.__API__.map.deal(await window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body: payload })));
           const r = await window.__API__.apiFetch('deals/' + d.id + '/reserve', { method:'POST', body:{} });
+          d.reservations = (d.lineItems || []).map(it => ({ product: it.product, qty: it.qty })); // резервируются все позиции сделки
           toast(`Зарезервировано: ${r.totalQty} ед. по ${r.products} поз.`, 'success');
           await Promise.all(d.lineItems.map(it => window.__API__.apiFetch('products/' + encodeURIComponent(it.product)).then(row => { const p = window.__API__.map.product(row); if (p && p.id) { const ex = byId(state.products, p.id); if (ex) Object.assign(ex, p); } }).catch(() => {})));
           renderItems();
@@ -4053,6 +4060,7 @@ async function openDealDetail(id, opts) {
         const btn = e.target; btn.disabled = true;
         try {
           await window.__API__.apiFetch('deals/' + d.id + '/reserve', { method:'POST', body:{ release:true } });
+          d.reservations = []; // резерв снят
           toast('Резерв снят', 'success');
           await Promise.all(d.lineItems.map(it => window.__API__.apiFetch('products/' + encodeURIComponent(it.product)).then(row => { const p = window.__API__.map.product(row); if (p && p.id) { const ex = byId(state.products, p.id); if (ex) Object.assign(ex, p); } }).catch(() => {})));
           renderItems();
@@ -4080,7 +4088,7 @@ async function openDealDetail(id, opts) {
         d.amount = baseAmount + lineItemsSum(); // итог = ручная база + сумма позиций
         try {
           const payload = { ...window.__API__.toApi.deal(d) };
-          if (d.lineItems && d.lineItems.length) payload.lineItems = window.__API__.toApi.dealItems(d.lineItems);
+          payload.lineItems = window.__API__.toApi.dealItems(d.lineItems || []); // всегда шлём (в т.ч. пустой) — иначе удаление позиций не сохраняется
           const saved = await window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body: payload });
           Object.assign(d, window.__API__.map.deal(saved));
           closeModal(); toast('Сделка сохранена', 'success'); navigate('deals');

@@ -1951,6 +1951,11 @@ async function getDeal(env, id) {
     `SELECT id, product_id, qty, price_used FROM deal_items WHERE deal_id=?`
   ).bind(id).all();
   deal.lineItems = items.results;
+  // текущие резервы сделки (для пометки «в резерве» в карточке)
+  try {
+    const rv = await env.DB.prepare('SELECT product_id, qty FROM deal_reservations WHERE deal_id=?').bind(id).all();
+    deal.reservations = rv.results || [];
+  } catch (e) { deal.reservations = []; }
   return json(deal);
 }
 
