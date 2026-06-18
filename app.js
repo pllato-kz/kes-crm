@@ -7266,6 +7266,16 @@ async function bootApp() {
       return;
     }
     renderShell();
+    // SIP-софтфон: пре-варм (UA подключится заранее → первый звонок мгновенный).
+    // Если SIP не настроен на сервере (нет секретов) — тихо ничего не показывает.
+    if (window.SipClient) {
+      setTimeout(() => {
+        window.SipClient.init().catch((e) => {
+          const m = String((e && e.message) || '');
+          if (!m.includes('sip_not_configured') && !m.includes('not_authenticated')) console.warn('[sip]', m);
+        });
+      }, 2500);
+    }
     // 2) тяжёлые списки — в фоне, затем перерисовываем текущий раздел
     loadRestData().then(afterDataLoaded);
   } catch (e) {
