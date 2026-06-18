@@ -1666,7 +1666,9 @@ function openShipmentDetail(id) {
   if (s.status !== 'delivered' && can('mark-delivered')) {
     body.append(deliveryConfirmBlock(s, () => { closeModal(); toast('Отгрузка доставлена · сделка синхронизирована', 'success'); if (CURRENT_VIEW) navigate(CURRENT_VIEW); }));
   }
-  openModal({ title: 'Отгрузка ' + s.no, body, foot: [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')] });
+  const shFoot = [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')];
+  if (d) shFoot.push(el('button', { class:'btn btn-primary', title:'Открыть карточку связанной сделки', onclick: () => { closeModal(); openDealDetail(d.id); } }, '🔗 Перейти в сделку'));
+  openModal({ title: 'Отгрузка ' + s.no, body, foot: shFoot });
 }
 
 // Документ отгрузки → модалка со сводкой по сделке (без перехода в карточку).
@@ -1732,7 +1734,7 @@ async function openShipmentDoc(r) {
     foot.push(sel);
   }
   // (отметка «Доставлено» с фото перенесена в тело модалки — см. deliveryConfirmBlock выше)
-  if (deal) foot.push(el('button', { class:'btn', onclick: () => { closeModal(); openDealDetail(deal.id); } }, 'Открыть сделку'));
+  if (deal) foot.push(el('button', { class:'btn btn-primary', title:'Открыть карточку связанной сделки', onclick: () => { closeModal(); openDealDetail(deal.id); } }, '🔗 Перейти в сделку'));
   openModal({ title: ship ? ('Отгрузка ' + ship.no) : ('Документ · ' + (deal ? deal.title : '—')), body, foot });
 
   // Подгрузка позиций по связанной сделке (с дозагрузкой недостающих товаров)
@@ -1811,7 +1813,7 @@ function openInvoiceDetail(id) {
       el('div', { class: 'form-row', style: 'margin-top:8px' }, [el('label', {}, 'Изменить статус'), statusSel]),
     ]),
     foot: [
-      d ? el('button', { class: 'btn', onclick: () => { closeModal(); openDealDetail(d.id); } }, 'Открыть сделку') : null,
+      d ? el('button', { class: 'btn btn-primary', title:'Открыть карточку связанной сделки', onclick: () => { closeModal(); openDealDetail(d.id); } }, '🔗 Перейти в сделку') : null,
       el('button', { class: 'btn btn-primary', onclick: () => { const dl = byId(state.deals, iv.deal); if (dl) printInvoice(dl, iv.no); else toast('Сделка не найдена', 'warn'); } }, '🖨 Счёт на оплату'),
     ].filter(Boolean),
   });
