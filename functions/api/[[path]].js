@@ -280,12 +280,18 @@ export async function onRequest(context) {
     // Отчёты: цель (план продаж на месяц) — единая сумма, сохраняется в настройках
     if (seg[0] === 'reports' && seg[1] === 'goal') {
       await ensureAppSettings(env);
-      if (request.method === 'GET') return json({ goal: Number(await getSetting(env, 'monthly_goal')) || 0 });
+      if (request.method === 'GET') return json({
+        goal: Number(await getSetting(env, 'monthly_goal')) || 0,
+        from: (await getSetting(env, 'goal_from')) || '',
+        to: (await getSetting(env, 'goal_to')) || '',
+      });
       if (request.method === 'POST') {
         const b = await request.json().catch(() => ({}));
         const v = Math.max(0, Math.round(Number(b.goal) || 0));
         await setSetting(env, 'monthly_goal', String(v));
-        return json({ goal: v });
+        if (b.from != null) await setSetting(env, 'goal_from', String(b.from || '').slice(0, 10));
+        if (b.to != null) await setSetting(env, 'goal_to', String(b.to || '').slice(0, 10));
+        return json({ goal: v, from: String(b.from || '').slice(0, 10), to: String(b.to || '').slice(0, 10) });
       }
     }
     // Binotel (IP-телефония): click-to-call + настройки
