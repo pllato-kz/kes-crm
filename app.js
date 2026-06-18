@@ -4564,6 +4564,7 @@ async function openClientDetail(id) {
     body: el('div', { class:'deal-modal' }, [el('div', { class:'deal-split' }, [left, right])]),
     foot: [
       el('button', { class:'btn', onclick: closeModal }, 'Закрыть'),
+      el('button', { class:'btn', title:'Позвонить клиенту через телефонию', onclick: () => callPhone((fPhone.get && fPhone.get()) || c.phone, { clientId: c.id }) }, '📞 Позвонить'),
       el('button', { class:'btn', onclick: () => { closeModal(); openNewDeal(); toast('Подставлю клиента в новую сделку', 'info'); } }, '+ Сделка'),
       (currentUser.roleKey === 'director') ? el('button', { class:'btn btn-danger', onclick: async () => {
         if (!(await confirmModal({ title:'Удаление клиента', message:`Удалить клиента «${c.name}»? Он переместится в архив на 30 дней, затем удалится навсегда.`, confirmText:'Удалить', danger:true }))) return;
