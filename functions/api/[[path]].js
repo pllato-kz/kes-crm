@@ -277,6 +277,17 @@ export async function onRequest(context) {
         return json({ autoShipmentOnPaid: !!b.autoShipmentOnPaid });
       }
     }
+    // Отчёты: цель (план продаж на месяц) — единая сумма, сохраняется в настройках
+    if (seg[0] === 'reports' && seg[1] === 'goal') {
+      await ensureAppSettings(env);
+      if (request.method === 'GET') return json({ goal: Number(await getSetting(env, 'monthly_goal')) || 0 });
+      if (request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const v = Math.max(0, Math.round(Number(b.goal) || 0));
+        await setSetting(env, 'monthly_goal', String(v));
+        return json({ goal: v });
+      }
+    }
     // Binotel (IP-телефония): click-to-call + настройки
     if (seg[0] === 'binotel') {
       if (seg[1] === 'call' && request.method === 'POST') return binotelCall(env, request, auth);
