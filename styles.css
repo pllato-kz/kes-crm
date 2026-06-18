@@ -736,7 +736,9 @@ table.data .muted { color: var(--muted); font-size: 12px; }
 .modal.modal-xl *::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
 /* ---------- Этап сделки: компактный выпадающий список (замена воронки-шевронов) ---------- */
-.deal-stagebar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+/* На десктопе сверху — воронка-шевроны (.funnel-steps); дропдаун этапов скрыт.
+   На мобильном (≤860px) — наоборот (см. медиазапрос ниже). */
+.deal-stagebar { display: none; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .stage-dd { position: relative; }
 .stage-dd-btn {
   display: inline-flex; align-items: center; gap: 8px;
@@ -862,7 +864,9 @@ table.data .muted { color: var(--muted); font-size: 12px; }
   .modal.modal-xl { height: 92vh; max-height: 92vh; }
   .deal-split { grid-template-columns: 1fr; }
   .deal-right { min-height: 0; }
-  .deal-stagebar { padding: 10px 12px; }
+  /* на мобильном: дропдаун этапов вместо воронки-шевронов */
+  .funnel-steps { display: none; }
+  .deal-stagebar { display: flex; padding: 10px 12px; }
   .deal-actions button { flex: 1 1 auto; }
 
   /* «Сделка» — вкладка; вкладки ПЕРЕНОСятся, чтобы все были видны (ничего не скрыто) */
