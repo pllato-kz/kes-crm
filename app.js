@@ -4623,7 +4623,6 @@ VIEWS.catalog = () => {
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Каталог номенклатуры'), sub,
-      el('div', { class:'muted', style:'font-size:12px;margin-top:2px' }, 'Зеркало 1С — только просмотр, синхронизация автоматическая.'),
     ]),
   ]));
 
@@ -5048,7 +5047,6 @@ VIEWS.warehouse = () => {
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Склад'),
-      el('div', { class:'muted', style:'font-size:12px;margin-top:2px' }, 'Зеркало 1С — только просмотр. Приход/расход и движение ведутся в 1С.'),
     ]),
   ]));
 
