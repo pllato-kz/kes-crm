@@ -3593,9 +3593,18 @@ async function openDealDetail(id, opts) {
     const all = state.clients.filter(c => !ql || (c.name + ' ' + (c.bin || '') + ' ' + (c.phone || '')).toLowerCase().includes(ql));
     if (!all.length) { clientList.append(el('div', { class:'pp-item muted', style:'cursor:default;justify-content:center' }, 'Ничего не найдено')); return; }
     const res = all.slice(0, clientShown);
-    res.forEach(c => clientList.append(el('div', { class:'pp-item', onclick: () => {
+    res.forEach(c => clientList.append(el('div', { class:'pp-item', onclick: async () => {
+      const prev = d.client, prevClient = currentClient;
       currentClient = c; d.client = c.id; clientPicker.style.display = 'none'; renderClient();
-      toast('Клиент изменён: ' + c.name, 'success');
+      // Сохраняем смену клиента сразу (без ожидания общего «Сохранить»), с откатом при ошибке
+      try {
+        const saved = await window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body: { client_id: c.id } });
+        if (saved) { const m = window.__API__.map.deal(saved); if (m && m.client) d.client = m.client; }
+        toast('Клиент изменён: ' + c.name, 'success');
+      } catch (e) {
+        d.client = prev; currentClient = prevClient || clientById(prev) || currentClient; renderClient();
+        toast('Не удалось изменить клиента: ' + ((e && e.message) || e), 'error');
+      }
     } }, [el('div', {}, [el('div', {}, c.name), el('div', { class:'pp-sku' }, (c.bin ? 'БИН ' + c.bin + ' · ' : '') + (c.phone || '—'))])])));
     if (all.length > res.length) {
       clientList.append(el('div', { class:'pp-item muted', style:'cursor:pointer;justify-content:center;font-weight:600', onclick: () => { clientShown += clientPageSize; fillClientList(q); } }, `Показать ещё (${all.length - res.length})`));
