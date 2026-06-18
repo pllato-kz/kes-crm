@@ -4375,17 +4375,17 @@ VIEWS.clients = () => {
       return el('tr', { onclick: () => openClientDetail(c.id) }, [
         el('td', { style:'text-align:center', onclick: (e) => e.stopPropagation() }, cb),
         el('td', {}, [
-          el('div', { class:'strong' }, nn(c.name) || '—'),
-          el('div', { class:'muted' }, [nn(c.contact), nn(c.phone)].filter(Boolean).join(' · ') || '—'),
+          el('div', { class:'strong' }, nn(c.name)),
+          el('div', { class:'muted' }, [nn(c.contact), nn(c.phone)].filter(Boolean).join(' · ')),
         ]),
-        el('td', {}, el('span', { class:'muted', style:'font-variant-numeric:tabular-nums' }, nn(c.bin) || '—')),
+        el('td', {}, el('span', { class:'muted', style:'font-variant-numeric:tabular-nums' }, nn(c.bin))),
         el('td', {}, el('span', { class:'pill', style:`background:${ct.color}22;color:${ct.color}` }, ct.label)),
-        el('td', {}, nn(c.city) || '—'),
+        el('td', {}, nn(c.city)),
         el('td', {}, el('div', { class:'row' }, [
           el('span', { class:'avatar', style:`width:22px;height:22px;font-size:10px;background:${m.color}` }, m.avatar),
           el('span', { style:'font-size:12px' }, m.name.split(' ')[0]),
         ])),
-        el('td', { class:'muted' }, clientLastDeal(c) ? fmtDate(clientLastDeal(c)) : '—'),
+        el('td', { class:'muted' }, clientLastDeal(c) ? fmtDate(clientLastDeal(c)) : ''),
       ]);
     }));
   }
