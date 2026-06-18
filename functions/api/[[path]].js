@@ -285,6 +285,14 @@ export async function onRequest(context) {
       return err(404, 'Неизвестный метод Binotel');
     }
 
+    // WebRTC SIP-софтфон («звонки прямо из браузера»): креды для SIP.js + лог звонка.
+    // Аудио идёт напрямую браузер ↔ Asterisk ↔ Binotel-trunk; бэкенд только выдаёт креды и логирует.
+    if (seg[0] === 'sip') {
+      if (seg[1] === 'token' && request.method === 'GET') return sipToken(env, auth);
+      if (seg[1] === 'log' && request.method === 'POST') return sipLog(env, request, auth);
+      return err(404, 'Неизвестный метод SIP');
+    }
+
     // инвентаризация склада (лист пересчёта → проведение → корректировка остатков)
     if (seg[0] === 'inventory') {
       await ensureInventorySchema(env);
@@ -1177,6 +1185,59 @@ async function binotelSettingsSave(env, request, url) {
   if (b.secret != null) await setSetting(env, 'binotel_secret', String(b.secret).trim());
   if (b.ext != null) await setSetting(env, 'binotel_ext', String(b.ext).trim());
   return binotelSettingsGet(env, url);
+}
+
+// ── WebRTC SIP-софтфон ────────────────────────────────────────────────────
+// GET /api/sip/token — выдаёт креды браузеру (SIP.js). Без секретов SIP_DOMAIN/
+// SIP_ENDPOINT_PASSWORD → 503 sip_not_configured (фронт тихо прячет UI).
+function sipToken(env, auth) {
+  const domain = env.SIP_DOMAIN, password = env.SIP_ENDPOINT_PASSWORD;
+  if (!domain || !password) return err(503, 'sip_not_configured');
+  const sipUser = env.SIP_USER || '100';
+  const iceServers = [
+    { urls: `stun:${domain}:3478` },
+    { urls: 'stun:stun.l.google.com:19302' },
+  ];
+  if (env.SIP_TURN_URL && env.SIP_TURN_USERNAME && env.SIP_TURN_PASSWORD) {
+    iceServers.push({
+      urls: [env.SIP_TURN_URL, env.SIP_TURN_URL + '?transport=tcp'],
+      username: env.SIP_TURN_USERNAME, credential: env.SIP_TURN_PASSWORD,
+    });
+  }
+  return json({
+    user: sipUser, password, domain,
+    wss: `wss://${domain}:8089/ws`,
+    iceServers,
+    display_name: (auth && (auth.name || auth.sub)) || '',
+  });
+}
+
+// POST /api/sip/log — пишем звонок в историю (таблица messages, channel='call'):
+// направление, длительность, привязка к сделке/клиенту (клиент ищется по номеру).
+async function sipLog(env, request, auth) {
+  await ensureMessagesSchema(env);
+  const b = await request.json().catch(() => ({}));
+  const phone = String(b.phone || '').replace(/[^\d]/g, '');
+  if (!phone || phone.length < 7) return json({ ok: false, error: 'invalid_phone' });
+  const incoming = !!(b.incoming || b.direction === 'in');
+  const dur = Math.max(0, Math.round(Number(b.duration_sec != null ? b.duration_sec : b.durationSec) || 0));
+  const dealId = b.deal_id || b.dealId || null;
+  let clientId = b.customer_id || b.customerId || null;
+  if (!clientId) {
+    try {
+      const tail = phone.slice(-9);
+      const c = await env.DB.prepare("SELECT id FROM clients WHERE phone IS NOT NULL AND phone<>'' AND REPLACE(REPLACE(REPLACE(REPLACE(phone,' ',''),'+',''),'-',''),'(','') LIKE ? LIMIT 1").bind('%' + tail).first();
+      if (c) clientId = c.id;
+    } catch (e) {}
+  }
+  const mm = dur > 0 ? (Math.floor(dur / 60) + ':' + String(dur % 60).padStart(2, '0')) : '—';
+  const who = b.contact_name || b.contactName || '';
+  const text = `${incoming ? '📞 Входящий звонок' : '📞 Исходящий звонок'} · ${mm}${who ? ' · ' + who : ''}`;
+  const id = genId();
+  await env.DB.prepare(
+    "INSERT INTO messages (id, deal_id, client_id, phone, direction, channel, text, status, ext_id, user_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))"
+  ).bind(id, dealId, clientId, '+' + phone, incoming ? 'in' : 'out', 'call', text, 'completed', b.call_id || b.callId || null, auth && auth.sub).run();
+  return json({ ok: true, id });
 }
 // click-to-call: сначала звонит телефон менеджера (internalNumber), затем набирается клиент.
 // Если Binotel не настроен — отвечаем fallback:true, и фронт открывает tel:.
