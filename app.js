@@ -6373,34 +6373,59 @@ VIEWS.reports = () => {
   mgrCard.append(mgrHost);
   row.append(mgrCard);
 
-  // ABC клиентов — из данных CRM (LTV клиентов)
-  const abc = el('div', { class:'card' });
-  abc.append(el('div', { class:'card-head' }, el('h3', {}, 'ABC-анализ клиентов (по LTV)')));
-  const sorted = [...state.clients].sort((a,b)=>b.ltv-a.ltv).filter(c => c.ltv > 0);
-  const totalLtv = sorted.reduce((s,c)=>s+c.ltv,0);
-  if (!sorted.length || totalLtv <= 0) {
-    abc.append(noData('Нет данных по LTV клиентов'));
-  } else {
-    let cum = 0;
-    const abcTab = el('table', { class:'data' });
-    abcTab.append(el('thead', {}, el('tr', {}, [
-      el('th', {}, 'Клиент'), el('th', { class:'num' }, 'LTV'), el('th', { class:'num' }, 'Доля'), el('th', {}, 'ABC'),
-    ])));
-    abcTab.append(el('tbody', {}, sorted.slice(0,8).map(c => {
-      cum += c.ltv;
-      const share = c.ltv / totalLtv * 100;
-      const cumShare = cum / totalLtv * 100;
-      const grp = cumShare < 80 ? 'A' : cumShare < 95 ? 'B' : 'C';
-      return el('tr', {}, [
-        el('td', { class:'strong' }, c.name),
-        el('td', { class:'num' }, fmtMoneyK(c.ltv)),
-        el('td', { class:'num muted' }, share.toFixed(1) + '%'),
-        el('td', {}, el('span', { class:'pill ' + (grp==='A'?'pill-success':grp==='B'?'pill-warn':'pill-muted') }, grp)),
-      ]);
-    })));
-    abc.append(abcTab);
+  // ----- Блок «Цель» (план продаж на месяц + прогресс) -----
+  const goalCard = el('div', { class:'card' });
+  goalCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Цель')));
+  const ginStyle = 'padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px';
+  const goalInput = el('input', { type:'number', min:'0', placeholder:'Сумма на месяц, ₸', style: ginStyle + ';width:180px' });
+  const goalSave = el('button', { class:'btn btn-sm btn-primary' }, 'Сохранить');
+  const goalPipe = el('select', { style: ginStyle }, [el('option', { value:'' }, 'Все воронки'), ...PIPELINES.map(p => el('option', { value: p.id }, p.name))]);
+  const goalMgr = el('select', { style: ginStyle }, [el('option', { value:'' }, 'Все ответственные'), ...state.users.filter(u => u.active !== false).map(u => el('option', { value: u.id }, u.name))]);
+  const goalBarFill = el('div', { style:'height:100%;width:0%;background:var(--brand);border-radius:999px;transition:width .3s' });
+  const goalBar = el('div', { style:'height:14px;background:#EEF1F4;border-radius:999px;overflow:hidden;margin-top:12px' }, goalBarFill);
+  const goalInfo = el('div', { class:'muted', style:'font-size:13px;margin-top:8px' }, '');
+  let goalValue = 0;
+  // «Выполнено» = сумма по выигранным сделкам (оплачено/отгружено) текущего месяца,
+  // с учётом фильтров (воронка + ответственный). Цены берутся из самих сделок (amount).
+  function achievedSum() {
+    const ym = new Date().toISOString().slice(0, 7);
+    return state.deals.filter(d => {
+      const st = stageById(d.stage); const lbl = (st && st.label) || '';
+      const won = /оплач|отгру|выполн|заверш/i.test(lbl) && !/отказ|проигр|возврат/i.test(lbl);
+      if (!won) return false;
+      if (goalPipe.value && stagePipeline(d.stage) !== goalPipe.value) return false;
+      if (goalMgr.value && d.manager !== goalMgr.value) return false;
+      if (String(d.created || '').slice(0, 7) !== ym) return false; // текущий месяц
+      return true;
+    }).reduce((s, d) => s + (Number(d.amount) || 0), 0);
   }
-  row.append(abc);
+  function renderGoal() {
+    const achieved = achievedSum();
+    const pct = goalValue > 0 ? Math.min(100, Math.round(achieved / goalValue * 100)) : 0;
+    goalBarFill.style.width = pct + '%';
+    goalBarFill.style.background = pct >= 100 ? '#22C55E' : pct >= 60 ? 'var(--brand)' : '#F59E0B';
+    goalInfo.textContent = goalValue > 0
+      ? `Выполнено ${fmtMoney(achieved)} из ${fmtMoney(goalValue)} · ${pct}%`
+      : (achieved > 0 ? `Закрыто за месяц: ${fmtMoney(achieved)}. Укажите цель, чтобы видеть прогресс.` : 'Укажите цель на месяц.');
+  }
+  goalSave.onclick = async () => {
+    goalValue = Math.max(0, Number(goalInput.value) || 0);
+    renderGoal();
+    goalSave.disabled = true;
+    try { await window.__API__.apiFetch('reports/goal', { method:'POST', body:{ goal: goalValue } }); toast('Цель сохранена', 'success'); }
+    catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
+    finally { goalSave.disabled = false; }
+  };
+  [goalPipe, goalMgr].forEach(s => s.onchange = renderGoal);
+  goalCard.append(
+    el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' }, 'Сумма, которую нужно закрыть за месяц. Прогресс — по выигранным сделкам (цены из сделок).'),
+    el('div', { style:'display:flex;gap:8px;flex-wrap:wrap;align-items:center' }, [goalInput, goalSave]),
+    el('div', { style:'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px' }, [goalPipe, goalMgr]),
+    goalBar,
+    goalInfo,
+  );
+  window.__API__.apiFetch('reports/goal').then(r => { goalValue = (r && r.goal) || 0; goalInput.value = goalValue || ''; renderGoal(); }).catch(() => renderGoal());
+  row.append(goalCard);
   wrap.append(row);
 
   // Загрузка реальных агрегатов и отрисовка (перезапрашивается при смене фильтров)
