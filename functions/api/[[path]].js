@@ -2067,9 +2067,9 @@ let SHIP_CLEARED_OK = false;
 async function ensureShipmentsCleared(env) {
   if (SHIP_CLEARED_OK) return;
   try {
-    if (!(await getSetting(env, 'shipments_cleared_v1'))) {
+    if (!(await getSetting(env, 'shipments_cleared_v2'))) {
       await env.DB.prepare('DELETE FROM shipments').run();
-      await setSetting(env, 'shipments_cleared_v1', '1');
+      await setSetting(env, 'shipments_cleared_v2', '1');
     }
   } catch (e) {}
   SHIP_CLEARED_OK = true;
