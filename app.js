@@ -3778,7 +3778,10 @@ async function openDealDetail(id, opts) {
   // ----- Документы: счета клиента (синхронно с разделом «Документы») -----
   const docsList = el('div', { style:'padding:0 14px 14px;overflow:auto' });
   function renderDocs() {
-    const invs = state.invoices.filter(iv => iv.client === d.client || iv.deal === d.id);
+    // Строго по deal_id: документ принадлежит ровно одной сделке. Раньше было
+    // «iv.client === d.client OR iv.deal === d.id» — при пустом клиенте (null===null)
+    // документ без клиента показывался во ВСЕХ сделках без клиента.
+    const invs = state.invoices.filter(iv => iv.deal && iv.deal === d.id);
     docsList.innerHTML = '';
     if (!invs.length) {
       docsList.append(el('div', { class:'muted', style:'font-size:12px;padding:8px 0' }, 'Счетов по сделке нет'));
