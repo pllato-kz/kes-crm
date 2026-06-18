@@ -68,6 +68,7 @@
       deliveryDate: d.delivery_date, deliveryTransport: d.delivery_transport, deliveryDriver: d.delivery_driver,
       stage: d.stage_id, amount: d.amount, items: d.items, created: d.created, target: d.target,
       lineItems: (d.lineItems || []).map((it) => ({ product: it.product_id, qty: it.qty, priceUsed: it.price_used })),
+      reservations: (d.reservations || []).map((r) => ({ product: r.product_id, qty: r.qty })),
     }),
     user: (u, rolesByKey) => ({
       id: u.id, name: u.name, email: u.email, roleKey: u.role_key,
