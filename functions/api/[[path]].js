@@ -3622,33 +3622,44 @@ function priceKindByUnit(unit) {
 async function getPricingConfig(env) {
   return {
     enabled: (await getSetting(env, 'pricing_enabled')) === '1',
-    opt: parseFloat(await getSetting(env, 'pricing_opt_pct')) || 0,   // наценка опт, %
-    rozn: parseFloat(await getSetting(env, 'pricing_rozn_pct')) || 0, // наценка розница, %
-    vat: parseFloat(await getSetting(env, 'pricing_vat_pct')) || 0,   // НДС, % (на опт/розницу)
+    opt: parseFloat(await getSetting(env, 'pricing_opt_pct')) || 0,            // наценка средний опт, %
+    optLarge: parseFloat(await getSetting(env, 'pricing_opt_large_pct')) || 0, // наценка крупный опт, %
+    rozn: parseFloat(await getSetting(env, 'pricing_rozn_pct')) || 0,          // наценка розница, %
+    vat: parseFloat(await getSetting(env, 'pricing_vat_pct')) || 0,            // НДС, %
   };
+}
+// price_wholesale = средний опт; price_wholesale_large = крупный опт; price_retail = розница.
+let PRICE_COLS_OK = false;
+async function ensurePriceColumns(env) {
+  if (PRICE_COLS_OK) return;
+  try { await env.DB.prepare('ALTER TABLE products ADD COLUMN price_wholesale_large REAL').run(); } catch (e) {}
+  PRICE_COLS_OK = true;
 }
 async function pricingSettingsGet(env) { await ensureAppSettings(env); return json(await getPricingConfig(env)); }
 async function pricingSettingsSave(env, request) {
   await ensureAppSettings(env);
+  await ensurePriceColumns(env);
   const b = await request.json().catch(() => ({}));
   if (b.enabled != null) await setSetting(env, 'pricing_enabled', b.enabled ? '1' : '0');
   if (b.opt != null) await setSetting(env, 'pricing_opt_pct', String(Number(b.opt) || 0));
+  if (b.optLarge != null) await setSetting(env, 'pricing_opt_large_pct', String(Number(b.optLarge) || 0));
   if (b.rozn != null) await setSetting(env, 'pricing_rozn_pct', String(Number(b.rozn) || 0));
   if (b.vat != null) await setSetting(env, 'pricing_vat_pct', String(Number(b.vat) || 0));
-  // Сразу применяем формулу ко всему каталогу (по закупу), чтобы опт/розница пересчитались
+  // Сразу применяем формулу ко всему каталогу (по закупу), чтобы цены пересчитались
   // не дожидаясь следующей синхронизации цен. Если выключено — очищаем опт/розницу.
   const pc = await getPricingConfig(env);
   let applied = 0;
   if (pc.enabled) {
     const vatM = 1 + (pc.vat / 100);
-    const optM = (1 + pc.opt / 100) * vatM;
-    const roznM = (1 + pc.rozn / 100) * vatM;
+    const optM = (1 + pc.opt / 100) * vatM;          // средний опт
+    const optLM = (1 + pc.optLarge / 100) * vatM;    // крупный опт
+    const roznM = (1 + pc.rozn / 100) * vatM;        // розница
     const res = await env.DB.prepare(
-      'UPDATE products SET price_wholesale=ROUND(price_cost*?,2), price_retail=ROUND(price_cost*?,2) WHERE price_cost IS NOT NULL AND price_cost>0'
-    ).bind(optM, roznM).run();
+      'UPDATE products SET price_wholesale=ROUND(price_cost*?,2), price_wholesale_large=ROUND(price_cost*?,2), price_retail=ROUND(price_cost*?,2) WHERE price_cost IS NOT NULL AND price_cost>0'
+    ).bind(optM, optLM, roznM).run();
     applied = (res.meta && res.meta.changes) || 0;
   } else {
-    await env.DB.prepare('UPDATE products SET price_wholesale=0, price_retail=0').run();
+    await env.DB.prepare('UPDATE products SET price_wholesale=0, price_wholesale_large=0, price_retail=0').run();
   }
   const out = await getPricingConfig(env);
   return json({ ...out, applied });
@@ -3663,6 +3674,7 @@ async function pricingSettingsSave(env, request) {
 // тянем порознь и соединяем по ссылке (Ref_Key) в памяти.
 // Цену нормируем к базовой единице: Цена / Коэффициент (как остатки в регистре).
 async function syncPrices(env, mode) {
+  await ensurePriceColumns(env);
   const isAvg = mode === 'avg';
   const TOP = 10000;
 
@@ -3742,13 +3754,14 @@ async function syncPrices(env, mode) {
     const cost = Math.round(price * 100) / 100;
     if (pc.enabled) {
       const vat = 1 + (pc.vat / 100);
-      const opt = Math.round(price * (1 + pc.opt / 100) * vat * 100) / 100;
-      const rozn = Math.round(price * (1 + pc.rozn / 100) * vat * 100) / 100;
-      stmts.push(env.DB.prepare('UPDATE products SET price_cost=?, price_wholesale=?, price_retail=? WHERE id=?').bind(cost, opt, rozn, p.id));
+      const opt = Math.round(price * (1 + pc.opt / 100) * vat * 100) / 100;        // средний опт
+      const optL = Math.round(price * (1 + pc.optLarge / 100) * vat * 100) / 100;  // крупный опт
+      const rozn = Math.round(price * (1 + pc.rozn / 100) * vat * 100) / 100;      // розница
+      stmts.push(env.DB.prepare('UPDATE products SET price_cost=?, price_wholesale=?, price_wholesale_large=?, price_retail=? WHERE id=?').bind(cost, opt, optL, rozn, p.id));
       updC++; updW++; updR++;
     } else {
       // закуп из прихода; опт/розницу очищаем — они задаются через «Ценообразование»
-      stmts.push(env.DB.prepare('UPDATE products SET price_cost=?, price_wholesale=0, price_retail=0 WHERE id=?').bind(cost, p.id));
+      stmts.push(env.DB.prepare('UPDATE products SET price_cost=?, price_wholesale=0, price_wholesale_large=0, price_retail=0 WHERE id=?').bind(cost, p.id));
       updC++;
     }
   }
@@ -3761,10 +3774,11 @@ async function syncPrices(env, mode) {
   if (pc.enabled) {
     const vatM = 1 + (pc.vat / 100);
     const optM = (1 + pc.opt / 100) * vatM;
+    const optLM = (1 + pc.optLarge / 100) * vatM;
     const roznM = (1 + pc.rozn / 100) * vatM;
     const res = await env.DB.prepare(
-      'UPDATE products SET price_wholesale=ROUND(price_cost*?,2), price_retail=ROUND(price_cost*?,2) WHERE price_cost IS NOT NULL AND price_cost>0'
-    ).bind(optM, roznM).run();
+      'UPDATE products SET price_wholesale=ROUND(price_cost*?,2), price_wholesale_large=ROUND(price_cost*?,2), price_retail=ROUND(price_cost*?,2) WHERE price_cost IS NOT NULL AND price_cost>0'
+    ).bind(optM, optLM, roznM).run();
     formulaAll = (res.meta && res.meta.changes) || 0;
   }
 
