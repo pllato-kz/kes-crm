@@ -898,7 +898,7 @@ async function ensureReserveStage(env) {
       const pid = p.id || 'default';
       // Все этапы «Резерв» в этой воронке (на старом коде могли задвоиться из-за гонки запросов).
       const exRows = await env.DB.prepare(
-        "SELECT id FROM deal_stages WHERE pipeline_id=? AND lower(label) LIKE '%резерв%' ORDER BY rowid"
+        "SELECT id FROM deal_stages WHERE pipeline_id=? AND (label LIKE '%Резерв%' OR label LIKE '%резерв%') ORDER BY rowid"
       ).bind(pid).all();
       const rows = exRows.results || [];
       if (rows.length > 1) {
@@ -911,7 +911,7 @@ async function ensureReserveStage(env) {
       }
       if (rows.length >= 1) continue; // «Резерв» уже есть — повторно не создаём
       // ставим после «Согласовано/Счёт» (среди рабочих этапов, до Оплачено)
-      const ref = await env.DB.prepare("SELECT sort FROM deal_stages WHERE pipeline_id=? AND (lower(label) LIKE '%согласов%' OR lower(label) LIKE '%счёт%' OR lower(label) LIKE '%счет%') ORDER BY sort LIMIT 1").bind(pid).first();
+      const ref = await env.DB.prepare("SELECT sort FROM deal_stages WHERE pipeline_id=? AND (label LIKE '%огласов%' OR label LIKE '%чёт%' OR label LIKE '%чет%') ORDER BY sort LIMIT 1").bind(pid).first();
       const sort = ref && ref.sort != null ? ref.sort : 3;
       // Детерминированный id + INSERT OR IGNORE — защита от повторной вставки при гонке запросов.
       await env.DB.prepare('INSERT OR IGNORE INTO deal_stages (id, label, color, sort, pipeline_id, protected) VALUES (?,?,?,?,?,1)')
@@ -922,7 +922,7 @@ async function ensureReserveStage(env) {
 }
 async function isReserveStage(env, stageId) {
   if (!stageId) return false;
-  const r = await env.DB.prepare("SELECT 1 AS y FROM deal_stages WHERE id=? AND lower(label) LIKE '%резерв%'").bind(stageId).first();
+  const r = await env.DB.prepare("SELECT 1 AS y FROM deal_stages WHERE id=? AND (label LIKE '%Резерв%' OR label LIKE '%резерв%')").bind(stageId).first();
   return !!(r && r.y);
 }
 
@@ -983,7 +983,7 @@ async function scanReserveExpiry(env) {
   const rows = await env.DB.prepare(
     `SELECT d.id, d.no, d.title, d.manager_id
        FROM deals d JOIN deal_stages s ON s.id = d.stage_id
-      WHERE lower(s.label) LIKE '%резерв%' AND d.reserved_at IS NOT NULL AND d.reserved_at<>''
+      WHERE (s.label LIKE '%Резерв%' OR s.label LIKE '%резерв%') AND d.reserved_at IS NOT NULL AND d.reserved_at<>''
         AND (d.archived_at IS NULL OR d.archived_at='')
         AND (julianday('now') - julianday(d.reserved_at)) >= ?`
   ).bind(termDays).all();
@@ -1449,7 +1449,7 @@ async function openDealForClient(env, clientId) {
   const r = await env.DB.prepare(
     `SELECT d.id FROM deals d JOIN deal_stages s ON s.id = d.stage_id
      WHERE d.client_id = ? AND (d.archived_at IS NULL OR d.archived_at = '')
-       AND (s.protected IS NULL OR s.protected = 0 OR lower(s.label) LIKE '%резерв%')
+       AND (s.protected IS NULL OR s.protected = 0 OR s.label LIKE '%Резерв%' OR s.label LIKE '%резерв%')
        AND s.label NOT LIKE '%акры%' AND s.label NOT LIKE '%тказ%' AND s.label NOT LIKE '%роигр%'
      ORDER BY d.created_at DESC LIMIT 1`
   ).bind(clientId).first();
