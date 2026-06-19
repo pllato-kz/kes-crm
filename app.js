@@ -214,6 +214,15 @@ const fmtDate = (d) => {
 const nn = (v) => { const s = v == null ? '' : String(v).trim(); return (s === '' || s.toLowerCase() === 'null' || s.toLowerCase() === 'undefined') ? '' : s; };
 
 const byId = (arr, id) => arr.find(x => x.id === id);
+
+// Глобальный кэш настроек ценообразования (наценки опт/розница + НДС). Нужен там,
+// где строим документы синхронно (счёт/КП). Обновляется при загрузке и сохранении настроек.
+let CRM_PRICING = { enabled: false, opt: 0, rozn: 0, vat: 12 };
+function loadPricingCfg() {
+  try {
+    return window.__API__.apiFetch('pricing/settings').then(c => { if (c) Object.assign(CRM_PRICING, c); return CRM_PRICING; }).catch(() => CRM_PRICING);
+  } catch (e) { return Promise.resolve(CRM_PRICING); }
+}
 const stageById = (id) => STAGES.find(s => s.id === id) || STAGES[0];
 // ----- Воронки продаж -----
 const pipelineById = (id) => PIPELINES.find(p => p.id === id);
@@ -2003,7 +2012,8 @@ function buildInvoiceInner(deal, kind, invNoArg) {
   }).filter(Boolean);
   if (!items.length) return null;
   const subtotal = items.reduce((s, it) => s + it.sum, 0);
-  const vat = Math.round(subtotal * 0.12);
+  const vatPct = Number(CRM_PRICING.vat) || 0; // НДС из настроек «Ценообразование», не хардкод
+  const vat = Math.round(subtotal * vatPct / 100);
   const total = subtotal + vat;
   const today = new Date();
   const dateStr = today.toLocaleDateString('ru-RU', { day:'2-digit', month:'long', year:'numeric' });
@@ -2084,7 +2094,7 @@ function buildInvoiceInner(deal, kind, invNoArg) {
 
       <div class="pr-totals">
         <div class="total-line"><span>Сумма без НДС:</span> <span>${fmtMoney(subtotal)}</span></div>
-        <div class="total-line"><span>НДС 12%:</span> <span>${fmtMoney(vat)}</span></div>
+        <div class="total-line"><span>НДС ${vatPct}%:</span> <span>${fmtMoney(vat)}</span></div>
         <div class="total-line grand"><span>ИТОГО:</span> <span>${fmtMoney(total)}</span></div>
       </div>
 
@@ -2175,7 +2185,7 @@ function buildInvoiceInner(deal, kind, invNoArg) {
           <td></td>
           <td style="width:300px">
             <div style="display:flex;justify-content:space-between;padding:2px 0"><span>Итого:</span><b>${fmtMoney(subtotal)}</b></div>
-            <div style="display:flex;justify-content:space-between;padding:2px 0"><span>Сумма НДС (12%):</span><b>${fmtMoney(vat)}</b></div>
+            <div style="display:flex;justify-content:space-between;padding:2px 0"><span>Сумма НДС (${vatPct}%):</span><b>${fmtMoney(vat)}</b></div>
             <div style="display:flex;justify-content:space-between;padding:6px 0;border-top:2px solid #000;font-size:15px"><span><b>Всего к оплате:</b></span><b>${fmtMoney(total)}</b></div>
           </td>
         </tr>
@@ -6991,6 +7001,7 @@ VIEWS.settings = () => {
       prSave.disabled = true;
       try {
         await window.__API__.apiFetch('pricing/settings', { method:'POST', body:{ enabled: prEnabled.checked, opt: Number(prOpt.value) || 0, rozn: Number(prRozn.value) || 0, vat: Number(prVat.value) || 0 } });
+        Object.assign(CRM_PRICING, { enabled: prEnabled.checked, opt: Number(prOpt.value) || 0, rozn: Number(prRozn.value) || 0, vat: Number(prVat.value) || 0 }); // обновляем кэш (НДС счёта и пр.)
         toast('Ценообразование сохранено. Применится при ближайшей синхронизации цен.', 'success');
       } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
       prSave.disabled = false;
@@ -7382,6 +7393,7 @@ async function bootApp() {
       return;
     }
     renderShell();
+    loadPricingCfg(); // кэш настроек ценообразования (НДС для счёта/КП и пр.)
     // SIP-софтфон: пре-варм (UA подключится заранее → первый звонок мгновенный).
     // Если SIP не настроен на сервере (нет секретов) — тихо ничего не показывает.
     if (window.SipClient) {
