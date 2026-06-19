@@ -945,6 +945,10 @@ async function createPipeline(env, request) {
     await env.DB.prepare('INSERT INTO deal_stages (id, label, color, sort, pipeline_id, protected) VALUES (?,?,?,?,?,?)')
       .bind(genId(), label, color, i++, id, prot).run();
   }
+  // Защищённый этап «Резерв» сразу при создании воронки (после «Счёт», до «Оплачено»).
+  // Детерминированный id rsv_<pipeline> + INSERT OR IGNORE — без дублей и без зависимости от ensureReserveStage.
+  await env.DB.prepare('INSERT OR IGNORE INTO deal_stages (id, label, color, sort, pipeline_id, protected) VALUES (?,?,?,?,?,1)')
+    .bind('rsv_' + id, 'Резерв', '#F59E0B', 3.5, id).run();
   return json({ id, name, sort }, 201);
 }
 
