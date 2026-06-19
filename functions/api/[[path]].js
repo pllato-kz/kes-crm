@@ -269,12 +269,19 @@ export async function onRequest(context) {
     }
     // Автоматизация: создавать отгрузку при полной оплате сделки
     if (seg[0] === 'automation' && seg[1] === 'settings') {
-      if (request.method === 'GET') { await ensureAppSettings(env); return json({ autoShipmentOnPaid: (await getSetting(env, 'auto_shipment_on_paid')) !== '0' }); }
+      if (request.method === 'GET') {
+        await ensureAppSettings(env);
+        return json({
+          autoShipmentOnPaid: (await getSetting(env, 'auto_shipment_on_paid')) !== '0',
+          reserveTermDays: parseInt(await getSetting(env, 'reserve_term_days'), 10) || 3,
+        });
+      }
       if (request.method === 'POST') {
         if (auth.role !== 'director') return err(403, 'Только директор');
         const b = await request.json().catch(() => ({}));
-        await setSetting(env, 'auto_shipment_on_paid', b.autoShipmentOnPaid ? '1' : '0');
-        return json({ autoShipmentOnPaid: !!b.autoShipmentOnPaid });
+        if (b.autoShipmentOnPaid != null) await setSetting(env, 'auto_shipment_on_paid', b.autoShipmentOnPaid ? '1' : '0');
+        if (b.reserveTermDays != null) await setSetting(env, 'reserve_term_days', String(Math.max(1, parseInt(b.reserveTermDays, 10) || 3)));
+        return json({ autoShipmentOnPaid: (await getSetting(env, 'auto_shipment_on_paid')) !== '0', reserveTermDays: parseInt(await getSetting(env, 'reserve_term_days'), 10) || 3 });
       }
     }
     // Отчёты: цель (план продаж на месяц) — единая сумма, сохраняется в настройках
@@ -482,6 +489,7 @@ async function dataRoute(ctx, seg, url, auth) {
   if (resource === 'deals') await ensureDealColumns(env);
   if (resource === 'company') await ensureCompanyColumns(env);
   if (['pipelines', 'deal_stages', 'deals'].includes(resource)) await ensurePipelineSchema(env);
+  if (resource === 'deal_stages') await ensureReserveStage(env); // неудаляемая стадия «Резерв»
 
   // изменять роли (матрицу доступа) может только директор
   if (resource === 'roles' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
@@ -714,6 +722,7 @@ async function ensureDealColumns(env) {
     'ALTER TABLE deals ADD COLUMN delivery_transport TEXT',
     'ALTER TABLE deals ADD COLUMN delivery_driver TEXT',
     'ALTER TABLE deals ADD COLUMN phone TEXT',
+    'ALTER TABLE deals ADD COLUMN reserved_at TEXT',
   ]) { try { await env.DB.prepare(ddl).run(); } catch (e) { /* уже есть */ } }
   DEALS_SCHEMA_OK = true;
 }
@@ -878,6 +887,32 @@ async function ensureClosedStageRemoved(env) {
   } catch (e) {}
 }
 
+// Неудаляемая стадия «Резерв» в каждой воронке (бронь без оплаты). Создаём один раз, если её нет.
+let RESERVE_STAGE_OK = false;
+async function ensureReserveStage(env) {
+  if (RESERVE_STAGE_OK) return;
+  try {
+    const pipes = await env.DB.prepare('SELECT DISTINCT pipeline_id AS id FROM deal_stages').all();
+    const list = (pipes.results && pipes.results.length) ? pipes.results : [{ id: 'default' }];
+    for (const p of list) {
+      const pid = p.id || 'default';
+      const ex = await env.DB.prepare("SELECT id FROM deal_stages WHERE pipeline_id=? AND lower(label) LIKE '%резерв%'").bind(pid).first();
+      if (ex) continue;
+      // ставим после «Согласовано/Счёт» (среди рабочих этапов, до Оплачено)
+      const ref = await env.DB.prepare("SELECT sort FROM deal_stages WHERE pipeline_id=? AND (lower(label) LIKE '%согласов%' OR lower(label) LIKE '%счёт%' OR lower(label) LIKE '%счет%') ORDER BY sort LIMIT 1").bind(pid).first();
+      const sort = ref && ref.sort != null ? ref.sort : 3;
+      await env.DB.prepare('INSERT INTO deal_stages (id, label, color, sort, pipeline_id, protected) VALUES (?,?,?,?,?,1)')
+        .bind(genId(), 'Резерв', '#F59E0B', sort, pid).run();
+    }
+  } catch (e) {}
+  RESERVE_STAGE_OK = true;
+}
+async function isReserveStage(env, stageId) {
+  if (!stageId) return false;
+  const r = await env.DB.prepare("SELECT 1 AS y FROM deal_stages WHERE id=? AND lower(label) LIKE '%резерв%'").bind(stageId).first();
+  return !!(r && r.y);
+}
+
 // Создание воронки + стартовый набор этапов
 async function createPipeline(env, request) {
   const body = await request.json().catch(() => ({}));
@@ -923,6 +958,32 @@ async function ensureNotifSchema(env) {
     try { await env.DB.prepare(ddl).run(); } catch (e) { /* колонка уже есть */ }
   }
   try { await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_notif_ref ON notifications(ref)').run(); } catch (e) {}
+}
+
+// Истёкший резерв: сделки на стадии «Резерв», у которых reserved_at + срок < сейчас →
+// уведомление менеджеру и директорам (идемпотентно, без авто-снятия). Срок — из настроек.
+async function scanReserveExpiry(env) {
+  await ensureNotifSchema(env);
+  await ensureReserveStage(env);
+  await ensureDealColumns(env);
+  const termDays = parseInt(await getSetting(env, 'reserve_term_days'), 10) || 3;
+  const rows = await env.DB.prepare(
+    `SELECT d.id, d.no, d.title, d.manager_id
+       FROM deals d JOIN deal_stages s ON s.id = d.stage_id
+      WHERE lower(s.label) LIKE '%резерв%' AND d.reserved_at IS NOT NULL AND d.reserved_at<>''
+        AND (d.archived_at IS NULL OR d.archived_at='')
+        AND (julianday('now') - julianday(d.reserved_at)) >= ?`
+  ).bind(termDays).all();
+  const dirs = await env.DB.prepare("SELECT id FROM users WHERE role_key='director' AND active=1").all();
+  const dirIds = (dirs.results || []).map((d) => d.id);
+  const stmts = [];
+  for (const r of (rows.results || [])) {
+    const recips = new Set(dirIds); if (r.manager_id) recips.add(r.manager_id);
+    const txt = `Истёк срок резерва (${termDays} дн.): сделка ${r.no || ''} «${r.title || ''}». Снять с резерва?`;
+    for (const uid of recips) stmts.push(env.DB.prepare("INSERT OR IGNORE INTO notifications (text, type, read, created_at, user_id, ref) VALUES (?, 'warn', 0, datetime('now'), ?, ?)").bind(txt, uid, `reserveexp:${r.id}:${uid}`));
+  }
+  for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+  return json({ expired: (rows.results || []).length });
 }
 
 async function listNotifications(env, auth) {
@@ -1375,7 +1436,7 @@ async function openDealForClient(env, clientId) {
   const r = await env.DB.prepare(
     `SELECT d.id FROM deals d JOIN deal_stages s ON s.id = d.stage_id
      WHERE d.client_id = ? AND (d.archived_at IS NULL OR d.archived_at = '')
-       AND (s.protected IS NULL OR s.protected = 0)
+       AND (s.protected IS NULL OR s.protected = 0 OR lower(s.label) LIKE '%резерв%')
        AND s.label NOT LIKE '%акры%' AND s.label NOT LIKE '%тказ%' AND s.label NOT LIKE '%роигр%'
      ORDER BY d.created_at DESC LIMIT 1`
   ).bind(clientId).first();
@@ -1597,6 +1658,11 @@ async function reserveDeal(env, dealId, release) {
   const stmts = [];
   for (const pid of Object.keys(want)) if (want[pid] > 0) stmts.push(env.DB.prepare('INSERT INTO deal_reservations (deal_id, product_id, qty) VALUES (?,?,?)').bind(dealId, pid, want[pid]));
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+  if (release) {
+    // снятие резерва — останавливаем срок и убираем уведомления об истечении
+    try { await env.DB.prepare('UPDATE deals SET reserved_at=NULL WHERE id=?').bind(dealId).run(); } catch (e) {}
+    try { await env.DB.prepare("DELETE FROM notifications WHERE ref LIKE ?").bind(`reserveexp:${dealId}:%`).run(); } catch (e) {}
+  }
   const totalQty = Object.values(want).reduce((s, v) => s + v, 0);
   return json({ ok: true, released: !!release, products: Object.keys(want).length, totalQty });
 }
@@ -2061,6 +2127,15 @@ async function writeDeal(env, request, method, id, auth) {
         if (shipStatus) {
           await ensureShipmentStatuses(env);
           await env.DB.prepare('UPDATE shipments SET status_id=? WHERE deal_id=?').bind(shipStatus, dealId).run();
+        }
+        // Стадия «Резерв»: при попадании на неё — авто-резерв всех позиций + старт срока;
+        // при уходе с неё — останавливаем срок (резерв оставляем, снимается вручную/при отгрузке).
+        if (/резерв/i.test(label)) {
+          try { await reserveDeal(env, dealId, false); } catch (e) {}
+          await env.DB.prepare("UPDATE deals SET reserved_at=datetime('now') WHERE id=?").bind(dealId).run();
+        } else if (prevStage && await isReserveStage(env, prevStage)) {
+          await env.DB.prepare('UPDATE deals SET reserved_at=NULL WHERE id=?').bind(dealId).run();
+          await env.DB.prepare("DELETE FROM notifications WHERE ref LIKE ?").bind(`reserveexp:${dealId}:%`).run();
         }
       } catch (e) { /* не блокируем смену этапа */ }
     }
@@ -3097,6 +3172,7 @@ const SYNC_INTERVALS = {
   prices_1c: 8,       // опт/розница из приходов по единице измерения — ~10 мин (и сразу после прихода)
   saleprices_1c: 10,  // закуп из регистра цен 1С + опт/розница в пробелы — ~10 мин (+ сразу после полного прохода номенклатуры)
   invoice_payments_1c: 15, // статус оплаты счетов из платежей 1С (банк+касса, FIFO) — ~15 мин
+  reserve_expiry: 60,      // проверка истёкших резервов (стадия «Резерв») — раз в час
 };
 // Запускает только «просроченные» синхронизации (по last_at в sync_state).
 async function runDueSyncs(env) {
@@ -3129,6 +3205,7 @@ async function runDueSyncs(env) {
   if (due('saleprices_1c')) await run('saleprices', () => syncSalePrices(env));
   // статус оплаты счетов из 1С (Вариант A: по платежам банк+касса, FIFO)
   if (due('invoice_payments_1c')) await run('invoice_payments', () => syncInvoicePayments(env));
+  if (due('reserve_expiry')) await run('reserve_expiry', () => scanReserveExpiry(env));
   // единицы измерения — в самом конце (резюмируемо), чтобы тяжёлый проход не вытеснял цены
   const unitOff = parseInt((await getSetting(env, 'units_offset')) || '0', 10) || 0;
   if (unitOff > 0 || due('units_1c')) await run('units', () => syncUnits(env));
