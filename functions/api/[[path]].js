@@ -643,6 +643,11 @@ async function productStock(env, request, productId) {
 
 // --------------------------------------------------------------------------
 // Каталог: поиск + фильтр + пагинация + остатки (на 1100+ SKU)
+// Экранирование спецсимволов LIKE (%, _, \) в пользовательском вводе. Без этого
+// они трактуются как подстановочные знаки и при множестве дают
+// "LIKE or GLOB pattern too complex". Используется с ... LIKE ? ESCAPE '\'.
+function escapeLike(s) { return String(s).replace(/[\\%_]/g, '\\$&'); }
+
 // GET /api/products?q=&category=&brand=&page=1&limit=50
 // --------------------------------------------------------------------------
 async function listProducts(env, url) {
@@ -666,7 +671,7 @@ async function listProducts(env, url) {
 
   const where = [];
   const args = [];
-  if (q) { where.push('(p.name LIKE ? OR p.sku LIKE ?)'); args.push(`%${q}%`, `%${q}%`); }
+  if (q) { const qp = `%${escapeLike(q)}%`; where.push("(p.name LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\')"); args.push(qp, qp); }
   if (cat) { where.push('p.category_id = ?'); args.push(cat); }
   if (brand) { where.push('p.brand = ?'); args.push(brand); }
   if (low != null) { where.push('(COALESCE(s.stock,0) - COALESCE(s.reserved,0)) < ?'); args.push(low); }
