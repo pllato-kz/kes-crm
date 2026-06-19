@@ -3377,8 +3377,9 @@ async function openDealDetail(id, opts) {
       d.lineItems.forEach((it, idx) => {
         const p = byId(state.products, it.product);
         if (!p) return;
-        const cost = Number(p.priceCost) || 0, opt = Number(p.priceWholesale) || 0, rozn = Number(p.priceRetail) || 0;
-        if (it.priceUsed == null) it.priceUsed = rozn || opt || 0; // по умолчанию — розничная цена
+        const cost = Number(p.priceCost) || 0, opt = Number(p.priceWholesale) || 0, optLarge = Number(p.priceWholesaleLarge) || 0, rozn = Number(p.priceRetail) || 0;
+        const vatM = 1 + (Number(CRM_PRICING.vat) || 0) / 100; // для расчёта наценки без НДС
+        if (it.priceUsed == null) it.priceUsed = rozn || opt || optLarge || 0; // по умолчанию — розничная цена
         const sumCell = el('td', { class:'num strong' }, fmtMoney(it.qty * it.priceUsed));
         const recalc = () => { sumCell.textContent = fmtMoney(it.qty * it.priceUsed); recomputeAmount(); };
 
@@ -3388,13 +3389,14 @@ async function openDealDetail(id, opts) {
         let priceCell, basesRow = null;
         if (canEdit) {
           const priceInput = el('input', { class:'qty', type:'number', min:'0', value: Math.round(it.priceUsed || 0), title:'Цена за единицу, ₸' });
-          const pctInput = el('input', { class:'qty', type:'number', step:'1', title:'Наценка % от закупа', style:'width:56px' });
+          const pctInput = el('input', { class:'qty', type:'number', step:'1', title:'Наценка % (без НДС)', style:'width:56px' });
           const colorPct = (m) => { pctInput.style.color = m < 0 ? '#EF4444' : (m > 0 ? '#10B981' : '#6B7280'); pctInput.style.fontWeight = '600'; };
           const markBelow = () => { priceInput.style.borderColor = (cost > 0 && (Number(it.priceUsed) || 0) < cost) ? '#EF4444' : ''; };
-          const setPct = () => { if (cost > 0) { const m = Math.round(((Number(it.priceUsed) || 0) - cost) / cost * 100); pctInput.value = m; colorPct(m); } };
+          // Наценка показывается БЕЗ НДС (как в настройках: розница 30, опт 15…), а не итоговый множитель.
+          const setPct = () => { if (cost > 0) { const net = (Number(it.priceUsed) || 0) / vatM; const m = Math.round((net - cost) / cost * 100); pctInput.value = m; colorPct(m); } };
           priceInput.oninput = (e) => { it.priceUsed = Math.max(0, +e.target.value || 0); setPct(); markBelow(); recalc(); refreshActive(); };
-          pctInput.oninput = (e) => { const m = +e.target.value || 0; it.priceUsed = Math.max(0, Math.round(cost * (1 + m / 100))); priceInput.value = Math.round(it.priceUsed); colorPct(m); markBelow(); recalc(); refreshActive(); };
-          // Базы цены: Закуп/Опт/Розн. Активная (совпадающая с текущей ценой) подсвечивается.
+          pctInput.oninput = (e) => { const m = +e.target.value || 0; it.priceUsed = Math.max(0, Math.round(cost * (1 + m / 100) * vatM)); priceInput.value = Math.round(it.priceUsed); colorPct(m); markBelow(); recalc(); refreshActive(); };
+          // Базы цены: Крупный опт / Средний опт / Розница (закуп менеджеру не показываем).
           const bases = [];
           const chip = (label, val) => {
             if (!(val > 0)) return el('span', { class:'price-chip off' }, label + ' —');
@@ -3413,13 +3415,13 @@ async function openDealDetail(id, opts) {
             el('div', { style:'flex:1;min-width:0' }, priceInput),
             cost > 0 ? el('div', { style:'display:flex;align-items:center;gap:2px;flex:none' }, [pctInput, el('span', { class:'muted', style:'font-size:11px' }, '%')]) : null,
           ]));
-          basesRow = el('div', { style:'display:flex;flex-wrap:wrap;gap:4px;margin-top:5px' }, [chip('Закуп', cost), chip('Опт', opt), chip('Розн', rozn)]);
+          basesRow = el('div', { style:'display:flex;flex-wrap:wrap;gap:4px;margin-top:5px' }, [chip('Кр.опт', optLarge), chip('Ср.опт', opt), chip('Розн', rozn)]);
           refreshActive();
         } else {
-          const m = cost > 0 ? Math.round(((Number(it.priceUsed) || 0) - cost) / cost * 100) : null;
+          const m = cost > 0 ? Math.round(((Number(it.priceUsed) || 0) / vatM - cost) / cost * 100) : null;
           priceCell = el('td', { class:'num' }, [
             el('div', {}, fmtMoney(it.priceUsed)),
-            m != null ? el('div', { style:'font-size:11px;font-weight:600;color:' + (m < 0 ? '#EF4444' : '#10B981') }, (m >= 0 ? '+' : '') + m + '% от закупа') : null,
+            m != null ? el('div', { style:'font-size:11px;font-weight:600;color:' + (m < 0 ? '#EF4444' : '#10B981') }, (m >= 0 ? '+' : '') + m + '% наценка') : null,
           ]);
         }
 
@@ -4639,10 +4641,8 @@ VIEWS.catalog = () => {
   const q = { q: '', category: '', brand: '', sort: '', stockMin: '', stockMax: '', costMin: '', costMax: '', page: 1, limit: 50, total: 0 };
   const selected = new Set(); // выбранные товары для массового редактирования
 
-  // Категории (серверный подсчёт)
-  wrap.append(el('div', { style:'font-weight:600;margin:8px 0 12px;font-size:14px' }, 'Категории'));
-  const tilesHost = el('div', { class: 'cat-grid' });
-  wrap.append(tilesHost);
+  // Категории скрыты (10.5k товаров из 1С не разложены по категориям) — поиск по артикулу/названию.
+  const tilesHost = el('div', { class: 'cat-grid', style:'display:none' });
 
   // Тулбар: поиск + бренд + сортировка по цене
   const searchI = el('input', { placeholder:'Поиск по артикулу или названию…' });
@@ -4729,8 +4729,8 @@ VIEWS.catalog = () => {
       t.append(el('thead', {}, el('tr', {}, [
         el('th', { style:'width:34px;text-align:center' }, selAll),
         el('th', {}, 'Артикул'), el('th', {}, 'Наименование'), el('th', {}, 'Бренд'),
-        el('th', { class:'num' }, 'Закуп'), el('th', { class:'num' }, 'Опт'), el('th', { class:'num' }, 'Розница'),
-        el('th', { class:'num', title:'Наценка продажной цены к закупу' }, 'Наценка'), el('th', {}, 'Остаток'),
+        el('th', { class:'num' }, 'Закуп'), el('th', { class:'num' }, 'Крупный опт'), el('th', { class:'num' }, 'Средний опт'), el('th', { class:'num' }, 'Розница'),
+        el('th', {}, 'Остаток'),
       ])));
       const rows = pageProducts.map((p, i) => {
         const cb = el('input', { type:'checkbox', checked: selected.has(p.id) ? 'checked' : null, onclick: (e) => e.stopPropagation(),
@@ -4744,15 +4744,9 @@ VIEWS.catalog = () => {
             : (nn(p.name) || '—')),
           el('td', {}, el('span', { class:'tag' }, nn(p.brand) || '—')),
           el('td', { class:'num strong' }, p.priceCost ? fmtMoney(p.priceCost) : '—'),
+          el('td', { class:'num muted' }, p.priceWholesaleLarge ? fmtMoney(p.priceWholesaleLarge) : '—'),
           el('td', { class:'num muted' }, p.priceWholesale ? fmtMoney(p.priceWholesale) : '—'),
           el('td', { class:'num muted' }, p.priceRetail ? fmtMoney(p.priceRetail) : '—'),
-          (() => {
-            const cost = Number(p.priceCost) || 0, sale = (Number(p.priceRetail) || 0) || (Number(p.priceWholesale) || 0);
-            const m = priceMarginPct(cost, sale);
-            const below = cost > 0 && ((Number(p.priceWholesale) > 0 && p.priceWholesale < cost) || (Number(p.priceRetail) > 0 && p.priceRetail < cost));
-            return el('td', { class:'num', style: 'font-weight:600;' + (m == null ? 'color:#9CA3AF' : 'color:' + (m < 0 ? '#EF4444' : '#10B981')), title: below ? 'Есть цена ниже закупа' : '' },
-              m == null ? '—' : ((m >= 0 ? '+' : '') + m + '%' + (below ? ' ⚠️' : '')));
-          })(),
           el('td', {}, stockIndicator(p.stock - p.reserved, p.stock, { noBar: true })),
         ]);
       });
@@ -4775,8 +4769,7 @@ VIEWS.catalog = () => {
     );
   }
 
-  loadCats();
-  loadProducts();
+  loadProducts(); // категории не загружаем — плитки скрыты
   return wrap;
 };
 
