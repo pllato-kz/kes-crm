@@ -215,6 +215,9 @@ const nn = (v) => { const s = v == null ? '' : String(v).trim(); return (s === '
 
 const byId = (arr, id) => arr.find(x => x.id === id);
 
+// Закупочную цену (себестоимость) видят все роли, КРОМЕ менеджеров — коммерческая тайна.
+function canSeeCost() { return !(currentUser && currentUser.roleKey === 'manager'); }
+
 // Глобальный кэш настроек ценообразования (наценки опт/розница + НДС). Нужен там,
 // где строим документы синхронно (счёт/КП). Обновляется при загрузке и сохранении настроек.
 let CRM_PRICING = { enabled: false, opt: 0, optLarge: 0, rozn: 0, vat: 12 };
@@ -1490,13 +1493,14 @@ function openProductDetail(idOrProduct) {
     const free = stock - reserved;
     const unit = nn(p.unit);
     const cost = Number(p.priceCost) || 0, opt = Number(p.priceWholesale) || 0, rozn = Number(p.priceRetail) || 0;
-    const below = (opt > 0 && opt < cost) || (rozn > 0 && rozn < cost);
+    const showCost = canSeeCost(); // менеджерам закуп и производные от него (наценка/маржа) не показываем
+    const below = showCost && ((opt > 0 && opt < cost) || (rozn > 0 && rozn < cost));
     priceHost.innerHTML = '';
     priceHost.append(
-      el('div', { class:'grid grid-3', style:'gap:10px' }, [
-        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Закуп'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, cost ? fmtMoney(cost) : '—')]),
-        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Опт'),   el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, opt ? fmtMoney(opt) : '—'), priceDeltaEl(cost, opt)]),
-        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Розница'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, rozn ? fmtMoney(rozn) : '—'), priceDeltaEl(cost, rozn)]),
+      el('div', { class: showCost ? 'grid grid-3' : 'grid grid-2', style:'gap:10px' }, [
+        showCost ? el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Закуп'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, cost ? fmtMoney(cost) : '—')]) : null,
+        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Опт'),   el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, opt ? fmtMoney(opt) : '—'), showCost ? priceDeltaEl(cost, opt) : null]),
+        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Розница'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, rozn ? fmtMoney(rozn) : '—'), showCost ? priceDeltaEl(cost, rozn) : null]),
       ]),
     );
     // ВАЖНО: нативный append(null) вставил бы текст «null» — поэтому добавляем плашку отдельно
@@ -1508,7 +1512,7 @@ function openProductDetail(idOrProduct) {
       el('dt', {}, 'Остаток'),       el('dd', {}, `${stock}${unit ? ' ' + unit : ''}`),
       el('dt', {}, 'Зарезервировано'), el('dd', {}, `${reserved}${unit ? ' ' + unit : ''}`),
       el('dt', {}, 'Доступно'),      el('dd', {}, stockIndicator(free, stock, { noBar: true })),
-      el('dt', {}, 'Маржа розница'), el('dd', {}, margin != null ? (margin >= 0 ? '+' : '') + margin + '%' : '—'),
+      showCost ? el('dt', {}, 'Маржа розница') : null, showCost ? el('dd', {}, margin != null ? (margin >= 0 ? '+' : '') + margin + '%' : '—') : null,
     ]));
   }
   renderInfo();
@@ -4699,7 +4703,7 @@ VIEWS.catalog = () => {
       filterGroup('Бренд', brandSel),
       filterGroup('Сортировка', sortSel),
       filterGroup('Остаток, шт', el('div', { class:'row2' }, [stockMinI, stockMaxI])),
-      filterGroup('Закупочная цена, ₸', el('div', { class:'row2' }, [costMinI, costMaxI])),
+      canSeeCost() ? filterGroup('Закупочная цена, ₸', el('div', { class:'row2' }, [costMinI, costMaxI])) : null,
     ],
     onReset: () => {
       Object.assign(q, { brand:'', sort:'', stockMin:'', stockMax:'', costMin:'', costMax:'', page:1 });
@@ -4753,10 +4757,11 @@ VIEWS.catalog = () => {
       const syncSelAll = () => { selAll.checked = pageProducts.length > 0 && pageProducts.every(p => selected.has(p.id)); };
       selAll.onchange = () => { pageProducts.forEach((p, i) => { if (selAll.checked) selected.add(p.id); else selected.delete(p.id); if (rowChecks[i]) rowChecks[i].checked = selAll.checked; }); refreshBulk(); };
       const t = el('table', { class:'data' });
+      const showCost = canSeeCost();
       t.append(el('thead', {}, el('tr', {}, [
         el('th', { style:'width:34px;text-align:center' }, selAll),
         el('th', {}, 'Артикул'), el('th', {}, 'Наименование'), el('th', {}, 'Бренд'),
-        el('th', { class:'num' }, 'Закуп'), el('th', { class:'num' }, 'Крупный опт'), el('th', { class:'num' }, 'Средний опт'), el('th', { class:'num' }, 'Розница'),
+        showCost ? el('th', { class:'num' }, 'Закуп') : null, el('th', { class:'num' }, 'Крупный опт'), el('th', { class:'num' }, 'Средний опт'), el('th', { class:'num' }, 'Розница'),
         el('th', {}, 'Остаток'),
       ])));
       const rows = pageProducts.map((p, i) => {
@@ -4770,7 +4775,7 @@ VIEWS.catalog = () => {
             ? el('span', { style:'display:inline-flex;align-items:center;gap:8px' }, [el('img', { src:p.image, alt:'', style:'width:28px;height:28px;object-fit:cover;border-radius:4px;border:1px solid #E5E7EB' }), nn(p.name) || '—'])
             : (nn(p.name) || '—')),
           el('td', {}, el('span', { class:'tag' }, nn(p.brand) || '—')),
-          el('td', { class:'num strong' }, p.priceCost ? fmtMoney(p.priceCost) : '—'),
+          showCost ? el('td', { class:'num strong' }, p.priceCost ? fmtMoney(p.priceCost) : '—') : null,
           el('td', { class:'num muted' }, p.priceWholesaleLarge ? fmtMoney(p.priceWholesaleLarge) : '—'),
           el('td', { class:'num muted' }, p.priceWholesale ? fmtMoney(p.priceWholesale) : '—'),
           el('td', { class:'num muted' }, p.priceRetail ? fmtMoney(p.priceRetail) : '—'),
@@ -4778,7 +4783,7 @@ VIEWS.catalog = () => {
         ]);
       });
       syncSelAll();
-      t.append(el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: 9, class:'muted', style:'text-align:center;padding:24px' }, 'Ничего не найдено'))]));
+      t.append(el('tbody', {}, rows.length ? rows : [el('tr', {}, el('td', { colspan: showCost ? 9 : 8, class:'muted', style:'text-align:center;padding:24px' }, 'Ничего не найдено'))]));
       tableHost.innerHTML = ''; tableHost.append(t);
       renderPager(); refreshBulk();
     } catch (e) { tableHost.innerHTML = ''; tableHost.append(el('div', { class:'pill pill-danger' }, 'Ошибка загрузки: ' + ((e && e.message) || e))); }
