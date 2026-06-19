@@ -685,6 +685,28 @@ function messageModal(opts = {}) {
   });
 }
 
+// Настройка срока резерва — вызывается из шестерёнки на этапе «Резерв».
+function openReserveTermModal() {
+  const inp = el('input', { type:'number', min:'1', step:'1', value:'3', style:'width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-size:14px' });
+  const body = el('div', {}, [
+    el('div', { class:'muted', style:'font-size:13px;line-height:1.55;margin-bottom:12px' },
+      'При переносе сделки на этап «Резерв» товары резервируются автоматически. По истечении срока менеджеру и директору придёт напоминание (без авто-снятия).'),
+    el('label', { style:'display:block;font-size:12px;color:var(--muted);margin-bottom:6px' }, 'Срок резерва, дней'),
+    inp,
+  ]);
+  const saveBtn = el('button', { class:'btn btn-primary' }, 'Сохранить');
+  const cancelBtn = el('button', { class:'btn', onclick: () => closeModal() }, 'Отмена');
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    try {
+      await window.__API__.apiFetch('automation/settings', { method:'POST', body:{ reserveTermDays: Math.max(1, parseInt(inp.value, 10) || 3) } });
+      toast('Сохранено', 'success'); closeModal();
+    } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); saveBtn.disabled = false; }
+  };
+  openModal({ title:'Настройка резерва', body, foot:[cancelBtn, saveBtn] });
+  window.__API__.apiFetch('automation/settings').then(c => { if (c && c.reserveTermDays) inp.value = c.reserveTermDays; }).catch(() => {});
+}
+
 // ---------- Единая выезжающая панель фильтров (как в «Отчётах») ----------
 // groups — массив DOM-узлов (обычно .filter-group). countActive() → число активных фильтров (для бейджа).
 function buildFilterDrawer({ title = 'Фильтры', groups = [], onReset, countActive } = {}) {
@@ -3034,6 +3056,11 @@ VIEWS.deals = () => {
           } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); btn.disabled = false; }
         } }, '+');
       }
+      // Шестерёнка настройки срока на этапе «Резерв» (только директор).
+      let gearBtn = null;
+      if (canStages && /резерв/i.test(s.label || '')) {
+        gearBtn = el('button', { class:'stage-gear', title:'Настроить срок резерва', onclick: (e) => { e.stopPropagation(); openReserveTermModal(); } }, '⚙');
+      }
       // Ручка перетаскивания этапа — только у движимых (незахардкоженных).
       let grip = null;
       if (canManageThis) grip = el('span', { class: 'stage-grip', title: 'Перетащите, чтобы изменить порядок этапов' }, '⠿');
@@ -3048,7 +3075,7 @@ VIEWS.deals = () => {
       ]);
       const bottomRow = el('div', { class: 'k-head-bottom' }, [
         el('span', { class: 'stage-sum', title: 'Сумма сделок этапа' }, fmtMoney(stageSum)),
-        (delBtn || addBtn) ? el('span', { class: 'stage-actions' }, [delBtn, addBtn]) : null,
+        (delBtn || addBtn || gearBtn) ? el('span', { class: 'stage-actions' }, [gearBtn, delBtn, addBtn]) : null,
       ]);
 
       const col = el('div', { class: 'k-col' + (canManageThis ? '' : ' k-col-fixed'), 'data-stage': s.id }, [
@@ -7015,23 +7042,6 @@ VIEWS.settings = () => {
       prEnabled.checked = !!c.enabled; prOpt.value = c.opt || 0; prOptLarge.value = c.optLarge || 0; prRozn.value = c.rozn || 0; prVat.value = c.vat || 0; recalcExample();
     }).catch(() => {});
 
-    // ----- Автоматизация: отгрузка при полной оплате -----
-    const autoCard = el('div', { class:'card mt-16' });
-    autoCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Автоматизация')));
-    const aChk = el('input', { type:'checkbox', style:'width:16px;height:16px' });
-    const aTerm = el('input', { type:'number', min:'1', step:'1', value:'3', style:'width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px' });
-    const aSave = el('button', { class:'btn btn-primary btn-sm' }, 'Сохранить');
-    aSave.onclick = async () => { aSave.disabled = true; try { await window.__API__.apiFetch('automation/settings', { method:'POST', body:{ autoShipmentOnPaid: aChk.checked, reserveTermDays: Math.max(1, parseInt(aTerm.value, 10) || 3) } }); toast('Сохранено', 'success'); } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); } finally { aSave.disabled = false; } };
-    autoCard.append(
-      el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' },
-        'Когда все счета сделки оплачены (статус из 1С), автоматически создаётся отгрузка (статус «Запланирована») и приходит уведомление кладовщику. Списание остатка по-прежнему происходит в 1С при проведении реализации.'),
-      el('label', { style:'display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer' }, [aChk, 'Создавать отгрузку при полной оплате сделки']),
-      el('div', { class:'muted', style:'font-size:12px;margin:14px 0 6px' }, 'Стадия «Резерв»: при переносе сделки на этот этап товары резервируются автоматически. По истечении срока придёт напоминание (без авто-снятия).'),
-      el('div', { class:'form-row', style:'flex-direction:row;align-items:center;gap:8px' }, [el('label', { style:'margin:0' }, 'Срок резерва, дней'), aTerm]),
-      el('div', { style:'margin-top:12px' }, aSave),
-    );
-    wrap.append(autoCard);
-    window.__API__.apiFetch('automation/settings').then(c => { if (c) { aChk.checked = !!c.autoShipmentOnPaid; aTerm.value = c.reserveTermDays || 3; } }).catch(() => {});
   }
 
   // Статус синхронизации с 1С + очередь отправок — скрыто по запросу (синк идёт в фоне).
