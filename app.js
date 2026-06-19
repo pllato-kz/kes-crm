@@ -7019,16 +7019,19 @@ VIEWS.settings = () => {
     const autoCard = el('div', { class:'card mt-16' });
     autoCard.append(el('div', { class:'card-head' }, el('h3', {}, 'Автоматизация')));
     const aChk = el('input', { type:'checkbox', style:'width:16px;height:16px' });
+    const aTerm = el('input', { type:'number', min:'1', step:'1', value:'3', style:'width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px' });
     const aSave = el('button', { class:'btn btn-primary btn-sm' }, 'Сохранить');
-    aSave.onclick = async () => { aSave.disabled = true; try { await window.__API__.apiFetch('automation/settings', { method:'POST', body:{ autoShipmentOnPaid: aChk.checked } }); toast('Сохранено', 'success'); } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); } finally { aSave.disabled = false; } };
+    aSave.onclick = async () => { aSave.disabled = true; try { await window.__API__.apiFetch('automation/settings', { method:'POST', body:{ autoShipmentOnPaid: aChk.checked, reserveTermDays: Math.max(1, parseInt(aTerm.value, 10) || 3) } }); toast('Сохранено', 'success'); } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); } finally { aSave.disabled = false; } };
     autoCard.append(
       el('div', { class:'muted', style:'font-size:12px;margin-bottom:10px' },
         'Когда все счета сделки оплачены (статус из 1С), автоматически создаётся отгрузка (статус «Запланирована») и приходит уведомление кладовщику. Списание остатка по-прежнему происходит в 1С при проведении реализации.'),
       el('label', { style:'display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer' }, [aChk, 'Создавать отгрузку при полной оплате сделки']),
+      el('div', { class:'muted', style:'font-size:12px;margin:14px 0 6px' }, 'Стадия «Резерв»: при переносе сделки на этот этап товары резервируются автоматически. По истечении срока придёт напоминание (без авто-снятия).'),
+      el('div', { class:'form-row', style:'flex-direction:row;align-items:center;gap:8px' }, [el('label', { style:'margin:0' }, 'Срок резерва, дней'), aTerm]),
       el('div', { style:'margin-top:12px' }, aSave),
     );
     wrap.append(autoCard);
-    window.__API__.apiFetch('automation/settings').then(c => { if (c) aChk.checked = !!c.autoShipmentOnPaid; }).catch(() => {});
+    window.__API__.apiFetch('automation/settings').then(c => { if (c) { aChk.checked = !!c.autoShipmentOnPaid; aTerm.value = c.reserveTermDays || 3; } }).catch(() => {});
   }
 
   // Статус синхронизации с 1С + очередь отправок — скрыто по запросу (синк идёт в фоне).
