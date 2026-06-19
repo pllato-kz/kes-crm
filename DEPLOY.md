@@ -94,7 +94,7 @@ wrangler pages secret put JWT_SECRET --project-name=<имя-проекта>
 
 ```bash
 rm -rf dist && mkdir dist
-cp index.html styles.css data.js app.js api.js dist/
+cp index.html styles.css data.js app.js api.js sip-client.js dist/
 cp -r functions dist/functions
 wrangler pages deploy dist --project-name=<имя-проекта>
 ```
