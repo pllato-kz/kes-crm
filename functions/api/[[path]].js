@@ -1461,18 +1461,28 @@ async function openDealForClient(env, clientId) {
 }
 
 // Новая сделка из входящего сообщения: первый этап воронки + менеджер.
-// Закрепление за менеджером: если у клиента уже есть ответственный (clients.manager_id) —
-// берём его (повторные обращения идут к тому же); иначе назначаем по Round Robin и
-// СРАЗУ закрепляем менеджера за клиентом, чтобы дальше обращения шли к нему.
+// Ответственный (повторное обращение идёт к тому же сотруднику) выбирается по приоритету:
+//   1) ответственный из карточки клиента (clients.manager_id);
+//   2) иначе — менеджер последней сделки клиента (в т.ч. закрытой/архивной);
+//   3) иначе — по Round Robin.
+// Найденного СРАЗУ закрепляем за клиентом, чтобы дальше обращения шли к нему.
 async function createIncomingDeal(env, clientId, text) {
   const stage = await env.DB.prepare('SELECT id FROM deal_stages ORDER BY sort, rowid LIMIT 1').first();
   if (!stage || !stage.id) throw new Error('нет этапов воронки');
   let mgr = null;
+  // 1) ответственный из карточки клиента
   try { const c = await env.DB.prepare('SELECT manager_id FROM clients WHERE id=?').bind(clientId).first(); if (c && c.manager_id) mgr = c.manager_id; } catch (e) {}
+  // 2) иначе — менеджер последней сделки клиента (повторное обращение к тому, кто вёл)
   if (!mgr) {
-    mgr = await pickRoundRobinManager(env);
-    if (mgr) { try { await env.DB.prepare("UPDATE clients SET manager_id=? WHERE id=? AND (manager_id IS NULL OR manager_id='')").bind(mgr, clientId).run(); } catch (e) {} }
+    try {
+      const ld = await env.DB.prepare("SELECT manager_id FROM deals WHERE client_id=? AND manager_id IS NOT NULL AND manager_id<>'' ORDER BY created_at DESC LIMIT 1").bind(clientId).first();
+      if (ld && ld.manager_id) mgr = ld.manager_id;
+    } catch (e) {}
   }
+  // 3) иначе — по Round Robin
+  if (!mgr) mgr = await pickRoundRobinManager(env);
+  // закрепляем найденного ответственного за клиентом (если у клиента ещё не задан)
+  if (mgr) { try { await env.DB.prepare("UPDATE clients SET manager_id=? WHERE id=? AND (manager_id IS NULL OR manager_id='')").bind(mgr, clientId).run(); } catch (e) {} }
   const id = genId();
   const no = 'WA-' + Date.now();
   const title = (String(text || '').trim().slice(0, 60)) || 'Заявка из WhatsApp';
