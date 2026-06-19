@@ -896,13 +896,26 @@ async function ensureReserveStage(env) {
     const list = (pipes.results && pipes.results.length) ? pipes.results : [{ id: 'default' }];
     for (const p of list) {
       const pid = p.id || 'default';
-      const ex = await env.DB.prepare("SELECT id FROM deal_stages WHERE pipeline_id=? AND lower(label) LIKE '%резерв%'").bind(pid).first();
-      if (ex) continue;
+      // Все этапы «Резерв» в этой воронке (на старом коде могли задвоиться из-за гонки запросов).
+      const exRows = await env.DB.prepare(
+        "SELECT id FROM deal_stages WHERE pipeline_id=? AND lower(label) LIKE '%резерв%' ORDER BY rowid"
+      ).bind(pid).all();
+      const rows = exRows.results || [];
+      if (rows.length > 1) {
+        // Дубли сливаем: оставляем самый старый, сделки лишних переносим на него, лишние удаляем.
+        const keep = rows[0].id;
+        for (let i = 1; i < rows.length; i++) {
+          await env.DB.prepare('UPDATE deals SET stage_id=? WHERE stage_id=?').bind(keep, rows[i].id).run();
+          await env.DB.prepare('DELETE FROM deal_stages WHERE id=?').bind(rows[i].id).run();
+        }
+      }
+      if (rows.length >= 1) continue; // «Резерв» уже есть — повторно не создаём
       // ставим после «Согласовано/Счёт» (среди рабочих этапов, до Оплачено)
       const ref = await env.DB.prepare("SELECT sort FROM deal_stages WHERE pipeline_id=? AND (lower(label) LIKE '%согласов%' OR lower(label) LIKE '%счёт%' OR lower(label) LIKE '%счет%') ORDER BY sort LIMIT 1").bind(pid).first();
       const sort = ref && ref.sort != null ? ref.sort : 3;
-      await env.DB.prepare('INSERT INTO deal_stages (id, label, color, sort, pipeline_id, protected) VALUES (?,?,?,?,?,1)')
-        .bind(genId(), 'Резерв', '#F59E0B', sort, pid).run();
+      // Детерминированный id + INSERT OR IGNORE — защита от повторной вставки при гонке запросов.
+      await env.DB.prepare('INSERT OR IGNORE INTO deal_stages (id, label, color, sort, pipeline_id, protected) VALUES (?,?,?,?,?,1)')
+        .bind('rsv_' + pid, 'Резерв', '#F59E0B', sort, pid).run();
     }
   } catch (e) {}
   RESERVE_STAGE_OK = true;
