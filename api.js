@@ -54,7 +54,7 @@
   const M = {
     product: (p) => ({
       id: p.id, sku: p.sku, name: p.name, cat: p.category_id, brand: p.brand, unit: p.unit,
-      priceCost: p.price_cost, priceWholesale: p.price_wholesale, priceRetail: p.price_retail,
+      priceCost: p.price_cost, priceWholesale: p.price_wholesale, priceWholesaleLarge: p.price_wholesale_large, priceRetail: p.price_retail,
       stock: p.stock ?? 0, reserved: p.reserved ?? 0, image: p.image || '',
     }),
     client: (c) => ({

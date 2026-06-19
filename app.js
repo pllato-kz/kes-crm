@@ -217,7 +217,7 @@ const byId = (arr, id) => arr.find(x => x.id === id);
 
 // Глобальный кэш настроек ценообразования (наценки опт/розница + НДС). Нужен там,
 // где строим документы синхронно (счёт/КП). Обновляется при загрузке и сохранении настроек.
-let CRM_PRICING = { enabled: false, opt: 0, rozn: 0, vat: 12 };
+let CRM_PRICING = { enabled: false, opt: 0, optLarge: 0, rozn: 0, vat: 12 };
 function loadPricingCfg() {
   try {
     return window.__API__.apiFetch('pricing/settings').then(c => { if (c) Object.assign(CRM_PRICING, c); return CRM_PRICING; }).catch(() => CRM_PRICING);
@@ -6988,36 +6988,38 @@ VIEWS.settings = () => {
       'Если включить — при синхронизации цен из приходов: Закуп = приходная цена, а Опт/Розница считаются по формуле от закупа с наценкой и НДС. Если выключено — опт/розница берутся из приходов по единице измерения (как сейчас).'));
     const numI = (ph) => el('input', { type:'number', step:'0.1', min:'0', placeholder: ph, style:'width:120px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px' });
     const prEnabled = el('input', { type:'checkbox', style:'width:16px;height:16px' });
-    const prOpt = numI('напр. 15'), prRozn = numI('напр. 30'), prVat = numI('напр. 12');
+    const prOpt = numI('напр. 15'), prOptLarge = numI('напр. 10'), prRozn = numI('напр. 30'), prVat = numI('напр. 12');
     const row = (label, node, suffix) => el('div', { class:'form-row' }, [el('label', {}, label), el('div', { style:'display:flex;align-items:center;gap:6px' }, [node, suffix ? el('span', { class:'muted', style:'font-size:13px' }, suffix) : null])]);
     const prExample = el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, '');
     const recalcExample = () => {
-      const o = Number(prOpt.value) || 0, r = Number(prRozn.value) || 0, v = Number(prVat.value) || 0;
+      const o = Number(prOpt.value) || 0, ol = Number(prOptLarge.value) || 0, r = Number(prRozn.value) || 0, v = Number(prVat.value) || 0;
       const base = 1000, vat = 1 + v / 100;
-      prExample.textContent = `Пример: закуп 1000 ₸ → опт ${Math.round(base * (1 + o / 100) * vat)} ₸, розница ${Math.round(base * (1 + r / 100) * vat)} ₸.`;
+      prExample.textContent = `Пример: закуп 1000 ₸ → крупный опт ${Math.round(base * (1 + ol / 100) * vat)} ₸ · средний опт ${Math.round(base * (1 + o / 100) * vat)} ₸ · розница ${Math.round(base * (1 + r / 100) * vat)} ₸.`;
     };
-    [prOpt, prRozn, prVat].forEach(i => i.oninput = recalcExample);
+    [prOpt, prOptLarge, prRozn, prVat].forEach(i => i.oninput = recalcExample);
     const prSave = el('button', { class:'btn btn-primary', onclick: async () => {
       prSave.disabled = true;
+      const body = { enabled: prEnabled.checked, opt: Number(prOpt.value) || 0, optLarge: Number(prOptLarge.value) || 0, rozn: Number(prRozn.value) || 0, vat: Number(prVat.value) || 0 };
       try {
-        await window.__API__.apiFetch('pricing/settings', { method:'POST', body:{ enabled: prEnabled.checked, opt: Number(prOpt.value) || 0, rozn: Number(prRozn.value) || 0, vat: Number(prVat.value) || 0 } });
-        Object.assign(CRM_PRICING, { enabled: prEnabled.checked, opt: Number(prOpt.value) || 0, rozn: Number(prRozn.value) || 0, vat: Number(prVat.value) || 0 }); // обновляем кэш (НДС счёта и пр.)
+        await window.__API__.apiFetch('pricing/settings', { method:'POST', body });
+        Object.assign(CRM_PRICING, body); // обновляем кэш (НДС счёта и пр.)
         toast('Ценообразование сохранено. Применится при ближайшей синхронизации цен.', 'success');
       } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
       prSave.disabled = false;
     } }, '💾 Сохранить');
     prCard.append(
       el('label', { style:'display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:10px' }, [prEnabled, el('span', {}, 'Включить формулы ценообразования')]),
-      row('Наценка опт', prOpt, '%'),
+      row('Наценка крупный опт', prOptLarge, '%'),
+      row('Наценка средний опт', prOpt, '%'),
       row('Наценка розница', prRozn, '%'),
-      row('НДС (на опт/розницу)', prVat, '%'),
+      row('НДС', prVat, '%'),
       prExample,
       el('div', { style:'margin-top:12px' }, prSave),
     );
     wrap.append(prCard);
     window.__API__.apiFetch('pricing/settings').then(c => {
       if (!c) return;
-      prEnabled.checked = !!c.enabled; prOpt.value = c.opt || 0; prRozn.value = c.rozn || 0; prVat.value = c.vat || 0; recalcExample();
+      prEnabled.checked = !!c.enabled; prOpt.value = c.opt || 0; prOptLarge.value = c.optLarge || 0; prRozn.value = c.rozn || 0; prVat.value = c.vat || 0; recalcExample();
     }).catch(() => {});
 
     // ----- Автоматизация: отгрузка при полной оплате -----
