@@ -547,6 +547,12 @@ table.data .muted { color: var(--muted); font-size: 12px; }
   font-size: 16px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
 }
 .k-col-head .stage-del:hover { background: #EF4444; color: #fff; border-color: #EF4444; }
+.k-col-head .stage-gear {
+  flex: none; width: 22px; height: 22px; border: 1px solid var(--border);
+  background: #fff; border-radius: 6px; cursor: pointer; color: var(--muted);
+  font-size: 13px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+}
+.k-col-head .stage-gear:hover { background: var(--brand); color: #fff; border-color: var(--brand); }
 
 .bulk-bar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
