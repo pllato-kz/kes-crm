@@ -574,6 +574,8 @@ async function createGeneric(env, table, meta, request) {
   const cols = await columns(env, table);
   const names = cols.map((c) => c.name);
   const pkCol = cols.find((c) => c.name === meta.pk);
+  // Регистронезависимый поиск: поддерживаем name_norm = lower(name) при ручной записи товара.
+  if (names.includes('name_norm') && body.name != null) body.name_norm = lcNorm(body.name);
   const keys = Object.keys(body).filter((k) => names.includes(k) && !(meta.hide || []).includes(k));
 
   // авто-id для текстового первичного ключа, если не передан
@@ -593,6 +595,8 @@ async function createGeneric(env, table, meta, request) {
 async function updateGeneric(env, table, meta, id, request) {
   const body = await request.json().catch(() => ({}));
   const names = (await columns(env, table)).map((c) => c.name);
+  // Регистронезависимый поиск: при правке названия товара обновляем и name_norm.
+  if (names.includes('name_norm') && body.name != null) body.name_norm = lcNorm(body.name);
   const keys = Object.keys(body).filter(
     (k) => names.includes(k) && k !== meta.pk && !(meta.hide || []).includes(k)
   );
@@ -648,9 +652,23 @@ async function productStock(env, request, productId) {
 // "LIKE or GLOB pattern too complex". Используется с ... LIKE ? ESCAPE '\'.
 function escapeLike(s) { return String(s).replace(/[\\%_]/g, '\\$&'); }
 
+// Нормализация для регистронезависимого поиска. JS toLowerCase понижает регистр и
+// латиницы, и КИРИЛЛИЦЫ — в отличие от SQLite lower()/LIKE, которые кириллицу не
+// сворачивают. Поэтому держим колонку products.name_norm = lower(name) и ищем по ней.
+function lcNorm(s) { return String(s == null ? '' : s).toLowerCase(); }
+
+let PRODUCT_SEARCH_COLS_OK = false;
+async function ensureProductSearchCols(env) {
+  if (PRODUCT_SEARCH_COLS_OK) return;
+  try { await env.DB.prepare('ALTER TABLE products ADD COLUMN name_norm TEXT').run(); } catch (e) { /* уже есть */ }
+  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_products_name_norm ON products(name_norm)').run(); } catch (e) {}
+  PRODUCT_SEARCH_COLS_OK = true;
+}
+
 // GET /api/products?q=&category=&brand=&page=1&limit=50
 // --------------------------------------------------------------------------
 async function listProducts(env, url) {
+  await ensureProductSearchCols(env);
   const q = (url.searchParams.get('q') || '').trim();
   const cat = url.searchParams.get('category');
   const brand = url.searchParams.get('brand');
@@ -671,15 +689,14 @@ async function listProducts(env, url) {
 
   const where = [];
   const args = [];
-  // Поиск по словам: каждое слово ищем отдельно (порядок не важен) коротким шаблоном.
-  // D1 валит длинный непрерывный LIKE-шаблон ("LIKE pattern too complex", порог ~48
-  // БАЙТ; кириллица — 2 байта/символ), поэтому слова режем до 20 символов (≤40 байт),
-  // а спецсимволы %/_ экранируем.
+  // Поиск по словам, регистронезависимо: токен понижаем регистром (lcNorm — латиница И
+  // кириллица) и ищем по name_norm (тоже lower). По sku хватает обычного LIKE (латиница).
+  // Каждый токен режем по длине — длинный непрерывный LIKE валит D1 ("pattern too complex").
   if (q) {
     const tokens = q.split(/\s+/).filter(Boolean).slice(0, 6);
     for (const tk of tokens) {
-      const qp = `%${escapeLike(tk.slice(0, 20))}%`;
-      where.push("(p.name LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\')");
+      const qp = `%${escapeLike(lcNorm(tk).slice(0, 20))}%`;
+      where.push("(p.name_norm LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\')");
       args.push(qp, qp);
     }
   }
@@ -3442,6 +3459,7 @@ async function syncSuppliers(env) {
 // Upsert по sku (=Code), без предзагрузки карт — масштабируется на тысячи позиций.
 // Одна страница номенклатуры из 1С (до 1000). Плоский результат, без записи в sync_state.
 async function syncProductsPage(env, skip, limit) {
+  await ensureProductSearchCols(env);
   const top = Math.min(Math.max(limit || 1000, 1), 1000);
   const off = Math.max(skip || 0, 0);
   const base = 'Catalog_Номенклатура?$format=json'
@@ -3464,9 +3482,9 @@ async function syncProductsPage(env, skip, limit) {
     const cat = r.Parent_Key && r.Parent_Key !== ZERO ? r.Parent_Key : null;
     processed++;
     stmts.push(env.DB.prepare(
-      `INSERT INTO products (id, sku, name, unit, ext_ref, category_id) VALUES (?,?,?,?,?,?)
-       ON CONFLICT(sku) DO UPDATE SET name=excluded.name, ext_ref=excluded.ext_ref, category_id=excluded.category_id`
-    ).bind(genId(), sku, name, 'шт', ref, cat));
+      `INSERT INTO products (id, sku, name, name_norm, unit, ext_ref, category_id) VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(sku) DO UPDATE SET name=excluded.name, name_norm=excluded.name_norm, ext_ref=excluded.ext_ref, category_id=excluded.category_id`
+    ).bind(genId(), sku, name, lcNorm(name), 'шт', ref, cat));
   }
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
 
