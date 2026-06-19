@@ -671,7 +671,18 @@ async function listProducts(env, url) {
 
   const where = [];
   const args = [];
-  if (q) { const qp = `%${escapeLike(q)}%`; where.push("(p.name LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\')"); args.push(qp, qp); }
+  // Поиск по словам: каждое слово ищем отдельно (порядок не важен) коротким шаблоном.
+  // D1 валит длинный непрерывный LIKE-шаблон ("LIKE pattern too complex", порог ~48
+  // БАЙТ; кириллица — 2 байта/символ), поэтому слова режем до 20 символов (≤40 байт),
+  // а спецсимволы %/_ экранируем.
+  if (q) {
+    const tokens = q.split(/\s+/).filter(Boolean).slice(0, 6);
+    for (const tk of tokens) {
+      const qp = `%${escapeLike(tk.slice(0, 20))}%`;
+      where.push("(p.name LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\')");
+      args.push(qp, qp);
+    }
+  }
   if (cat) { where.push('p.category_id = ?'); args.push(cat); }
   if (brand) { where.push('p.brand = ?'); args.push(brand); }
   if (low != null) { where.push('(COALESCE(s.stock,0) - COALESCE(s.reserved,0)) < ?'); args.push(low); }
