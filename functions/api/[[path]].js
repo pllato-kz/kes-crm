@@ -1456,14 +1456,18 @@ async function pickRoundRobinManager(env) {
 
 // Онбординг: разовое распределение базы клиентов по менеджерам поровну (round-robin).
 // body: { onlyUnassigned: true (по умолчанию) — только без ответственного; false — переназначить всех;
-//         excluded: [userId,...] — кого не включать }.
+//         include: [userId,...] — распределять ТОЛЬКО на этих менеджеров (если задан и непустой);
+//         excluded: [userId,...] — кого не включать (если include не задан) }.
 async function distributeClients(env, request) {
   const body = await request.json().catch(() => ({}));
   const onlyUnassigned = body.onlyUnassigned !== false;
+  const include = Array.isArray(body.include) ? body.include.filter(Boolean) : null;
   let excluded = Array.isArray(body.excluded) ? body.excluded : [];
   const mr = await env.DB.prepare("SELECT id FROM users WHERE role_key='manager' AND active=1 ORDER BY id").all();
-  const managers = (mr.results || []).map((x) => x.id).filter((id) => !excluded.includes(id));
-  if (!managers.length) return err(400, 'Нет активных менеджеров для распределения');
+  let managers = (mr.results || []).map((x) => x.id);
+  if (include && include.length) managers = managers.filter((id) => include.includes(id));
+  else managers = managers.filter((id) => !excluded.includes(id));
+  if (!managers.length) return err(400, 'Нет менеджеров для распределения');
 
   const where = onlyUnassigned ? "WHERE manager_id IS NULL OR manager_id=''" : '';
   const cr = await env.DB.prepare(`SELECT id FROM clients ${where} ORDER BY name`).all();

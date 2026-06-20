@@ -1540,6 +1540,51 @@ function openProductDetail(idOrProduct) {
     .catch(() => {});
 }
 
+// Распределение базы клиентов: выбор ответственных + область (без ответственного / все).
+function openDistributeModal() {
+  const mgrs = (state.users || []).filter(u => u.roleKey === 'manager' && u.active !== false);
+  if (!mgrs.length) { messageModal({ title:'Распределить базу', message:'Нет активных менеджеров для распределения.', type:'warn' }); return; }
+  const checks = mgrs.map(u => {
+    const cb = el('input', { type:'checkbox', checked:'checked', style:'width:16px;height:16px' });
+    const row = el('label', { style:'display:flex;align-items:center;gap:8px;padding:6px 2px;cursor:pointer;font-size:14px' },
+      [cb, el('span', { class:'avatar', style:`background:${u.color};width:24px;height:24px;font-size:10px` }, u.avatar), u.name]);
+    return { u, cb, row };
+  });
+  const scopeUnassigned = el('input', { type:'radio', name:'distrib-scope', checked:'checked' });
+  const scopeAll = el('input', { type:'radio', name:'distrib-scope' });
+  const body = el('div', {}, [
+    el('div', { class:'muted', style:'font-size:13px;margin-bottom:10px' }, 'Выберите ответственных, между которыми распределить клиентов поровну (по кругу).'),
+    el('div', { style:'max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:4px 10px;margin-bottom:8px' }, checks.map(c => c.row)),
+    el('div', { style:'display:flex;gap:8px;margin-bottom:14px' }, [
+      el('button', { class:'btn btn-sm', type:'button', onclick:()=>checks.forEach(c=>{ c.cb.checked = true; }) }, 'Выбрать всех'),
+      el('button', { class:'btn btn-sm', type:'button', onclick:()=>checks.forEach(c=>{ c.cb.checked = false; }) }, 'Снять все'),
+    ]),
+    el('div', { style:'font-size:13px;border-top:1px solid var(--border);padding-top:10px' }, [
+      el('label', { style:'display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer' }, [scopeUnassigned, 'Только клиентам без ответственного']),
+      el('label', { style:'display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer' }, [scopeAll, 'Переназначить ВСЕХ клиентов (перезапишет текущих)']),
+    ]),
+  ]);
+  const goBtn = el('button', { class:'btn btn-primary' }, 'Распределить');
+  goBtn.onclick = async () => {
+    const include = checks.filter(c => c.cb.checked).map(c => c.u.id);
+    if (!include.length) { toast('Выберите хотя бы одного ответственного', 'warn'); return; }
+    const onlyUnassigned = scopeUnassigned.checked;
+    if (!onlyUnassigned) {
+      const ok = await confirmModal({ title:'Переназначить всех?', danger:true, confirmText:'Переназначить',
+        message:'Ответственные будут перезаписаны у ВСЕХ клиентов. Продолжить?' });
+      if (!ok) return;
+    }
+    goBtn.disabled = true;
+    try {
+      const r = await window.__API__.apiFetch('clients/distribute', { method:'POST', body:{ onlyUnassigned, include } });
+      toast(`Распределено клиентов: ${r.assigned} на ${r.managers} менеджеров`, 'success');
+      closeModal();
+      await window.__API__.loadRest(state); navigate('clients');
+    } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); goBtn.disabled = false; }
+  };
+  openModal({ title:'Распределить базу', body, foot:[el('button', { class:'btn', onclick:()=>closeModal() }, 'Отмена'), goBtn] });
+}
+
 // Правка остатка товара (право edit-stock: директор / кладовщик)
 function openEditStock(p) {
   const stock = fInput('Остаток', String(p.stock), { type: 'number' });
@@ -4382,16 +4427,7 @@ VIEWS.clients = () => {
     searchI,
     drawer.btn,
     el('div', { style:'display:flex;gap:8px;margin-left:auto' }, [
-      isDir ? el('button', { class: 'btn', title:'Назначить менеджеров клиентам без ответственного по кругу', onclick: async () => {
-        const ok = await confirmModal({ title:'Распределить базу', confirmText:'Распределить',
-          message:'Назначить менеджеров по кругу (поровну) всем клиентам БЕЗ ответственного? Уже закреплённые клиенты не меняются.' });
-        if (!ok) return;
-        try {
-          const r = await window.__API__.apiFetch('clients/distribute', { method:'POST', body:{ onlyUnassigned:true } });
-          toast(`Распределено клиентов: ${r.assigned} на ${r.managers} менеджеров`, 'success');
-          await window.__API__.loadRest(state); navigate('clients');
-        } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
-      } }, '👥 Распределить базу') : null,
+      isDir ? el('button', { class: 'btn', title:'Назначить выбранных менеджеров клиентам по кругу', onclick: () => openDistributeModal() }, '👥 Распределить базу') : null,
     ]),
   ]));
   tw.append(bulkBar);
