@@ -1499,8 +1499,8 @@ function openProductDetail(idOrProduct) {
     priceHost.append(
       el('div', { class: showCost ? 'grid grid-3' : 'grid grid-2', style:'gap:10px' }, [
         showCost ? el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Закуп'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, cost ? fmtMoney(cost) : '—')]) : null,
-        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Опт'),   el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, opt ? fmtMoney(opt) : '—'), showCost ? priceDeltaEl(cost, opt) : null]),
-        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Розница'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, rozn ? fmtMoney(rozn) : '—'), showCost ? priceDeltaEl(cost, rozn) : null]),
+        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Опт'),   el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, opt ? fmtMoney(opt) : '—')]),
+        el('div', { class:'card', style:'padding:12px' }, [el('div',{class:'stat-label'},'Розница'), el('div',{style:'font-size:18px;font-weight:600;margin-top:4px'}, rozn ? fmtMoney(rozn) : '—')]),
       ]),
     );
     // ВАЖНО: нативный append(null) вставил бы текст «null» — поэтому добавляем плашку отдельно
