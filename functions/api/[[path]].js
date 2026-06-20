@@ -515,6 +515,7 @@ async function dataRoute(ctx, seg, url, auth) {
   // --- точечная обработка ---
   if (resource === 'products' && id && seg[2] === 'stock') return productStock(env, request, id);
   if (resource === 'products' && method === 'GET' && !id) return listProducts(env, url);
+  if (resource === 'products' && method === 'GET' && id) return getProduct(env, id);
   if (resource === 'deals' && id && seg[2] === 'history' && method === 'GET') return dealHistory(env, id);
   if (resource === 'deals' && method === 'GET' && id) return getDeal(env, id);
   if (resource === 'deals' && method === 'GET' && !id) return listDeals(env, url);
@@ -728,6 +729,21 @@ async function listProducts(env, url) {
   ).bind(...args, limit, offset).all();
 
   return json({ data: rows.results, total: total ? total.n : 0, page, limit });
+}
+
+// GET /api/products/:id — одна карточка товара С ОСТАТКОМ/РЕЗЕРВОМ (как в списке).
+// Без джойна product_stock обобщённый getOne вернул бы stock=0 (в таблице products
+// колонки stock нет), и карточка показывала бы 0 вместо реального остатка.
+async function getProduct(env, id) {
+  const row = await env.DB.prepare(
+    `SELECT p.*, COALESCE(s.stock,0) AS stock, COALESCE(s.reserved,0) AS reserved
+       FROM products p
+       LEFT JOIN (SELECT product_id, SUM(stock) AS stock, SUM(reserved) AS reserved
+                    FROM product_stock GROUP BY product_id) s ON s.product_id = p.id
+      WHERE p.id=?`
+  ).bind(id).first();
+  if (!row) return err(404, 'Не найдено');
+  return json(row);
 }
 
 // Расширенные поля задачи (добавляются на лету, один раз на изолят).
