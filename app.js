@@ -2963,8 +2963,13 @@ VIEWS.deals = () => {
     drawer.refreshBadge();
     const deals = filtered();
     subEl.textContent = `${deals.length} ${role().seeAllData ? 'сделок' : 'ваших сделок'} · сумма ${fmtMoney(deals.reduce((s, d) => s + (Number(d.amount) || 0), 0))}`;
+    // Сохраняем горизонтальную прокрутку канбана: при пересоздании DOM scrollLeft
+    // обнуляется, иначе после дропа на дальний этап доску «отматывает» к началу.
+    const prevK = content.querySelector('.kanban');
+    const prevScroll = prevK ? prevK.scrollLeft : 0;
     content.innerHTML = '';
     content.append(isList ? buildDealsTable(deals) : buildDealsKanban(deals));
+    if (!isList && prevScroll) { const k = content.querySelector('.kanban'); if (k) k.scrollLeft = prevScroll; }
   }
 
   // Внешние изменения сделок (смена этапа из карточки сделки и т.п.) — перерисовываем
@@ -5873,8 +5878,12 @@ VIEWS.shipments = () => {
     if (!isList) selected.clear(); // массовый выбор отключён в канбане
     refreshBulk();
     const list = rows();
+    // сохраняем горизонтальную прокрутку канбана (иначе после дропа на дальний статус «отматывает» к началу)
+    const prevK = boardHost.querySelector('.kanban');
+    const prevScroll = prevK ? prevK.scrollLeft : 0;
     boardHost.innerHTML = '';
     boardHost.append(list.length ? (isList ? buildList(list) : buildKanban(list)) : el('div', { class:'muted', style:'padding:24px;text-align:center' }, 'Отгрузок нет'));
+    if (!isList && prevScroll) { const k = boardHost.querySelector('.kanban'); if (k) k.scrollLeft = prevScroll; }
   }
   render();
   return wrap;
