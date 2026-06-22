@@ -4957,8 +4957,8 @@ VIEWS.catalog = () => {
     pager.append(
       el('div', { class:'muted', style:'font-size:12px' }, `Найдено: ${q.total} · стр. ${q.page} из ${pages}`),
       el('div', { class:'row', style:'gap:6px' }, [
-        el('button', { class:'btn btn-sm', disabled: q.page <= 1 ? 'disabled' : null, onclick: () => { if (q.page > 1) { q.page--; loadProducts(); } } }, '← Назад'),
-        el('button', { class:'btn btn-sm', disabled: q.page >= pages ? 'disabled' : null, onclick: () => { if (q.page < pages) { q.page++; loadProducts(); } } }, 'Вперёд →'),
+        el('button', { class:'btn btn-sm', disabled: q.page <= 1 ? 'disabled' : null, onclick: () => { if (q.page > 1) { q.page--; loadProducts(); tw.scrollIntoView({ block:'start' }); } } }, '← Назад'),
+        el('button', { class:'btn btn-sm', disabled: q.page >= pages ? 'disabled' : null, onclick: () => { if (q.page < pages) { q.page++; loadProducts(); tw.scrollIntoView({ block:'start' }); } } }, 'Вперёд →'),
       ]),
     );
   }
@@ -5356,8 +5356,8 @@ VIEWS.warehouse = () => {
     pager.append(
       el('div', { class:'muted', style:'font-size:12px' }, `Найдено: ${q.total} · стр. ${q.page} из ${pages}`),
       el('div', { class:'row', style:'gap:6px' }, [
-        el('button', { class:'btn btn-sm', disabled: q.page <= 1 ? 'disabled' : null, onclick: () => { if (q.page > 1) { q.page--; loadStock(); } } }, '← Назад'),
-        el('button', { class:'btn btn-sm', disabled: q.page >= pages ? 'disabled' : null, onclick: () => { if (q.page < pages) { q.page++; loadStock(); } } }, 'Вперёд →'),
+        el('button', { class:'btn btn-sm', disabled: q.page <= 1 ? 'disabled' : null, onclick: () => { if (q.page > 1) { q.page--; loadStock(); tw.scrollIntoView({ block:'start' }); } } }, '← Назад'),
+        el('button', { class:'btn btn-sm', disabled: q.page >= pages ? 'disabled' : null, onclick: () => { if (q.page < pages) { q.page++; loadStock(); tw.scrollIntoView({ block:'start' }); } } }, 'Вперёд →'),
       ]),
     );
   }
