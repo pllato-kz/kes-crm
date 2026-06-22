@@ -4055,7 +4055,7 @@ async function openDealDetail(id, opts) {
       if (!canEdit) shipTransportSel.disabled = true;
       shipTransportSel.onchange = () => { if (canEdit) setDealTransport(shipTransportSel.value, { persist: true, rerenderShip: false }); };
       // «Водитель» отгрузки — редактируемый селект, значение подтягивается из водителя сделки.
-      const shipDriverSel = el('select', { class:'ship-driver', style:'padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:5px' },
+      const shipDriverSel = el('select', { class:'ship-driver', style:'padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:10px' },
         [el('option', { value:'' }, '— не выбран —')].concat(drivers.map(u => el('option', { value:u.id, selected: (d.deliveryDriver || '') === u.id ? 'selected' : null }, u.name))));
       shipDriverSel.value = d.deliveryDriver || '';
       if (!canEdit) shipDriverSel.disabled = true;
