@@ -19,6 +19,20 @@ const el = (tag, attrs = {}, children = []) => {
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
     else if (v !== false && v != null) node.setAttribute(k, v);
   }
+  // Полностью отключаем браузерное автозаполнение и подсказки во всех формах CRM.
+  // Уважаем явно заданный autocomplete (если где-то нужен). Список подсказок (datalist)
+  // при этом продолжает работать — он не относится к автозаполнению браузера.
+  const _t = node.tagName;
+  if (_t === 'INPUT' || _t === 'TEXTAREA' || _t === 'SELECT' || _t === 'FORM') {
+    if (!node.hasAttribute('autocomplete')) node.setAttribute('autocomplete', node.type === 'password' ? 'new-password' : 'off');
+    if (_t === 'INPUT' || _t === 'TEXTAREA') {
+      if (!node.hasAttribute('autocapitalize')) node.setAttribute('autocapitalize', 'off');
+      if (!node.hasAttribute('autocorrect')) node.setAttribute('autocorrect', 'off');
+      if (!node.hasAttribute('spellcheck')) node.setAttribute('spellcheck', 'false');
+      if (!node.hasAttribute('data-1p-ignore')) node.setAttribute('data-1p-ignore', ''); // 1Password
+      if (!node.hasAttribute('data-lpignore')) node.setAttribute('data-lpignore', 'true'); // LastPass
+    }
+  }
   for (const c of [].concat(children)) {
     if (c == null || c === false) continue;
     node.append(c.nodeType ? c : document.createTextNode(c));
