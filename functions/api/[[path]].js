@@ -531,6 +531,8 @@ async function dataRoute(ctx, seg, url, auth) {
   if (resource === 'invoices' && method === 'GET' && !id) return listInvoices(env, url);
   if (resource === 'invoices' && method === 'DELETE' && id) return deleteInvoice(env, id, auth);
   if (resource === 'invoices' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeInvoice(env, request, method, id, ctx);
+  if (resource === 'shipments' && method === 'GET' && !id) return listShipments(env, url);
+  if (resource === 'shipments' && method === 'DELETE' && id) return deleteShipment(env, id);
   if (resource === 'shipments' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeShipment(env, request, method, id, ctx);
   if (resource === 'suppliers' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeSupplier(env, request, method, id, ctx);
   if (resource === 'leads' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeLead(env, request, method, id);
@@ -2048,7 +2050,7 @@ async function ensureArchiveRight(env) {
 let ARCHIVE_SCHEMA_OK = false;
 async function ensureArchiveColumns(env) {
   if (ARCHIVE_SCHEMA_OK) return;
-  for (const ddl of ['ALTER TABLE deals ADD COLUMN archived_at TEXT', 'ALTER TABLE clients ADD COLUMN archived_at TEXT', 'ALTER TABLE invoices ADD COLUMN archived_at TEXT']) {
+  for (const ddl of ['ALTER TABLE deals ADD COLUMN archived_at TEXT', 'ALTER TABLE clients ADD COLUMN archived_at TEXT', 'ALTER TABLE invoices ADD COLUMN archived_at TEXT', 'ALTER TABLE shipments ADD COLUMN archived_at TEXT']) {
     try { await env.DB.prepare(ddl).run(); } catch (e) {}
   }
   ARCHIVE_SCHEMA_OK = true;
@@ -2057,12 +2059,13 @@ async function listArchive(env) {
   const deals = await env.DB.prepare('SELECT id, no, title, client_id, manager_id, stage_id, amount, archived_at FROM deals WHERE archived_at IS NOT NULL ORDER BY archived_at DESC').all();
   const clients = await env.DB.prepare('SELECT id, name, bin, type_key, city, manager_id, archived_at FROM clients WHERE archived_at IS NOT NULL ORDER BY archived_at DESC').all();
   const invoices = await env.DB.prepare('SELECT id, no, client_id, deal_id, amount, due, status_id, archived_at FROM invoices WHERE archived_at IS NOT NULL ORDER BY archived_at DESC').all();
-  return json({ deals: deals.results, clients: clients.results, invoices: invoices.results });
+  const shipments = await env.DB.prepare('SELECT id, no, deal_id, client_id, date, status_id, destination, transport, driver, archived_at FROM shipments WHERE archived_at IS NOT NULL ORDER BY archived_at DESC').all();
+  return json({ deals: deals.results, clients: clients.results, invoices: invoices.results, shipments: shipments.results });
 }
 async function restoreArchive(env, request) {
   const b = await request.json().catch(() => ({}));
-  if (!b.id || !['deal', 'client', 'invoice'].includes(b.type)) return err(400, 'Некорректный запрос');
-  const table = b.type === 'deal' ? 'deals' : b.type === 'client' ? 'clients' : 'invoices';
+  if (!b.id || !['deal', 'client', 'invoice', 'shipment'].includes(b.type)) return err(400, 'Некорректный запрос');
+  const table = b.type === 'deal' ? 'deals' : b.type === 'client' ? 'clients' : b.type === 'shipment' ? 'shipments' : 'invoices';
   await env.DB.prepare(`UPDATE ${table} SET archived_at=NULL WHERE id=?`).bind(b.id).run();
   return json({ restored: 1, type: b.type, id: b.id });
 }
@@ -2093,6 +2096,13 @@ async function purgeExpiredArchive(env) {
   for (const iv of oldInv.results) {
     await env.DB.prepare('DELETE FROM invoices WHERE id=?').bind(iv.id).run();
   }
+  // Архивные отгрузки старше 30 дней — окончательно удаляем
+  try {
+    const oldShip = await env.DB.prepare('SELECT id FROM shipments WHERE archived_at IS NOT NULL AND archived_at < ?').bind(cutoff).all();
+    for (const sh of (oldShip.results || [])) {
+      await env.DB.prepare('DELETE FROM shipments WHERE id=?').bind(sh.id).run();
+    }
+  } catch (e) {}
 }
 
 // Удаление этапа воронки: сделки этого этапа переносим на другой этап (по сортировке).
@@ -2707,7 +2717,7 @@ async function ensureShipmentForPaidDeal(env, dealId) {
   if ((await getSetting(env, 'auto_shipment_on_paid')) === '0') return; // тумблер выключен
   await ensureArchiveColumns(env);
   await ensureShipmentExtRef(env);
-  const exists = await env.DB.prepare('SELECT id FROM shipments WHERE deal_id=?').bind(dealId).first();
+  const exists = await env.DB.prepare("SELECT id FROM shipments WHERE deal_id=? AND (archived_at IS NULL OR archived_at='')").bind(dealId).first();
   if (exists) return; // отгрузка уже есть
   // все ли счета сделки оплачены (и есть хотя бы один)?
   const inv = await env.DB.prepare(
@@ -2744,7 +2754,7 @@ async function ensureShipmentForDealStage(env, dealId, statusId) {
   await ensureShipmentExtRef(env);
   await ensureShipmentStatuses(env);
   const st = statusId || 'shipped';
-  const exists = await env.DB.prepare('SELECT id FROM shipments WHERE deal_id=?').bind(dealId).first();
+  const exists = await env.DB.prepare("SELECT id FROM shipments WHERE deal_id=? AND (archived_at IS NULL OR archived_at='')").bind(dealId).first();
   if (exists) { // уже есть — не дублируем, обновляем статус
     await env.DB.prepare('UPDATE shipments SET status_id=? WHERE id=?').bind(st, exists.id).run();
     return exists.id;
@@ -2909,6 +2919,24 @@ async function pushShipmentToOnec(env, shipmentId) {
 }
 
 // Сохранение отгрузки в CRM + (если включено) фоновая отправка черновика в 1С.
+// Список отгрузок (без архивных).
+async function listShipments(env, url) {
+  await ensureArchiveColumns(env);
+  await ensureShipmentsCleared(env);
+  const limit = clampInt(url.searchParams.get('limit'), 1000, 1, 5000);
+  const offset = clampInt(url.searchParams.get('offset'), 0, 0, 1e9);
+  const r = await env.DB.prepare('SELECT * FROM shipments WHERE archived_at IS NULL ORDER BY date DESC, no DESC LIMIT ? OFFSET ?').bind(limit, offset).all();
+  return json(r.results);
+}
+// «Удаление» отгрузки = мягкое перемещение в архив (восстановимо 30 дней).
+async function deleteShipment(env, id) {
+  await ensureArchiveColumns(env);
+  const sh = await env.DB.prepare('SELECT id FROM shipments WHERE id=?').bind(id).first();
+  if (!sh) return err(404, 'Отгрузка не найдена');
+  await env.DB.prepare('UPDATE shipments SET archived_at=? WHERE id=?').bind(new Date().toISOString(), id).run();
+  return json({ archived: 1, id });
+}
+
 async function writeShipment(env, request, method, id, ctx) {
   const body = await request.json().catch(() => ({}));
   await ensureShipmentExtRef(env);

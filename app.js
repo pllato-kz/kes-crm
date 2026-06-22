@@ -5721,6 +5721,31 @@ VIEWS.shipments = () => {
     style:'flex:1;min-width:240px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none',
     oninput: e => { fq = e.target.value.toLowerCase().trim(); render(); } });
   wrap.append(el('div', { class:'table-toolbar', style:'margin:6px 0 14px' }, [searchI]));
+
+  // Массовое редактирование: выбор нескольких отгрузок + архивирование (удаление в архив на 30 дней)
+  const canArchive = currentUser && (currentUser.roleKey === 'director' || currentUser.roleKey === 'warehouse');
+  const selected = new Set();
+  const bulkCount = el('span', {}, 'Выбрано: 0');
+  const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [
+    bulkCount,
+    el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); refreshBulk(); render(); } }, 'Снять выбор'),
+    el('button', { class:'btn btn-sm btn-danger', onclick: () => bulkArchive() }, '🗑 Удалить (в архив)'),
+  ]);
+  function refreshBulk() { bulkCount.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
+  async function bulkArchive() {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (!(await confirmModal({ title:'Удаление отгрузок', message:`Переместить в архив выбранные отгрузки (${ids.length})? Их можно восстановить в течение 30 дней.`, confirmText:'В архив', danger:true }))) return;
+    try {
+      for (const id of ids) {
+        await window.__API__.apiFetch('shipments/' + id, { method:'DELETE' });
+        const i = state.shipments.findIndex(x => x.id === id); if (i >= 0) state.shipments.splice(i, 1);
+      }
+      selected.clear(); refreshBulk(); render();
+      toast(`Перемещено в архив: ${ids.length}`, 'success');
+    } catch (e) { toast('Ошибка: ' + ((e && e.message) || e), 'error'); }
+  }
+  if (canArchive) wrap.append(bulkBar);
   const boardHost = el('div');
   wrap.append(boardHost);
 
@@ -5745,8 +5770,13 @@ VIEWS.shipments = () => {
       const body = el('div', { class:'k-col-body' });
       cards.forEach(r => {
         const cl = clientById(r.client);
-        const card = el('div', { class:'k-card', draggable: canMove ? 'true' : null, onclick: () => openShipmentDoc(r) }, [
-          el('div', { class:'strong' }, r.no),
+        const cb = canArchive ? el('input', { type:'checkbox', checked: selected.has(r.id) ? 'checked' : null,
+          style:'position:absolute;top:8px;right:8px;width:15px;height:15px;cursor:pointer',
+          onclick: (e) => e.stopPropagation(),
+          onchange: () => { if (cb.checked) selected.add(r.id); else selected.delete(r.id); refreshBulk(); } }) : null;
+        const card = el('div', { class:'k-card', style:'position:relative', draggable: canMove ? 'true' : null, onclick: () => openShipmentDoc(r) }, [
+          cb,
+          el('div', { class:'strong', style: canArchive ? 'padding-right:20px' : '' }, r.no),
           el('div', { class:'muted', style:'font-size:12px' }, cl.name),
           r.dest ? el('div', { class:'muted', style:'font-size:11.5px;margin-top:2px' }, '📍 ' + r.dest) : null,
           (r.transport || r.driver) ? el('div', { class:'muted', style:'font-size:11.5px' }, (r.transport || '') + (r.driver ? ' · ' + r.driver : '')) : null,
@@ -6853,11 +6883,11 @@ VIEWS.reports = () => {
 VIEWS.archive = () => {
   const wrap = el('div');
   wrap.append(el('div', { class:'page-head' }, [
-    el('div', {}, [el('h1', {}, 'Архив'), el('div', { class:'sub' }, 'Удалённые сделки, клиенты и счета · хранятся 30 дней, затем удаляются навсегда')]),
+    el('div', {}, [el('h1', {}, 'Архив'), el('div', { class:'sub' }, 'Удалённые сделки, клиенты, счета и отгрузки · хранятся 30 дней, затем удаляются навсегда')]),
   ]));
 
   // Тулбар: поиск + сортировка по времени удаления
-  let ARCH = { deals: [], clients: [], invoices: [] };
+  let ARCH = { deals: [], clients: [], invoices: [], shipments: [] };
   let q = '', sort = 'desc';
   const searchI = el('input', { placeholder:'Поиск в архиве…', oninput: (e) => { q = e.target.value.toLowerCase().trim(); render(); } });
   const sortSel = el('select', { onchange: (e) => { sort = e.target.value; render(); drawer.refreshBadge(); } }, [
@@ -6880,7 +6910,7 @@ VIEWS.archive = () => {
   async function restore(type, id) {
     try {
       await window.__API__.apiFetch('archive/restore', { method:'POST', body: { type, id } });
-      toast(type === 'deal' ? 'Сделка восстановлена' : type === 'client' ? 'Клиент восстановлен' : 'Счёт восстановлен', 'success');
+      toast(type === 'deal' ? 'Сделка восстановлена' : type === 'client' ? 'Клиент восстановлен' : type === 'shipment' ? 'Отгрузка восстановлена' : 'Счёт восстановлен', 'success');
       await loadData(); navigate('archive');
     } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
   }
@@ -6901,6 +6931,9 @@ VIEWS.archive = () => {
       .slice().sort(byTime);
     const invoices = ARCH.invoices
       .filter(iv => { const cl = clientById(iv.client_id); return !q || (String(iv.no || '') + ' ' + (cl ? cl.name : '')).toLowerCase().includes(q); })
+      .slice().sort(byTime);
+    const shipments = ARCH.shipments
+      .filter(sh => { const cl = clientById(sh.client_id); return !q || (String(sh.no || '') + ' ' + (cl ? cl.name : '') + ' ' + (sh.destination || '')).toLowerCase().includes(q); })
       .slice().sort(byTime);
     host.innerHTML = '';
     host.append(el('div', { style:'font-weight:600;margin:8px 0 10px' }, `Сделки в архиве (${deals.length})`));
@@ -6930,8 +6963,19 @@ VIEWS.archive = () => {
         el('td', {}, el('button', { class:'btn btn-sm btn-primary', onclick: () => restore('invoice', iv.id) }, '↩ Восстановить')),
       ]);
     }), q ? 'Ничего не найдено' : 'Архив счетов пуст'));
+    host.append(el('div', { style:'font-weight:600;margin:24px 0 10px' }, `Отгрузки в архиве (${shipments.length})`));
+    host.append(section({ col:'№ ТТН', mid:'Клиент' }, shipments.map(sh => {
+      const cl = clientById(sh.client_id);
+      return el('tr', {}, [
+        el('td', { class:'strong' }, sh.no || '—'),
+        el('td', {}, cl ? cl.name : (sh.destination || '—')),
+        el('td', { class:'muted' }, sh.archived_at ? fmtDate(sh.archived_at) : '—'),
+        el('td', {}, daysLeft(sh.archived_at) + ' дн.'),
+        el('td', {}, el('button', { class:'btn btn-sm btn-primary', onclick: () => restore('shipment', sh.id) }, '↩ Восстановить')),
+      ]);
+    }), q ? 'Ничего не найдено' : 'Архив отгрузок пуст'));
   }
-  window.__API__.apiFetch('archive').then(data => { ARCH = { deals: data.deals || [], clients: data.clients || [], invoices: data.invoices || [] }; render(); })
+  window.__API__.apiFetch('archive').then(data => { ARCH = { deals: data.deals || [], clients: data.clients || [], invoices: data.invoices || [], shipments: data.shipments || [] }; render(); })
     .catch(err => { host.innerHTML = ''; host.append(el('div', { class:'pill pill-danger', style:'margin:12px' }, 'Ошибка: ' + ((err && err.message) || err))); });
   return wrap;
 };
