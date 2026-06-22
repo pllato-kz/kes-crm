@@ -4047,19 +4047,8 @@ async function openDealDetail(id, opts) {
       const deliveryUI = s.status === 'delivered'
         ? deliveryGallery(s)
         : (can('mark-delivered') ? deliveryConfirmBlock(s, onDelivered) : null);
-      // «Транспорт» отгрузки — комбобокс, значение подтягивается из транспорта сделки.
-      // Отгрузка → сделка: изменение сразу пишется в сделку и в БД (rerenderShip:false, чтобы не сбросить фокус).
-      const _shipTransportCombo = comboField(d.deliveryTransport || '', TRANSPORT_PRESETS, 'Выберите ▾ или впишите своё');
-      _shipTransportCombo.wrap.classList.add('ship-control');
-      const shipTransportSel = _shipTransportCombo.input;
-      if (!canEdit) shipTransportSel.disabled = true;
-      shipTransportSel.onchange = () => { if (canEdit) setDealTransport(shipTransportSel.value, { persist: true, rerenderShip: false }); };
-      // «Водитель» отгрузки — селект, значение подтягивается из водителя сделки.
-      const shipDriverSel = el('select', { class:'ship-driver ship-control' },
-        [el('option', { value:'' }, '— не выбран —')].concat(drivers.map(u => el('option', { value:u.id, selected: (d.deliveryDriver || '') === u.id ? 'selected' : null }, u.name))));
-      shipDriverSel.value = d.deliveryDriver || '';
-      if (!canEdit) shipDriverSel.disabled = true;
-      shipDriverSel.onchange = () => { if (canEdit) setDealDriver(shipDriverSel.value, { persist: true, rerenderShip: false }); };
+      // «Транспорт» и «Водитель» — только просмотр: значения берутся из сделки. Редактирование
+      // здесь отключено; при изменении в карточке сделки эти строки перерисовываются (renderShip).
       const kvRows = [
         el('dt', {}, 'Сделка'), el('dd', {}, d.title || '—'),
         el('dt', {}, 'Клиент'), el('dd', {}, (clientById(d.client) || {}).name || '—'),
@@ -4067,8 +4056,8 @@ async function openDealDetail(id, opts) {
         el('dt', {}, 'Сумма'), el('dd', {}, d.amount ? fmtMoney(d.amount) : '—'),
         el('dt', {}, 'Дата'), el('dd', {}, s.date ? fmtDate(s.date) : '—'),
         el('dt', {}, 'Адрес'), el('dd', {}, s.destination || '—'),
-        el('dt', {}, 'Транспорт'), el('dd', {}, canEdit ? _shipTransportCombo.wrap : (d.deliveryTransport || '—')),
-        el('dt', {}, 'Водитель'), el('dd', {}, canEdit ? shipDriverSel : (driverName(d.deliveryDriver || '') || '—')),
+        el('dt', {}, 'Транспорт'), el('dd', {}, d.deliveryTransport || '—'),
+        el('dt', {}, 'Водитель'), el('dd', {}, driverName(d.deliveryDriver || '') || '—'),
         el('dt', {}, 'Позиций'), el('dd', {}, s.items != null ? s.items : '—'),
       ];
       if (statusSel) kvRows.push(el('dt', {}, 'Статус'), el('dd', {}, statusSel));
