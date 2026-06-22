@@ -1669,7 +1669,7 @@ async function reportsSummary(env, url) {
 // Сводка по складу: всего SKU, единиц на остатке, в резерве, стоимость (по закупу).
 async function warehouseSummary(env) {
   const r = await env.DB.prepare(
-    `SELECT COUNT(*) AS sku,
+    `SELECT SUM(CASE WHEN COALESCE(s.stock,0) > 0 THEN 1 ELSE 0 END) AS sku,
             COALESCE(SUM(s.stock), 0) AS units,
             COALESCE(SUM(s.reserved), 0) AS reserved,
             COALESCE(SUM(s.stock * p.price_cost), 0) AS value
