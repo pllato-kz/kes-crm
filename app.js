@@ -4030,53 +4030,54 @@ async function openDealDetail(id, opts) {
     ships.forEach(s => {
       const sp = stMap[s.status] || ['pill-muted', s.status || '—'];
       // Смена статуса (кроме «Доставлено» — оно через фото-подтверждение) — для не-водителей
-      let statusRow = null;
+      let statusSel = null;
       if (canEdit && currentUser && currentUser.roleKey !== 'driver' && s.status !== 'delivered') {
-        const sel = el('select', {}, [
+        statusSel = el('select', { class:'ship-control' }, [
           el('option', { value:'planned' }, 'Запланирована'),
           el('option', { value:'shipped' }, 'В пути'),
         ]);
-        sel.value = s.status === 'shipped' ? 'shipped' : 'planned';
-        sel.onchange = async () => {
-          if (await setShipmentStatus(s, sel.value)) { chosenStage = d.stage; renderFunnel(); renderShip(); toast('Статус отгрузки и сделки синхронизированы', 'success'); }
-          else sel.value = s.status;
+        statusSel.value = s.status === 'shipped' ? 'shipped' : 'planned';
+        statusSel.onchange = async () => {
+          if (await setShipmentStatus(s, statusSel.value)) { chosenStage = d.stage; renderFunnel(); renderShip(); toast('Статус отгрузки и сделки синхронизированы', 'success'); }
+          else statusSel.value = s.status;
         };
-        statusRow = el('div', { style:'margin-top:8px' }, [el('label', { class:'muted', style:'font-size:12px;display:block;margin-bottom:4px' }, 'Статус отгрузки'), sel]);
       }
       // «Доставлено» с фото-подтверждением (водитель/директор/кладовщик); если уже доставлено — галерея
       const onDelivered = () => { chosenStage = d.stage; renderFunnel(); renderShip(); };
       const deliveryUI = s.status === 'delivered'
         ? deliveryGallery(s)
         : (can('mark-delivered') ? deliveryConfirmBlock(s, onDelivered) : null);
-      // «Транспорт» отгрузки — редактируемый селект, значение подтягивается из транспорта сделки.
+      // «Транспорт» отгрузки — комбобокс, значение подтягивается из транспорта сделки.
       // Отгрузка → сделка: изменение сразу пишется в сделку и в БД (rerenderShip:false, чтобы не сбросить фокус).
-      const _shipTransportCombo = comboField(d.deliveryTransport || '', TRANSPORT_PRESETS, 'Выберите ▾ или впишите своё', 'max-width:190px');
+      const _shipTransportCombo = comboField(d.deliveryTransport || '', TRANSPORT_PRESETS, 'Выберите ▾ или впишите своё');
+      _shipTransportCombo.wrap.classList.add('ship-control');
       const shipTransportSel = _shipTransportCombo.input;
       if (!canEdit) shipTransportSel.disabled = true;
       shipTransportSel.onchange = () => { if (canEdit) setDealTransport(shipTransportSel.value, { persist: true, rerenderShip: false }); };
-      // «Водитель» отгрузки — редактируемый селект, значение подтягивается из водителя сделки.
-      const shipDriverSel = el('select', { class:'ship-driver', style:'padding:3px 28px 3px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;max-width:195px' },
+      // «Водитель» отгрузки — селект, значение подтягивается из водителя сделки.
+      const shipDriverSel = el('select', { class:'ship-driver ship-control' },
         [el('option', { value:'' }, '— не выбран —')].concat(drivers.map(u => el('option', { value:u.id, selected: (d.deliveryDriver || '') === u.id ? 'selected' : null }, u.name))));
       shipDriverSel.value = d.deliveryDriver || '';
       if (!canEdit) shipDriverSel.disabled = true;
       shipDriverSel.onchange = () => { if (canEdit) setDealDriver(shipDriverSel.value, { persist: true, rerenderShip: false }); };
+      const kvRows = [
+        el('dt', {}, 'Сделка'), el('dd', {}, d.title || '—'),
+        el('dt', {}, 'Клиент'), el('dd', {}, (clientById(d.client) || {}).name || '—'),
+        el('dt', {}, 'Менеджер'), el('dd', {}, (userById(d.manager) || {}).name || '—'),
+        el('dt', {}, 'Сумма'), el('dd', {}, d.amount ? fmtMoney(d.amount) : '—'),
+        el('dt', {}, 'Дата'), el('dd', {}, s.date ? fmtDate(s.date) : '—'),
+        el('dt', {}, 'Адрес'), el('dd', {}, s.destination || '—'),
+        el('dt', {}, 'Транспорт'), el('dd', {}, canEdit ? _shipTransportCombo.wrap : (d.deliveryTransport || '—')),
+        el('dt', {}, 'Водитель'), el('dd', {}, canEdit ? shipDriverSel : (driverName(d.deliveryDriver || '') || '—')),
+        el('dt', {}, 'Позиций'), el('dd', {}, s.items != null ? s.items : '—'),
+      ];
+      if (statusSel) kvRows.push(el('dt', {}, 'Статус'), el('dd', {}, statusSel));
       shipList.append(el('div', { class:'card', style:'padding:12px;margin-bottom:10px' }, [
         el('div', { style:'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px' }, [
           el('div', { class:'strong' }, s.no),
           el('span', { class:'pill ' + sp[0] }, sp[1]),
         ]),
-        el('dl', { class:'kv', style:'margin:0' }, [
-          el('dt', {}, 'Сделка'), el('dd', {}, d.title || '—'),
-          el('dt', {}, 'Клиент'), el('dd', {}, (clientById(d.client) || {}).name || '—'),
-          el('dt', {}, 'Менеджер'), el('dd', {}, (userById(d.manager) || {}).name || '—'),
-          el('dt', {}, 'Сумма'), el('dd', {}, d.amount ? fmtMoney(d.amount) : '—'),
-          el('dt', {}, 'Дата'), el('dd', {}, s.date ? fmtDate(s.date) : '—'),
-          el('dt', {}, 'Адрес'), el('dd', {}, s.destination || '—'),
-          el('dt', {}, 'Транспорт'), el('dd', {}, canEdit ? _shipTransportCombo.wrap : (d.deliveryTransport || '—')),
-          el('dt', {}, 'Водитель'), el('dd', {}, canEdit ? shipDriverSel : (driverName(d.deliveryDriver || '') || '—')),
-          el('dt', {}, 'Позиций'), el('dd', {}, s.items != null ? s.items : '—'),
-        ]),
-        statusRow,
+        el('dl', { class:'kv', style:'margin:0;align-items:center' }, kvRows),
         deliveryUI,
       ]));
     });
