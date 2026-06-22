@@ -1719,14 +1719,19 @@ function shipDeliveryPhotos(ship) {
 function deliveryGallery(ship) {
   const photos = shipDeliveryPhotos(ship);
   if (!photos.length) return null;
-  const who = userById(ship.deliveredBy);
+  // «Доставил» — это ВОДИТЕЛЬ, выбранный в сделке/отгрузке (не тот, кто нажал кнопку).
+  // Берём имя водителя из поля отгрузки (driver), иначе из водителя сделки (deliveryDriver по id).
+  const deal = ship.deal ? byId(state.deals, ship.deal) : null;
+  const driverName = (ship.driver && String(ship.driver).trim())
+    || (deal && deal.deliveryDriver ? ((userById(deal.deliveryDriver) || {}).name || '') : '')
+    || '';
   let when = '';
   if (ship.deliveredAt) { const dt = new Date(ship.deliveredAt); if (!isNaN(dt)) when = dt.toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }); }
   return el('div', { style:'margin-top:10px' }, [
     el('div', { style:'font-weight:600;font-size:12px;margin-bottom:6px;color:#6B7280;text-transform:uppercase;letter-spacing:.5px' }, 'Фото доставки (' + photos.length + ')'),
     el('div', { style:'display:flex;flex-wrap:wrap;gap:8px' }, photos.map(u =>
       el('a', { href: u, target:'_blank', title:'Открыть фото' }, el('img', { src: u, alt:'Фото доставки', loading:'lazy', style:'width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #E5E7EB' })))),
-    (who || when) ? el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, 'Доставил: ' + ((who && who.name) || '—') + (when ? ' · ' + when : '')) : null,
+    (driverName || when) ? el('div', { class:'muted', style:'font-size:12px;margin-top:6px' }, 'Доставил: ' + (driverName || '—') + (when ? ' · ' + when : '')) : null,
   ]);
 }
 // Инлайн-форма подтверждения доставки: загрузка одной/нескольких фотографий → статус «Доставлено».
