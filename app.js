@@ -3707,13 +3707,13 @@ async function openDealDetail(id, opts) {
     try {
       await window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body:{ stage_id: st.id } });
       toast('Этап изменён: ' + st.label, 'success');
-      // На «Отгружено» сервер автоматически создаёт отгрузку — подтянем её в карточку.
+      // На «Отгружено» сервер автоматически создаёт отгрузку — подтянем её в карточку В ФОНЕ
+      // (не блокируем интерфейс ожиданием полной перезагрузки списка отгрузок).
       if (/отгруж/i.test(st.label || '')) {
-        try {
-          const ships = await window.__API__.apiFetch('shipments');
+        window.__API__.apiFetch('shipments').then(ships => {
           state.shipments = (ships || []).map(window.__API__.map.shipment);
           renderShip();
-        } catch (_) {}
+        }).catch(() => {});
       }
     } catch (e) {
       chosenStage = prev; d.stage = prev; renderFunnel(); emitDealsChanged();
