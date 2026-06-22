@@ -683,6 +683,7 @@ async function listProducts(env, url) {
   const numP = (k) => { const v = url.searchParams.get(k); if (v == null || v === '') return null; const n = Number(v); return isNaN(n) ? null : n; };
   const stockMin = numP('stock_min'), stockMax = numP('stock_max');
   const costMin = numP('cost_min'), costMax = numP('cost_max');
+  const onlyReserved = url.searchParams.get('reserved') === '1'; // только товары в резерве
 
   const stockJoin =
     `LEFT JOIN (SELECT product_id, SUM(stock) AS stock, SUM(reserved) AS reserved
@@ -704,12 +705,13 @@ async function listProducts(env, url) {
   if (cat) { where.push('p.category_id = ?'); args.push(cat); }
   if (brand) { where.push('p.brand = ?'); args.push(brand); }
   if (low != null) { where.push('(COALESCE(s.stock,0) - COALESCE(s.reserved,0)) < ?'); args.push(low); }
+  if (onlyReserved) { where.push('COALESCE(s.reserved,0) > 0'); }
   if (stockMin != null) { where.push('COALESCE(s.stock,0) >= ?'); args.push(stockMin); }
   if (stockMax != null) { where.push('COALESCE(s.stock,0) <= ?'); args.push(stockMax); }
   if (costMin != null) { where.push('COALESCE(p.price_cost,0) >= ?'); args.push(costMin); }
   if (costMax != null) { where.push('COALESCE(p.price_cost,0) <= ?'); args.push(costMax); }
   const ws = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  const needStockJoin = low != null || stockMin != null || stockMax != null;
+  const needStockJoin = low != null || onlyReserved || stockMin != null || stockMax != null;
 
   // join в COUNT нужен только когда фильтруем по остатку
   const total = await env.DB.prepare(
