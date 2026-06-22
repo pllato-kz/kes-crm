@@ -5704,26 +5704,34 @@ const SHIP_COLS = [
   { key:'delivered', label:'Доставлено',    color:'#22C55E' },
 ];
 const normShipStatus = (s) => ['delivered','planned','transit','shipped'].includes(s) ? s : 'shipped';
+let SHIPMENTS_VIEW = 'kanban'; // 'kanban' | 'list'
 
 VIEWS.shipments = () => {
   const wrap = el('div');
+  // двигать статусы могут директор/кладовщик; водитель отмечает «Доставлено» в карточке (с фото)
+  const canMove = currentUser && (currentUser.roleKey === 'director' || currentUser.roleKey === 'warehouse');
+  // массовое редактирование (только в списке) — директор/кладовщик
+  const canArchive = currentUser && (currentUser.roleKey === 'director' || currentUser.roleKey === 'warehouse');
+
   wrap.append(el('div', { class: 'page-head' }, [
     el('div', {}, [
       el('h1', {}, 'Отгрузки'),
-      el('div', { class: 'sub' }, `${state.shipments.length} отгрузок · перетаскивайте карточки между статусами`),
+      el('div', { class: 'sub' }, `${state.shipments.length} отгрузок`),
     ]),
   ]));
 
-  // двигать статусы могут директор/кладовщик; водитель отмечает «Доставлено» в карточке (с фото)
-  const canMove = currentUser && (currentUser.roleKey === 'director' || currentUser.roleKey === 'warehouse');
   let fq = '';
   const searchI = el('input', { placeholder:'Поиск по № ТТН, клиенту, «куда», транспорту…',
     style:'flex:1;min-width:240px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none',
     oninput: e => { fq = e.target.value.toLowerCase().trim(); render(); } });
-  wrap.append(el('div', { class:'table-toolbar', style:'margin:6px 0 14px' }, [searchI]));
+  // переключатель Канбан / Список (без перезагрузки)
+  const viewBtn = el('button', { class:'btn', onclick: () => {
+    SHIPMENTS_VIEW = SHIPMENTS_VIEW === 'list' ? 'kanban' : 'list';
+    selected.clear(); render();
+  } });
+  wrap.append(el('div', { class:'table-toolbar', style:'margin:6px 0 14px' }, [searchI, el('div', { style:'margin-left:auto' }, viewBtn)]));
 
-  // Массовое редактирование: выбор нескольких отгрузок + архивирование (удаление в архив на 30 дней)
-  const canArchive = currentUser && (currentUser.roleKey === 'director' || currentUser.roleKey === 'warehouse');
+  // Массовое редактирование — только в режиме «Список»
   const selected = new Set();
   const bulkCount = el('span', {}, 'Выбрано: 0');
   const bulkBar = el('div', { class:'bulk-bar', style:'display:none' }, [
@@ -5731,7 +5739,10 @@ VIEWS.shipments = () => {
     el('button', { class:'btn btn-sm', onclick: () => { selected.clear(); refreshBulk(); render(); } }, 'Снять выбор'),
     el('button', { class:'btn btn-sm btn-danger', onclick: () => bulkArchive() }, '🗑 Удалить (в архив)'),
   ]);
-  function refreshBulk() { bulkCount.textContent = `Выбрано: ${selected.size}`; bulkBar.style.display = selected.size ? '' : 'none'; }
+  function refreshBulk() {
+    bulkCount.textContent = `Выбрано: ${selected.size}`;
+    bulkBar.style.display = (SHIPMENTS_VIEW === 'list' && canArchive && selected.size) ? '' : 'none';
+  }
   async function bulkArchive() {
     const ids = [...selected];
     if (!ids.length) return;
@@ -5761,22 +5772,64 @@ VIEWS.shipments = () => {
     });
   }
 
+  const ST_COLOR = { planned:'#F59E0B', shipped:'#06B6D4', transit:'#3B82F6', delivered:'#22C55E' };
+  const ST_LABEL = { planned:'Запланировано', shipped:'Отгружено', transit:'В пути', delivered:'Доставлено' };
+
+  // ----- Режим «Список»: таблица + массовый выбор -----
+  function buildList(list) {
+    const tw = el('div', { class:'table-wrap' });
+    const useSel = canArchive;
+    const selAll = el('input', { type:'checkbox' });
+    const rowChecks = [];
+    const t = el('table', { class:'data' });
+    t.append(el('thead', {}, el('tr', {}, [
+      useSel ? el('th', { style:'width:34px;text-align:center' }, selAll) : null,
+      el('th', {}, '№ ТТН'), el('th', {}, 'Клиент'), el('th', {}, 'Куда'),
+      el('th', {}, 'Транспорт'), el('th', {}, 'Водитель'),
+      el('th', { class:'num' }, 'Поз.'), el('th', {}, 'Дата'), el('th', {}, 'Статус'),
+    ])));
+    const body = el('tbody');
+    const colspan = useSel ? 9 : 8;
+    if (!list.length) {
+      body.append(el('tr', {}, el('td', { colspan, class:'muted', style:'text-align:center;padding:24px' }, 'Отгрузок нет')));
+    } else list.forEach((r, i) => {
+      const cl = clientById(r.client);
+      const cb = useSel ? el('input', { type:'checkbox', checked: selected.has(r.id) ? 'checked' : null,
+        onclick: (e) => e.stopPropagation(),
+        onchange: () => { if (cb.checked) selected.add(r.id); else selected.delete(r.id); selAll.checked = list.length > 0 && list.every(x => selected.has(x.id)); refreshBulk(); } }) : null;
+      rowChecks[i] = cb;
+      body.append(el('tr', { style:'cursor:pointer', onclick: () => openShipmentDoc(r) }, [
+        useSel ? el('td', { style:'text-align:center', onclick: (e) => e.stopPropagation() }, cb) : null,
+        el('td', { class:'strong' }, r.no),
+        el('td', {}, cl ? cl.name : '—'),
+        el('td', {}, r.dest || '—'),
+        el('td', {}, r.transport || '—'),
+        el('td', {}, r.driver || '—'),
+        el('td', { class:'num' }, r.positions),
+        el('td', { class:'muted' }, r.date ? fmtDate(r.date) : '—'),
+        el('td', {}, el('span', { class:'pill', style:`background:${ST_COLOR[r.status]}22;color:${ST_COLOR[r.status]}` }, ST_LABEL[r.status] || r.status)),
+      ]));
+    });
+    t.append(body);
+    if (useSel) {
+      selAll.checked = list.length > 0 && list.every(r => selected.has(r.id));
+      selAll.onchange = () => { list.forEach((r, i) => { if (selAll.checked) selected.add(r.id); else selected.delete(r.id); if (rowChecks[i]) rowChecks[i].checked = selAll.checked; }); refreshBulk(); };
+    }
+    tw.append(t);
+    return tw;
+  }
+
+  // ----- Режим «Канбан»: колонки по статусу (без массового выбора) -----
   let dragged = null;
-  function render() {
-    const list = rows();
+  function buildKanban(list) {
     const board = el('div', { class:'kanban' });
     SHIP_COLS.forEach(col => {
       const cards = list.filter(r => r.status === col.key);
       const body = el('div', { class:'k-col-body' });
       cards.forEach(r => {
         const cl = clientById(r.client);
-        const cb = canArchive ? el('input', { type:'checkbox', checked: selected.has(r.id) ? 'checked' : null,
-          style:'position:absolute;top:8px;right:8px;width:15px;height:15px;cursor:pointer',
-          onclick: (e) => e.stopPropagation(),
-          onchange: () => { if (cb.checked) selected.add(r.id); else selected.delete(r.id); refreshBulk(); } }) : null;
-        const card = el('div', { class:'k-card', style:'position:relative', draggable: canMove ? 'true' : null, onclick: () => openShipmentDoc(r) }, [
-          cb,
-          el('div', { class:'strong', style: canArchive ? 'padding-right:20px' : '' }, r.no),
+        const card = el('div', { class:'k-card', draggable: canMove ? 'true' : null, onclick: () => openShipmentDoc(r) }, [
+          el('div', { class:'strong' }, r.no),
           el('div', { class:'muted', style:'font-size:12px' }, cl.name),
           r.dest ? el('div', { class:'muted', style:'font-size:11.5px;margin-top:2px' }, '📍 ' + r.dest) : null,
           (r.transport || r.driver) ? el('div', { class:'muted', style:'font-size:11.5px' }, (r.transport || '') + (r.driver ? ' · ' + r.driver : '')) : null,
@@ -5803,11 +5856,7 @@ VIEWS.shipments = () => {
           colEl.classList.remove('drag-over'); if (!dragged) return; e.preventDefault();
           const ship = byId(state.shipments, dragged.id);
           if (ship && dragged.status !== col.key) {
-            if (col.key === 'delivered') {
-              // «Доставлено» — только с фото-подтверждением (открываем карточку с формой загрузки)
-              openShipmentDoc({ kind:'ship', id: ship.id, deal: ship.deal });
-              return;
-            }
+            if (col.key === 'delivered') { openShipmentDoc({ kind:'ship', id: ship.id, deal: ship.deal }); return; }
             const ok = await setShipmentStatus(ship, col.key);
             if (ok) { toast('Статус обновлён', 'success'); render(); } else toast('Не удалось обновить статус', 'error');
           }
@@ -5815,8 +5864,17 @@ VIEWS.shipments = () => {
       }
       board.append(colEl);
     });
+    return board;
+  }
+
+  function render() {
+    const isList = SHIPMENTS_VIEW === 'list';
+    viewBtn.textContent = isList ? '🗂 Канбан' : '📋 Список';
+    if (!isList) selected.clear(); // массовый выбор отключён в канбане
+    refreshBulk();
+    const list = rows();
     boardHost.innerHTML = '';
-    boardHost.append(list.length ? board : el('div', { class:'muted', style:'padding:24px;text-align:center' }, 'Отгрузок нет'));
+    boardHost.append(list.length ? (isList ? buildList(list) : buildKanban(list)) : el('div', { class:'muted', style:'padding:24px;text-align:center' }, 'Отгрузок нет'));
   }
   render();
   return wrap;
