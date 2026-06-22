@@ -3696,35 +3696,37 @@ async function openDealDetail(id, opts) {
   state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.manager) o.selected = true; mgrSel.append(o); });
 
   // ----- Доставка -----
-  const TRANSPORTS = [['', '—'], ['pickup', 'Самовывоз'], ['tk', 'Транспортная компания'], ['courier', 'Курьер'], ['own', 'Свой водитель']];
+  // «Транспорт» — свободный текст с подсказками (input + datalist): можно выбрать пресет
+  // или вписать своё. Обратная совместимость: старые коды (pickup/tk/...) переводим в подписи.
+  const TRANSPORT_PRESETS = ['Самовывоз', 'Транспортная компания', 'Курьер', 'Свой водитель', 'Газель собственная'];
+  const TRANSPORT_CODE_LABEL = { pickup:'Самовывоз', tk:'Транспортная компания', courier:'Курьер', own:'Свой водитель' };
+  if (TRANSPORT_CODE_LABEL[d.deliveryTransport]) d.deliveryTransport = TRANSPORT_CODE_LABEL[d.deliveryTransport];
+  const transportListId = 'transport-list-' + (d.id || 'new');
+  const transportDatalist = el('datalist', { id: transportListId }, TRANSPORT_PRESETS.map(v => el('option', { value: v })));
   const delDateI = el('input', { type:'date', value: String(d.deliveryDate || '').slice(0, 10) });
-  const delTransportSel = el('select', {}, TRANSPORTS.map(([v, l]) => el('option', { value:v, selected: (d.deliveryTransport || '') === v ? 'selected' : null }, l)));
+  const delTransportSel = el('input', { type:'text', list: transportListId, value: d.deliveryTransport || '', placeholder:'Выберите или впишите свой' });
   const drivers = state.users.filter(u => u.roleKey === 'driver' && u.active !== false);
   const delDriverSel = el('select', {}, [el('option', { value:'' }, '— выберите водителя —')].concat(
     drivers.map(u => el('option', { value:u.id, selected: d.deliveryDriver === u.id ? 'selected' : null }, u.name))));
   if (!canEdit) [titleI, addressI, amountI, mgrSel, delDateI, delTransportSel, delDriverSel].forEach(i => i.disabled = true);
 
-  // Двусторонняя синхронизация «Транспорт» между сделкой и её отгрузкой.
-  // Источник истины — d.deliveryTransport (код). В отгрузке храним человекочитаемую метку.
-  // Пишем сразу в БД (сделку и отгрузки) без перезагрузки.
-  function transportLabel(code) { const f = TRANSPORTS.find(([v]) => v === code); return f ? (code ? f[1] : '') : ''; }
-  function setDealTransport(code, opts) {
+  // Двусторонняя синхронизация «Транспорт» между сделкой и её отгрузкой (свободный текст).
+  // Источник истины — d.deliveryTransport. Пишем сразу в БД (сделку и отгрузки) без перезагрузки.
+  function setDealTransport(text, opts) {
     opts = opts || {};
-    code = code || '';
-    if (delTransportSel.value !== code) delTransportSel.value = code;
-    d.deliveryTransport = code || null;
-    const label = transportLabel(code);
+    text = (text || '').trim();
+    if (delTransportSel.value !== text) delTransportSel.value = text;
+    d.deliveryTransport = text || null;
     state.shipments.filter(s => s.deal === d.id).forEach(s => {
-      if (s.transport !== label) {
-        s.transport = label;
-        if (opts.persist !== false) window.__API__.apiFetch('shipments/' + s.id, { method:'PUT', body:{ transport: label } }).catch(() => {});
+      if (s.transport !== text) {
+        s.transport = text;
+        if (opts.persist !== false) window.__API__.apiFetch('shipments/' + s.id, { method:'PUT', body:{ transport: text } }).catch(() => {});
       }
     });
-    if (opts.persist !== false) window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body:{ delivery_transport: code || null } }).catch(() => {});
+    if (opts.persist !== false) window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body:{ delivery_transport: text || null } }).catch(() => {});
     if (opts.rerenderShip) renderShip();
   }
-  // Примечание: onchange для delTransportSel назначается ниже (в секции «Доставка»),
-  // где он совмещён с переключением видимости поля «Водитель» — чтобы не перетереть друг друга.
+  delTransportSel.onchange = () => { if (canEdit) setDealTransport(delTransportSel.value, { persist: true, rerenderShip: true }); };
 
   // Двусторонняя синхронизация «Водитель»: в сделке хранится id водителя (d.deliveryDriver),
   // в отгрузке — имя (s.driver). Источник истины — сделка. Пишем сразу в БД, без перезагрузки.
@@ -3824,16 +3826,13 @@ async function openDealDetail(id, opts) {
       fieldRow('Отв. менеджер', mgrSel),
     ]),
     (() => {
+      // Транспорт теперь свободный текст, поэтому поле «Водитель» показываем всегда (опционально).
       const delDriverRow = fieldRow('Водитель', delDriverSel);
-      const updVis = () => { delDriverRow.style.display = delTransportSel.value === 'own' ? '' : 'none'; };
-      // ВАЖНО: совмещаем видимость поля водителя И синхронизацию транспорта с отгрузкой
-      // (иначе это присваивание перетёрло бы обработчик setDealTransport).
-      delTransportSel.onchange = () => { updVis(); if (canEdit) setDealTransport(delTransportSel.value, { persist: true, rerenderShip: true }); };
-      updVis();
       return el('div', { class:'deal-section' }, [
         el('div', { class:'section-title' }, 'Доставка'),
         fieldRow('Дата доставки', delDateI),
         fieldRow('Транспорт', delTransportSel),
+        transportDatalist,
         delDriverRow,
         el('div', { class:'muted', style:'font-size:11px;margin-top:2px' }, 'Адрес доставки берётся из поля «Адрес» выше.'),
       ]);
@@ -4010,9 +4009,7 @@ async function openDealDetail(id, opts) {
         : (can('mark-delivered') ? deliveryConfirmBlock(s, onDelivered) : null);
       // «Транспорт» отгрузки — редактируемый селект, значение подтягивается из транспорта сделки.
       // Отгрузка → сделка: изменение сразу пишется в сделку и в БД (rerenderShip:false, чтобы не сбросить фокус).
-      const shipTransportSel = el('select', { class:'ship-transport', style:'padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:13px;max-width:170px' },
-        TRANSPORTS.map(([v, l]) => el('option', { value:v, selected: (d.deliveryTransport || '') === v ? 'selected' : null }, l)));
-      shipTransportSel.value = d.deliveryTransport || '';
+      const shipTransportSel = el('input', { class:'ship-transport', type:'text', list: transportListId, value: d.deliveryTransport || '', placeholder:'Выберите или впишите свой', style:'padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:13px;max-width:170px' });
       if (!canEdit) shipTransportSel.disabled = true;
       shipTransportSel.onchange = () => { if (canEdit) setDealTransport(shipTransportSel.value, { persist: true, rerenderShip: false }); };
       // «Водитель» отгрузки — редактируемый селект, значение подтягивается из водителя сделки.
@@ -4033,7 +4030,7 @@ async function openDealDetail(id, opts) {
           el('dt', {}, 'Сумма'), el('dd', {}, d.amount ? fmtMoney(d.amount) : '—'),
           el('dt', {}, 'Дата'), el('dd', {}, s.date ? fmtDate(s.date) : '—'),
           el('dt', {}, 'Адрес'), el('dd', {}, s.destination || '—'),
-          el('dt', {}, 'Транспорт'), el('dd', {}, canEdit ? shipTransportSel : (transportLabel(d.deliveryTransport || '') || '—')),
+          el('dt', {}, 'Транспорт'), el('dd', {}, canEdit ? shipTransportSel : (d.deliveryTransport || '—')),
           el('dt', {}, 'Водитель'), el('dd', {}, canEdit ? shipDriverSel : (driverName(d.deliveryDriver || '') || '—')),
           el('dt', {}, 'Позиций'), el('dd', {}, s.items != null ? s.items : '—'),
         ]),
