@@ -215,6 +215,10 @@ const nn = (v) => { const s = v == null ? '' : String(v).trim(); return (s === '
 
 const byId = (arr, id) => arr.find(x => x.id === id);
 
+// Сигнал «сделки изменились» — открытый вид сделок (канбан/список) перерисуется без
+// перезагрузки. Используется при смене этапа из карточки сделки и т.п.
+function emitDealsChanged() { try { window.dispatchEvent(new Event('crm:deals-changed')); } catch (e) {} }
+
 // Закупочную цену (себестоимость) видят все роли, КРОМЕ менеджеров — коммерческая тайна.
 function canSeeCost() { return !(currentUser && currentUser.roleKey === 'manager'); }
 
@@ -2920,6 +2924,14 @@ VIEWS.deals = () => {
     content.append(isList ? buildDealsTable(deals) : buildDealsKanban(deals));
   }
 
+  // Внешние изменения сделок (смена этапа из карточки сделки и т.п.) — перерисовываем
+  // доску/список сразу, без перезагрузки. Слушатель самоочищается при смене вида.
+  const onDealsChanged = () => {
+    if (!document.body.contains(content)) { window.removeEventListener('crm:deals-changed', onDealsChanged); return; }
+    renderContent();
+  };
+  window.addEventListener('crm:deals-changed', onDealsChanged);
+
   function buildDealsTable(deals) {
     const tw = el('div', { class: 'table-wrap' });
 
@@ -3647,11 +3659,15 @@ async function openDealDetail(id, opts) {
     closeStageMenu();
     if (!canEdit || st.id === chosenStage) return;
     const prev = chosenStage;
-    chosenStage = st.id; d.stage = st.id; renderStageBtn();
+    // оптимистично: сразу обновляем карточку (кнопка + воронка-шевроны + меню) и доску/список
+    chosenStage = st.id; d.stage = st.id; renderFunnel(); emitDealsChanged();
     try {
       await window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body:{ stage_id: st.id } });
       toast('Этап изменён: ' + st.label, 'success');
-    } catch (e) { chosenStage = prev; d.stage = prev; renderStageBtn(); toast('Не удалось изменить этап', 'error'); }
+    } catch (e) {
+      chosenStage = prev; d.stage = prev; renderFunnel(); emitDealsChanged();
+      toast('Не удалось изменить этап', 'error');
+    }
   }
   stageBtn.onclick = (e) => {
     if (!canEdit) return;
