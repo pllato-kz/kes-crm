@@ -1809,9 +1809,11 @@ function openShipmentDetail(id) {
 async function openShipmentDoc(r) {
   const ship = r.kind === 'ship' ? byId(state.shipments, r.id) : null;
   const deal = byId(state.deals, r.deal);
-  const cl = clientById((ship && ship.client) || (deal && deal.client));
+  // Данные тянем из связанной СДЕЛКИ (источник истины), отгрузка — запасной вариант.
+  const cl = clientById((deal && deal.client) || (ship && ship.client));
   const created = (deal && deal.created) || (ship && ship.date) || '';
   const amount = deal ? deal.amount : null;
+  const addr = (deal && (deal.address || (clientById(deal.client) || {}).address)) || (ship && ship.destination) || '';
 
   const STMAP = { delivered:['Доставлено','pill-success'], planned:['Запланировано','pill-info'], transit:['В пути','pill-warn'], shipped:['Отгружено','pill-warn'] };
   const stKey = ship ? (STMAP[ship.status] ? ship.status : 'shipped') : null;
@@ -1826,6 +1828,7 @@ async function openShipmentDoc(r) {
       el('dt', {}, 'Сделка'),        el('dd', { class:'strong' }, deal ? deal.title : (ship ? ship.no : '—')),
       el('dt', {}, 'Клиент'),         el('dd', {}, cl.name),
       el('dt', {}, 'Сумма'),          el('dd', { class:'strong', style:'font-size:16px' }, amount != null ? fmtMoney(amount) : '—'),
+      el('dt', {}, 'Адрес'),          el('dd', {}, addr || '—'),
       el('dt', {}, 'Дата создания'),  el('dd', {}, created ? fmtDate(created) : '—'),
       el('dt', {}, 'Статус'),         el('dd', {}, statusPill),
     ]),
@@ -4073,7 +4076,7 @@ async function openDealDetail(id, opts) {
         el('dt', {}, 'Менеджер'), el('dd', {}, (userById(d.manager) || {}).name || '—'),
         el('dt', {}, 'Сумма'), el('dd', {}, d.amount ? fmtMoney(d.amount) : '—'),
         el('dt', {}, 'Дата'), el('dd', {}, s.date ? fmtDate(s.date) : '—'),
-        el('dt', {}, 'Адрес'), el('dd', {}, s.destination || '—'),
+        el('dt', {}, 'Адрес'), el('dd', {}, (d.address || (clientById(d.client) || {}).address || s.destination || '—')),
         el('dt', {}, 'Транспорт'), el('dd', {}, d.deliveryTransport || '—'),
         el('dt', {}, 'Водитель'), el('dd', {}, driverName(d.deliveryDriver || '') || '—'),
         el('dt', {}, 'Позиций'), el('dd', {}, s.items != null ? s.items : '—'),
