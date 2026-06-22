@@ -3710,12 +3710,16 @@ async function openDealDetail(id, opts) {
   state.users.forEach(u => { const o = el('option', { value:u.id }, u.name); if (u.id === d.manager) o.selected = true; mgrSel.append(o); });
 
   // ----- Доставка -----
-  // «Транспорт» — свободный текст (input), без подсказок при вводе. Обратная совместимость:
-  // старые коды (pickup/tk/...) переводим в подписи.
+  // «Транспорт» — комбобокс: выпадающий список пресетов (datalist) + свой ввод вручную.
+  // Браузерные подсказки (история) не появляются — el() ставит autocomplete=off.
+  // Обратная совместимость: старые коды (pickup/tk/...) переводим в подписи.
+  const TRANSPORT_PRESETS = ['Самовывоз', 'Транспортная компания', 'Курьер', 'Свой водитель', 'Газель собственная'];
   const TRANSPORT_CODE_LABEL = { pickup:'Самовывоз', tk:'Транспортная компания', courier:'Курьер', own:'Свой водитель' };
   if (TRANSPORT_CODE_LABEL[d.deliveryTransport]) d.deliveryTransport = TRANSPORT_CODE_LABEL[d.deliveryTransport];
+  const transportListId = 'transport-list-' + (d.id || 'new');
+  const transportDatalist = el('datalist', { id: transportListId }, TRANSPORT_PRESETS.map(v => el('option', { value: v })));
   const delDateI = el('input', { type:'date', value: String(d.deliveryDate || '').slice(0, 10) });
-  const delTransportSel = el('input', { type:'text', value: d.deliveryTransport || '', placeholder:'Впишите транспорт' });
+  const delTransportSel = el('input', { type:'text', list: transportListId, value: d.deliveryTransport || '', placeholder:'Выберите из списка или впишите своё' });
   const drivers = state.users.filter(u => u.roleKey === 'driver' && u.active !== false);
   const delDriverSel = el('select', {}, [el('option', { value:'' }, '— выберите водителя —')].concat(
     drivers.map(u => el('option', { value:u.id, selected: d.deliveryDriver === u.id ? 'selected' : null }, u.name))));
@@ -3843,6 +3847,7 @@ async function openDealDetail(id, opts) {
         el('div', { class:'section-title' }, 'Доставка'),
         fieldRow('Дата доставки', delDateI),
         fieldRow('Транспорт', delTransportSel),
+        transportDatalist,
         delDriverRow,
         el('div', { class:'muted', style:'font-size:11px;margin-top:2px' }, 'Адрес доставки берётся из поля «Адрес» выше.'),
       ]);
@@ -4019,7 +4024,7 @@ async function openDealDetail(id, opts) {
         : (can('mark-delivered') ? deliveryConfirmBlock(s, onDelivered) : null);
       // «Транспорт» отгрузки — редактируемый селект, значение подтягивается из транспорта сделки.
       // Отгрузка → сделка: изменение сразу пишется в сделку и в БД (rerenderShip:false, чтобы не сбросить фокус).
-      const shipTransportSel = el('input', { class:'ship-transport', type:'text', value: d.deliveryTransport || '', placeholder:'Впишите транспорт', style:'padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:13px;max-width:170px' });
+      const shipTransportSel = el('input', { class:'ship-transport', type:'text', list: transportListId, value: d.deliveryTransport || '', placeholder:'Выберите или впишите своё', style:'padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:13px;max-width:170px' });
       if (!canEdit) shipTransportSel.disabled = true;
       shipTransportSel.onchange = () => { if (canEdit) setDealTransport(shipTransportSel.value, { persist: true, rerenderShip: false }); };
       // «Водитель» отгрузки — редактируемый селект, значение подтягивается из водителя сделки.
