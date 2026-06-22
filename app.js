@@ -4322,7 +4322,8 @@ async function openDealDetail(id, opts) {
           payload.lineItems = window.__API__.toApi.dealItems(d.lineItems || []); // всегда шлём (в т.ч. пустой) — иначе удаление позиций не сохраняется
           const saved = await window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body: payload });
           Object.assign(d, window.__API__.map.deal(saved));
-          closeModal(); toast('Сделка сохранена', 'success'); navigate('deals');
+          closeModal(); toast('Сделка сохранена', 'success');
+          emitDealsChanged(); // обновляем доску/список на месте, без прокрутки в начало (navigate мотал страницу вверх)
         } catch (err) { toast('Ошибка: ' + ((err && err.message) || err), 'error'); }
       } }, 'Сохранить') : null,
     ],
