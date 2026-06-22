@@ -5130,10 +5130,19 @@ VIEWS.warehouse = () => {
   ]);
   wrap.append(stats);
   window.__API__.apiFetch('warehouse/summary').then(s => {
+    // «Зарезервировано» — кликабельная: открывает список с фильтром по резерву.
+    const resCard = statCard('Зарезервировано', Math.round(s.reserved || 0).toLocaleString('ru-RU'), '', '', '🔒');
+    resCard.style.cursor = 'pointer';
+    resCard.title = 'Показать товары в резерве';
+    resCard.onclick = () => {
+      q.reserved = true; reservedChk.checked = true; q.page = 1;
+      loadStock(); drawer.refreshBadge();
+      tw.scrollIntoView({ behavior:'smooth', block:'start' });
+    };
     const grid = el('div', { class:'grid grid-4' }, [
       statCard('SKU на складе', (s.sku || 0).toLocaleString('ru-RU'), '', '', '📦'),
       statCard('Всего единиц', Math.round(s.units || 0).toLocaleString('ru-RU'), '', '', '🧮'),
-      statCard('Зарезервировано', Math.round(s.reserved || 0).toLocaleString('ru-RU'), '', '', '🔒'),
+      resCard,
       statCard('Стоимость склада', fmtMoneyK(s.value || 0), '', '', '💎'),
     ]);
     stats.replaceWith(grid);
@@ -5141,10 +5150,12 @@ VIEWS.warehouse = () => {
 
   // Остатки по складу — серверная пагинация + поиск + фильтр низких остатков
   wrap.append(el('div', { style:'font-weight:600;margin:24px 0 12px' }, 'Остатки по складу'));
-  const q = { q: '', low: false, stockMin: '', stockMax: '', costMin: '', costMax: '', page: 1, limit: 50, total: 0 };
+  const q = { q: '', low: false, reserved: false, stockMin: '', stockMax: '', costMin: '', costMax: '', page: 1, limit: 50, total: 0 };
   const searchI = el('input', { placeholder:'Поиск по артикулу или названию…' });
   const lowChk = el('input', { type:'checkbox', style:'min-width:0;width:16px;height:16px;padding:0;margin:0;flex:none' });
   const lowLabel = el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#374151;white-space:nowrap' }, [lowChk, 'Только низкие остатки (<50)']);
+  const reservedChk = el('input', { type:'checkbox', style:'min-width:0;width:16px;height:16px;padding:0;margin:0;flex:none' });
+  const reservedLabel = el('label', { style:'display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#374151;white-space:nowrap' }, [reservedChk, 'Только в резерве']);
   const stockMinI = el('input', { type:'number', placeholder:'от', onchange: e => { q.stockMin = e.target.value; q.page = 1; loadStock(); drawer.refreshBadge(); } });
   const stockMaxI = el('input', { type:'number', placeholder:'до', onchange: e => { q.stockMax = e.target.value; q.page = 1; loadStock(); drawer.refreshBadge(); } });
   const costMinI = el('input', { type:'number', placeholder:'от', onchange: e => { q.costMin = e.target.value; q.page = 1; loadStock(); drawer.refreshBadge(); } });
@@ -5152,15 +5163,16 @@ VIEWS.warehouse = () => {
   const drawer = buildFilterDrawer({
     groups: [
       el('div', { class:'filter-group' }, lowLabel),
+      el('div', { class:'filter-group' }, reservedLabel),
       filterGroup('Остаток, шт', el('div', { class:'row2' }, [stockMinI, stockMaxI])),
       filterGroup('Закупочная цена, ₸', el('div', { class:'row2' }, [costMinI, costMaxI])),
     ],
     onReset: () => {
-      Object.assign(q, { low: false, stockMin:'', stockMax:'', costMin:'', costMax:'', page: 1 });
-      lowChk.checked = false; stockMinI.value=''; stockMaxI.value=''; costMinI.value=''; costMaxI.value='';
+      Object.assign(q, { low: false, reserved: false, stockMin:'', stockMax:'', costMin:'', costMax:'', page: 1 });
+      lowChk.checked = false; reservedChk.checked = false; stockMinI.value=''; stockMaxI.value=''; costMinI.value=''; costMaxI.value='';
       loadStock();
     },
-    countActive: () => (q.low ? 1 : 0) + [q.stockMin, q.stockMax, q.costMin, q.costMax].filter(v => v !== '' && v != null).length,
+    countActive: () => (q.low ? 1 : 0) + (q.reserved ? 1 : 0) + [q.stockMin, q.stockMax, q.costMin, q.costMax].filter(v => v !== '' && v != null).length,
   });
   const tw = el('div', { class: 'table-wrap' });
   tw.append(el('div', { class: 'table-toolbar' }, [ searchI, el('div', { style:'margin-left:auto' }, drawer.btn) ]));
@@ -5174,11 +5186,12 @@ VIEWS.warehouse = () => {
   let deb;
   searchI.oninput = (e) => { clearTimeout(deb); const v = e.target.value; deb = setTimeout(() => { q.q = v; q.page = 1; loadStock(); }, 300); };
   lowChk.onchange = (e) => { q.low = e.target.checked; q.page = 1; loadStock(); drawer.refreshBadge(); };
+  reservedChk.onchange = (e) => { q.reserved = e.target.checked; q.page = 1; loadStock(); drawer.refreshBadge(); };
 
   async function loadStock() {
     tableHost.innerHTML = ''; tableHost.append(el('div', { class:'muted', style:'padding:14px' }, 'Загрузка…'));
     try {
-      let qs = `q=${encodeURIComponent(q.q)}&page=${q.page}&limit=${q.limit}` + (q.low ? '&lowstock=50' : '');
+      let qs = `q=${encodeURIComponent(q.q)}&page=${q.page}&limit=${q.limit}` + (q.low ? '&lowstock=50' : '') + (q.reserved ? '&reserved=1' : '');
       if (q.stockMin !== '') qs += '&stock_min=' + encodeURIComponent(q.stockMin);
       if (q.stockMax !== '') qs += '&stock_max=' + encodeURIComponent(q.stockMax);
       if (q.costMin !== '') qs += '&cost_min=' + encodeURIComponent(q.costMin);
