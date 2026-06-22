@@ -2193,22 +2193,19 @@ async function writeDeal(env, request, method, id, auth) {
     } else if (prevStage && newStage !== prevStage) {
       await env.DB.prepare(`INSERT INTO deal_stage_history (deal_id, from_stage, to_stage, user_id) VALUES (?,?,?,?)`).bind(dealId, prevStage, newStage, uid).run();
     }
-    // Синхронизация статуса связанной отгрузки при смене этапа.
-    // ВРЕМЕННО ОТКЛЮЧЕНО (по запросу): автосоздание документов на этапах
-    // «Оплачено»/«Отгружено» не выполняется — никаких скрытых фоновых созданий.
-    // Чтобы вернуть авто-списание на «Отгружено», раскомментируйте строку autoShipDeal.
+    // Синхронизация статуса связанной отгрузки при смене этапа сделки.
+    // На этапе «Отгружено» — автоматически создаём отгрузку (если её ещё нет), привязка к deal_id.
     if (newStage !== prevStage) {
       try {
         const st = await env.DB.prepare('SELECT label FROM deal_stages WHERE id=?').bind(newStage).first();
         const label = (st && st.label) || '';
-        // if (/отгруж/i.test(label)) await autoShipDeal(env, dealId, auth);
-        // Этап сделки → статус связанной отгрузки (только обновление СУЩЕСТВУЮЩИХ, без создания)
-        let shipStatus = null;
-        if (/достав|закры|выполн|заверш/i.test(label)) shipStatus = 'delivered';
-        else if (/отгруж/i.test(label)) shipStatus = 'shipped';
-        if (shipStatus) {
+        if (/отгруж/i.test(label)) {
+          // «Отгружено»: создаём отгрузку (или обновляем статус существующей) — без дублей
+          await ensureShipmentForDealStage(env, dealId, 'shipped');
+        } else if (/достав|закры|выполн|заверш/i.test(label)) {
+          // прочие финальные этапы — только обновление статуса СУЩЕСТВУЮЩИХ отгрузок
           await ensureShipmentStatuses(env);
-          await env.DB.prepare('UPDATE shipments SET status_id=? WHERE deal_id=?').bind(shipStatus, dealId).run();
+          await env.DB.prepare('UPDATE shipments SET status_id=? WHERE deal_id=?').bind('delivered', dealId).run();
         }
         // Стадия «Резерв»: при попадании на неё — авто-резерв всех позиций + старт срока;
         // при уходе с неё — останавливаем срок (резерв оставляем, снимается вручную/при отгрузке).
@@ -2731,6 +2728,42 @@ async function ensureShipmentForPaidDeal(env, dealId) {
     await ensureNotifSchema(env);
     const us = await env.DB.prepare("SELECT id FROM users WHERE role_key IN ('warehouse','director') AND active=1").all();
     const txt = `Сделка оплачена — создана отгрузка ${no}${d.dno ? ' по сделке ' + d.dno : ''}. К сборке.`;
+    const stmts = [];
+    for (const u of (us.results || [])) stmts.push(env.DB.prepare("INSERT OR IGNORE INTO notifications (text, type, read, created_at, user_id, ref) VALUES (?, 'info', 0, datetime('now'), ?, ?)").bind(txt, u.id, `shipcreated:${id}:${u.id}`));
+    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+  } catch (e) {}
+  return id;
+}
+
+// Создаёт отгрузку при переводе сделки на этап «Отгружено» (если её ещё нет).
+// Привязка к deal_id, без дублей. Транспорт/водитель берём из полей сделки.
+// Если отгрузка уже есть — только обновляем статус.
+async function ensureShipmentForDealStage(env, dealId, statusId) {
+  if (!dealId) return null;
+  await ensureArchiveColumns(env);
+  await ensureShipmentExtRef(env);
+  await ensureShipmentStatuses(env);
+  const st = statusId || 'shipped';
+  const exists = await env.DB.prepare('SELECT id FROM shipments WHERE deal_id=?').bind(dealId).first();
+  if (exists) { // уже есть — не дублируем, обновляем статус
+    await env.DB.prepare('UPDATE shipments SET status_id=? WHERE id=?').bind(st, exists.id).run();
+    return exists.id;
+  }
+  const d = await env.DB.prepare('SELECT d.id, d.client_id, d.no AS dno, d.address AS daddr, d.delivery_transport, d.delivery_driver, c.address AS caddr FROM deals d LEFT JOIN clients c ON c.id=d.client_id WHERE d.id=?').bind(dealId).first();
+  if (!d) return null;
+  const addr = d.daddr || d.caddr || '';
+  const it = await env.DB.prepare('SELECT COUNT(*) AS n FROM deal_items WHERE deal_id=?').bind(dealId).first();
+  let driverNm = '';
+  if (d.delivery_driver) { try { const u = await env.DB.prepare('SELECT name FROM users WHERE id=?').bind(d.delivery_driver).first(); driverNm = u ? (u.name || '') : ''; } catch (e) {} }
+  const no = await uniqueDocNo(env, 'shipments', null, 'ТТН-');
+  const id = genId();
+  await env.DB.prepare(
+    'INSERT INTO shipments (id, no, deal_id, client_id, date, items, weight, transport, driver, status_id, destination) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+  ).bind(id, no, dealId, d.client_id, new Date().toISOString().slice(0, 10), (it && it.n) || 0, 0, d.delivery_transport || '', driverNm, st, addr).run();
+  try {
+    await ensureNotifSchema(env);
+    const us = await env.DB.prepare("SELECT id FROM users WHERE role_key IN ('warehouse','director') AND active=1").all();
+    const txt = `Создана отгрузка ${no}${d.dno ? ' по сделке ' + d.dno : ''} (этап «Отгружено»).`;
     const stmts = [];
     for (const u of (us.results || [])) stmts.push(env.DB.prepare("INSERT OR IGNORE INTO notifications (text, type, read, created_at, user_id, ref) VALUES (?, 'info', 0, datetime('now'), ?, ?)").bind(txt, u.id, `shipcreated:${id}:${u.id}`));
     for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
