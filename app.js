@@ -3707,6 +3707,14 @@ async function openDealDetail(id, opts) {
     try {
       await window.__API__.apiFetch('deals/' + d.id, { method:'PUT', body:{ stage_id: st.id } });
       toast('Этап изменён: ' + st.label, 'success');
+      // На «Отгружено» сервер автоматически создаёт отгрузку — подтянем её в карточку.
+      if (/отгруж/i.test(st.label || '')) {
+        try {
+          const ships = await window.__API__.apiFetch('shipments');
+          state.shipments = (ships || []).map(window.__API__.map.shipment);
+          renderShip();
+        } catch (_) {}
+      }
     } catch (e) {
       chosenStage = prev; d.stage = prev; renderFunnel(); emitDealsChanged();
       toast('Не удалось изменить этап', 'error');
