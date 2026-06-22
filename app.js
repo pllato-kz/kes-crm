@@ -3453,7 +3453,7 @@ async function openDealDetail(id, opts) {
     const t = el('table', { class:'data line-items-table' });
     t.append(el('thead', {}, el('tr', {}, [
       el('th', {}, 'Товар'),
-      el('th', { class:'num', style:'width:58px' }, 'Кол-во'),
+      el('th', { class:'num', style:'width:72px' }, 'Кол-во'),
       el('th', { class:'num', style:'width:160px' }, 'Цена / наценка'),
       el('th', { class:'num', style:'width:96px' }, 'Сумма'),
       el('th', { style:'width:26px' }, ''),
