@@ -519,7 +519,7 @@ async function dataRoute(ctx, seg, url, auth) {
   if (resource === 'deals' && id && seg[2] === 'history' && method === 'GET') return dealHistory(env, id);
   if (resource === 'deals' && method === 'GET' && id) return getDeal(env, id);
   if (resource === 'deals' && method === 'GET' && !id) return listDeals(env, url);
-  if (resource === 'deals' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeDeal(env, request, method, id, auth);
+  if (resource === 'deals' && ['POST', 'PUT', 'PATCH'].includes(method)) return writeDeal(env, request, method, id, auth, ctx);
   if (resource === 'deals' && method === 'DELETE' && id) return deleteDeal(env, id, auth);
   if (resource === 'clients' && id === 'distribute' && method === 'POST') {
     if (!auth || auth.role !== 'director') return err(403, 'Распределять базу может только директор');
@@ -1023,11 +1023,14 @@ async function deletePipeline(env, id) {
 
 // Уведомления — адресные (user_id) + широковещательные (user_id IS NULL).
 // Колонки user_id/ref добавляются на лету; ref — для идемпотентности (UNIQUE).
+let NOTIF_SCHEMA_OK = false;
 async function ensureNotifSchema(env) {
+  if (NOTIF_SCHEMA_OK) return; // DDL только один раз на изолят — иначе 3 лишних round-trip на каждый вызов
   for (const ddl of ['ALTER TABLE notifications ADD COLUMN user_id TEXT', 'ALTER TABLE notifications ADD COLUMN ref TEXT']) {
     try { await env.DB.prepare(ddl).run(); } catch (e) { /* колонка уже есть */ }
   }
   try { await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_notif_ref ON notifications(ref)').run(); } catch (e) {}
+  NOTIF_SCHEMA_OK = true;
 }
 
 // Истёкший резерв: сделки на стадии «Резерв», у которых reserved_at + срок < сейчас →
@@ -2134,7 +2137,7 @@ async function getDeal(env, id) {
   return json(deal);
 }
 
-async function writeDeal(env, request, method, id, auth) {
+async function writeDeal(env, request, method, id, auth, ctx) {
   const body = await request.json().catch(() => ({}));
   const dealId = id || body.id || genId();
   const lineItems = Array.isArray(body.lineItems) ? body.lineItems : null;
@@ -2210,8 +2213,9 @@ async function writeDeal(env, request, method, id, auth) {
         const st = await env.DB.prepare('SELECT label FROM deal_stages WHERE id=?').bind(newStage).first();
         const label = (st && st.label) || '';
         if (/отгруж/i.test(label)) {
-          // «Отгружено»: создаём отгрузку (или обновляем статус существующей) — без дублей
-          await ensureShipmentForDealStage(env, dealId, 'shipped');
+          // «Отгружено»: создаём отгрузку (или обновляем статус существующей) — без дублей.
+          // Уведомления складу/директору отправляем в фоне (waitUntil), не задерживая ответ.
+          await ensureShipmentForDealStage(env, dealId, 'shipped', ctx);
         } else if (/достав|закры|выполн|заверш/i.test(label)) {
           // прочие финальные этапы — только обновление статуса СУЩЕСТВУЮЩИХ отгрузок
           await ensureShipmentStatuses(env);
@@ -2748,7 +2752,7 @@ async function ensureShipmentForPaidDeal(env, dealId) {
 // Создаёт отгрузку при переводе сделки на этап «Отгружено» (если её ещё нет).
 // Привязка к deal_id, без дублей. Транспорт/водитель берём из полей сделки.
 // Если отгрузка уже есть — только обновляем статус.
-async function ensureShipmentForDealStage(env, dealId, statusId) {
+async function ensureShipmentForDealStage(env, dealId, statusId, ctx) {
   if (!dealId) return null;
   await ensureArchiveColumns(env);
   await ensureShipmentExtRef(env);
@@ -2770,14 +2774,18 @@ async function ensureShipmentForDealStage(env, dealId, statusId) {
   await env.DB.prepare(
     'INSERT INTO shipments (id, no, deal_id, client_id, date, items, weight, transport, driver, status_id, destination) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
   ).bind(id, no, dealId, d.client_id, new Date().toISOString().slice(0, 10), (it && it.n) || 0, 0, d.delivery_transport || '', driverNm, st, addr).run();
-  try {
-    await ensureNotifSchema(env);
-    const us = await env.DB.prepare("SELECT id FROM users WHERE role_key IN ('warehouse','director') AND active=1").all();
-    const txt = `Создана отгрузка ${no}${d.dno ? ' по сделке ' + d.dno : ''} (этап «Отгружено»).`;
-    const stmts = [];
-    for (const u of (us.results || [])) stmts.push(env.DB.prepare("INSERT OR IGNORE INTO notifications (text, type, read, created_at, user_id, ref) VALUES (?, 'info', 0, datetime('now'), ?, ?)").bind(txt, u.id, `shipcreated:${id}:${u.id}`));
-    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
-  } catch (e) {}
+  // Уведомления складу/директору — в фоне (waitUntil), чтобы не задерживать ответ PUT.
+  const notify = async () => {
+    try {
+      await ensureNotifSchema(env);
+      const us = await env.DB.prepare("SELECT id FROM users WHERE role_key IN ('warehouse','director') AND active=1").all();
+      const txt = `Создана отгрузка ${no}${d.dno ? ' по сделке ' + d.dno : ''} (этап «Отгружено»).`;
+      const stmts = [];
+      for (const u of (us.results || [])) stmts.push(env.DB.prepare("INSERT OR IGNORE INTO notifications (text, type, read, created_at, user_id, ref) VALUES (?, 'info', 0, datetime('now'), ?, ?)").bind(txt, u.id, `shipcreated:${id}:${u.id}`));
+      for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+    } catch (e) {}
+  };
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(notify()); else await notify();
   return id;
 }
 
