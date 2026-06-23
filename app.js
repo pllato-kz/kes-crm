@@ -1688,6 +1688,11 @@ async function autoCreateInvoiceForDeal(d) {
 // Двусторонняя синхронизация: статус отгрузки → этап связанной сделки.
 // (обратное направление — этап сделки → статус отгрузки — делает бэкенд writeDeal)
 async function setShipmentStatus(s, status) {
+  // «Доставлено» можно поставить только через фото-подтверждение доставки, не вручную.
+  if (status === 'delivered' && s.status !== 'delivered') {
+    toast('«Доставлено» отмечается только с фото-подтверждением', 'warn');
+    return false;
+  }
   const prev = s.status;
   s.status = status; // s — ссылка из state.shipments, обновляется сразу везде
   try {
@@ -1846,14 +1851,17 @@ async function openShipmentDoc(r) {
   }
 
   const foot = [];
-  // Смена статуса вручную — директор/кладовщик (водитель отмечает «Доставлено» только с фото)
+  // Смена статуса вручную. «Доставлено» здесь НЕ предлагается — оно ставится только через
+  // фото-подтверждение (блок ниже). Опция «Доставлено» появляется лишь если уже доставлено
+  // (для отображения текущего статуса; можно вернуть на «Отгружено»/«В пути»).
   if (ship && currentUser && currentUser.roleKey !== 'driver') {
-    const sel = el('select', { class:'status-select', title:'Изменить статус' }, [
+    const opts = [
       el('option', { value:'planned' }, 'Запланировано'),
       el('option', { value:'shipped' }, 'Отгружено'),
       el('option', { value:'transit' }, 'В пути'),
-      el('option', { value:'delivered' }, 'Доставлено'),
-    ]);
+    ];
+    if (ship.status === 'delivered') opts.push(el('option', { value:'delivered' }, 'Доставлено'));
+    const sel = el('select', { class:'status-select', title:'Изменить статус' }, opts);
     sel.value = stKey;
     sel.onchange = async () => {
       sel.disabled = true;
