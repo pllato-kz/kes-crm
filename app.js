@@ -2683,46 +2683,65 @@ function openEditUser(id) {
 }
 
 // ---------- Global search ----------
-function runSearch(q) {
-  q = q.trim().toLowerCase();
-  if (!q) return;
-  const hits = {
-    clients: state.clients.filter(c => (c.name+c.bin+c.contact).toLowerCase().includes(q)),
-    deals:   state.deals.filter(d => (d.title+d.no).toLowerCase().includes(q)),
-    products: state.products.filter(p => (p.name+p.sku+p.brand).toLowerCase().includes(q)),
-  };
-  const total = hits.clients.length + hits.deals.length + hits.products.length;
-  if (!total) {
-    openModal({
-      title: 'Поиск',
-      body: el('div', { class:'muted', style:'padding:8px 2px;font-size:13px' }, 'По запросу «' + q + '» ничего не найдено.'),
-      foot: [el('button', { class:'btn btn-primary', onclick: closeModal }, 'Закрыть')],
-    });
-    return;
+// Живой глобальный поиск: результаты появляются во время ввода (debounce), без Enter,
+// в выпадающем блоке под полем. Поиск клиентский (по state) — без запросов к серверу.
+function setupGlobalSearch() {
+  const input = $('#search');
+  if (!input || input.dataset.liveSearch) return;
+  input.dataset.liveSearch = '1';
+  const box = input.closest('.header-search') || input.parentElement;
+  if (!box) return;
+  box.style.position = 'relative';
+  const dd = el('div', { class:'search-dd', style:'display:none' });
+  box.appendChild(dd);
+
+  const lc = (s) => String(s == null ? '' : s).toLowerCase();
+  const hide = () => { dd.style.display = 'none'; dd.innerHTML = ''; };
+  const item = (icon, title, sub, onClick) => el('div', { class:'dropdown-item search-dd-item', onclick: () => { hide(); input.value = ''; onClick(); } }, [
+    el('span', { class:'di-icon' }, icon),
+    el('div', { class:'di-body' }, [el('div', { class:'strong' }, title || '—'), el('div', { class:'di-time' }, sub || '')]),
+  ]);
+
+  let seq = 0;
+  function paint(q, clients, deals, products) {
+    const total = clients.length + deals.length + products.length;
+    dd.innerHTML = '';
+    if (!total) { dd.append(el('div', { class:'search-dd-empty' }, 'Ничего не найдено')); dd.style.display = 'block'; return; }
+    if (clients.length) {
+      dd.append(el('div', { class:'search-dd-head' }, `Клиенты (${clients.length})`));
+      clients.forEach(c => dd.append(item('👤', nn(c.name) || '—', (c.city || '') + (c.bin ? ' · БИН ' + c.bin : ''), () => openClientDetail(c.id))));
+    }
+    if (deals.length) {
+      dd.append(el('div', { class:'search-dd-head' }, `Сделки (${deals.length})`));
+      deals.forEach(d => dd.append(item('💼', d.title || '—', clientById(d.client).name + ' · ' + fmtMoneyK(d.amount), () => openDealDetail(d.id))));
+    }
+    if (products.length) {
+      dd.append(el('div', { class:'search-dd-head' }, `Товары (${products.length})`));
+      products.forEach(p => dd.append(item('📦', nn(p.name) || '—', nn(p.sku) + (nn(p.brand) ? ' · ' + nn(p.brand) : ''), () => openProductDetail(p.id))));
+    }
+    dd.style.display = 'block';
   }
-  const body = el('div', {});
-  if (hits.clients.length) {
-    body.append(el('div', { style:'font-weight:600;font-size:12px;color:#6B7280;margin:8px 0 4px;text-transform:uppercase;letter-spacing:.5px' }, `Клиенты (${hits.clients.length})`));
-    hits.clients.forEach(c => body.append(el('div', { class:'dropdown-item', style:'border-radius:6px;border:0', onclick: () => { closeModal(); openClientDetail(c.id); } }, [
-      el('span', { class:'di-icon' }, '👤'),
-      el('div', { class:'di-body' }, [el('div', { class:'strong' }, c.name), el('div', { class:'di-time' }, c.city + ' · БИН ' + c.bin)]),
-    ])));
+  async function render(qraw) {
+    const my = ++seq;
+    const q = String(qraw || '').trim().toLowerCase();
+    if (q.length < 1) { hide(); return; }
+    // Клиенты/сделки — из памяти (мгновенно). Товары — серверный поиск по ВСЕМУ каталогу.
+    const clients = state.clients.filter(c => lc((c.name || '') + (c.bin || '') + (c.contact || '')).includes(q)).slice(0, 6);
+    const deals = state.deals.filter(d => lc((d.title || '') + (d.no || '')).includes(q)).slice(0, 6);
+    let products = [];
+    try {
+      const resp = await window.__API__.apiFetch('products?q=' + encodeURIComponent(q) + '&limit=8');
+      products = (resp.data || []).map(window.__API__.map.product);
+    } catch (e) { /* при ошибке показываем хотя бы клиентов/сделки */ }
+    if (my !== seq) return; // устаревший ответ — игнорируем (печатают дальше)
+    paint(q, clients, deals, products);
   }
-  if (hits.deals.length) {
-    body.append(el('div', { style:'font-weight:600;font-size:12px;color:#6B7280;margin:12px 0 4px;text-transform:uppercase;letter-spacing:.5px' }, `Сделки (${hits.deals.length})`));
-    hits.deals.forEach(d => body.append(el('div', { class:'dropdown-item', style:'border-radius:6px;border:0', onclick: () => { closeModal(); openDealDetail(d.id); } }, [
-      el('span', { class:'di-icon' }, '💼'),
-      el('div', { class:'di-body' }, [el('div', { class:'strong' }, d.title), el('div', { class:'di-time' }, clientById(d.client).name + ' · ' + fmtMoneyK(d.amount))]),
-    ])));
-  }
-  if (hits.products.length) {
-    body.append(el('div', { style:'font-weight:600;font-size:12px;color:#6B7280;margin:12px 0 4px;text-transform:uppercase;letter-spacing:.5px' }, `Товары (${hits.products.length})`));
-    hits.products.slice(0,10).forEach(p => body.append(el('div', { class:'dropdown-item', style:'border-radius:6px;border:0', onclick: () => { closeModal(); openProductDetail(p.id); } }, [
-      el('span', { class:'di-icon' }, '📦'),
-      el('div', { class:'di-body' }, [el('div', { class:'strong' }, nn(p.name) || '—'), el('div', { class:'di-time' }, nn(p.sku) + (nn(p.brand) ? ' · ' + nn(p.brand) : ''))]),
-    ])));
-  }
-  openModal({ title: 'Результаты: ' + total, body, foot: [el('button', { class:'btn', onclick: closeModal }, 'Закрыть')] });
+
+  let deb;
+  input.addEventListener('input', () => { clearTimeout(deb); deb = setTimeout(() => render(input.value), 250); });
+  input.addEventListener('focus', () => { if (input.value.trim()) render(input.value); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') { hide(); input.blur(); } });
+  document.addEventListener('click', (e) => { if (!box.contains(e.target)) hide(); });
 }
 
 // ============================================================
@@ -7803,7 +7822,7 @@ function renderShell() {
   if (can('see-module', 'archive')) nav.appendChild(el('button', { 'data-view': 'archive' }, [el('span', { class: 'icon' }, '🗄'), ' Архив']));
 
   // Обработчики
-  $('#search').addEventListener('keyup', (e) => { if (e.key === 'Enter') runSearch(e.target.value); });
+  setupGlobalSearch(); // живой поиск с дропдауном (без Enter, debounce)
   $('#notif-btn').addEventListener('click', (e) => { e.stopPropagation(); ensureNotifPermission(); toggleNotifications(); });
   $$('.icon-btn').forEach(b => {
     if (b.id === 'notif-btn') return;
